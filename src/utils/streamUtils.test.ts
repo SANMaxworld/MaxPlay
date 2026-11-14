@@ -70,4 +70,31 @@ describe('streamUtils', () => {
     assert.equal(m2.durationSec, 1200);
     assert.equal(m2.sizeMb, 200);
   });
+
+  it('isUpdateMessageAlreadyInstalled hides v2.6.0 update push messages when user has v2.6.0 installed', async () => {
+    const { isUpdateMessageAlreadyInstalled, isVersionNewer } = await import('../hooks/useGeneralSettings.ts');
+    assert.equal(isVersionNewer('v2.6.0', '2.6.0'), false);
+    assert.equal(isVersionNewer('v2.6.0', 'v2.5.0'), true);
+    assert.equal(isVersionNewer('v2.7.0', 'v2.6.0'), true);
+
+    const msg260 = {
+      title: '[APP UPDATE] MaxPlay v2.6.0 Official APK Update (v2.6.0)',
+      message: 'New update 2.6.0 available',
+      type: 'update',
+      version: '2.6.0',
+    };
+    // Installed 2.6.0 -> already installed (should hide!)
+    assert.equal(isUpdateMessageAlreadyInstalled(msg260, 'v2.6.0'), true);
+    // Installed 2.5.0 -> not yet installed (should show!)
+    assert.equal(isUpdateMessageAlreadyInstalled(msg260, 'v2.5.0'), false);
+
+    // Normal announcement message -> never hidden as an update message
+    const normalMsg = {
+      title: 'Welcome to MaxPlay!',
+      message: 'Enjoy new anime releases this week.',
+      type: 'info',
+    };
+    assert.equal(isUpdateMessageAlreadyInstalled(normalMsg, 'v2.6.0'), false);
+  });
 });
+

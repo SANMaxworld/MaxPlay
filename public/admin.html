@@ -3710,6 +3710,11 @@
                   <label class="form-label" style="font-size:11px;">MaxPlay App Download & Share Button Link (Used for App Updates & Content Share Links)</label>
                   <input type="text" id="setting-download-url" class="input-control" placeholder="https://maxplay.app/download/maxplay.apk">
                 </div>
+
+                <div class="form-group" style="margin:0;">
+                  <label class="form-label" style="font-size:11px;">Official Website URL (Used in Me Section -> Official Website Copy Link)</label>
+                  <input type="text" id="setting-official-website-url" class="input-control" placeholder="https://maxplay.app" value="https://maxplay.app">
+                </div>
                 
                 <div class="form-group" style="margin:0;">
                   <label class="form-label" style="font-size:11px;">App Global Languages (comma separated)</label>
@@ -11964,6 +11969,10 @@
             const dlEl = document.getElementById('setting-download-url');
             if (dlEl) dlEl.value = s.downloadUrl;
           }
+          if (s.officialWebsiteUrl || s.websiteUrl) {
+            const webEl = document.getElementById('setting-official-website-url');
+            if (webEl) webEl.value = s.officialWebsiteUrl || s.websiteUrl;
+          }
           if (s.appLanguages) {
             const alEl = document.getElementById('setting-app-languages');
             if (alEl) alEl.value = Array.isArray(s.appLanguages) ? s.appLanguages.join(', ') : s.appLanguages;
@@ -12124,9 +12133,10 @@
       const customLogoUrl = document.getElementById('setting-custom-logo-url')?.value || '';
       const supportEmail = document.getElementById('setting-support-email')?.value || 'support@maxplay.app';
       const maintenanceMessage = document.getElementById('setting-maintenance-msg')?.value || '';
-      const appVersion = document.getElementById('setting-app-version')?.value || 'v2.5.0';
+      const appVersion = document.getElementById('setting-app-version')?.value || 'v2.6.0';
       const minVersion = document.getElementById('setting-min-version')?.value || 'v2.0.0';
       const downloadUrl = document.getElementById('setting-download-url')?.value || '';
+      const officialWebsiteUrl = (document.getElementById('setting-official-website-url')?.value || 'https://maxplay.app').trim();
       const telegram = document.getElementById('setting-telegram')?.value || '';
       const discord = document.getElementById('setting-discord')?.value || '';
       const tmdbApiKey = (document.getElementById('setting-tmdb-api-key')?.value || '').trim();
@@ -12149,6 +12159,7 @@
           appVersion,
           minVersion,
           downloadUrl,
+          officialWebsiteUrl,
           appLanguages,
           telegram,
           discord,

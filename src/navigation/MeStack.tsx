@@ -111,8 +111,9 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
             key={`${screen.name}-${idx}`}
             className={`absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto ${!isTop ? 'hidden pointer-events-none' : ''}`}
           >
-            {screen.name === 'detail' && (
+            {screen.name === 'detail' && isTop && (
               <ContentDetailScreen
+                key={`detail-${screen.item.id}-${idx}`}
                 content={screen.item}
                 onBack={handleBack}
                 onSelectContent={(item) => push({ name: 'detail', item })}

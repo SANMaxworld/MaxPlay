@@ -69,8 +69,9 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
             key={`${screen.name}-${idx}`}
             className={`absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto ${!isTop ? 'hidden pointer-events-none' : ''}`}
           >
-            {screen.name === 'detail' && (
+            {screen.name === 'detail' && isTop && (
               <ContentDetailScreen
+                key={`detail-${screen.item.id}-${idx}`}
                 content={screen.item}
                 onBack={handleBack}
                 onSelectContent={handleSelect}

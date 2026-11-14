@@ -49,6 +49,30 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Custom scheme deep link: maxplay://watch/<contentId> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="maxplay"
+                    android:host="watch" />
+            </intent-filter>
+
+            <!-- HTTPS/HTTP content share deep links (/open/<contentId>) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:host="ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app" />
+                <data android:host="ais-dev-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app" />
+                <data android:host="maxplay.app" />
+                <data android:host="maxplay.official.app" />
+                <data android:pathPrefix="/open/" />
+            </intent-filter>
         </activity>
     </application>
 

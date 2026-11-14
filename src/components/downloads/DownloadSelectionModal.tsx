@@ -85,6 +85,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   onClose,
   onSuccessToast,
 }) => {
+  const [showHelpConfirmTooltip, setShowHelpConfirmTooltip] = useState(false);
 
   // Content type evaluation - Precise Movie vs Series / Anime
   const isMovie = useMemo(() => {
@@ -1789,12 +1790,62 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
             {/* RESOURCES CARD */}
             <div className="mx-4 mb-2 p-3.5 rounded-xl bg-[#1a1b22] border border-white/5 shrink-0">
               {/* Resources Header */}
-              <div className="flex items-center gap-2 mb-3">
+              <div className="relative flex items-center gap-2 mb-3">
                 <span className="text-[15px] font-bold text-white">Resources</span>
                 <span className="text-xs text-zinc-400 truncate">
                   Uploaded by {content.uploader?.name || 'MaxPlay Admin'}
                 </span>
-                <HelpCircle className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowHelpConfirmTooltip((prev) => !prev);
+                  }}
+                  className="p-0.5 text-zinc-500 hover:text-purple-400 transition cursor-pointer shrink-0"
+                  title="Need help or want to report an issue?"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                </button>
+
+                <AnimatePresence>
+                  {showHelpConfirmTooltip && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                      transition={{ duration: 0.16 }}
+                      className="absolute right-0 top-6 z-50 w-64 rounded-xl bg-[#181820] border border-purple-500/40 p-3 shadow-2xl text-left"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <p className="text-xs font-semibold text-white leading-snug">
+                        Facing an issue with this video or audio?
+                      </p>
+                      <p className="text-[11px] text-white/60 mt-0.5">
+                        Tap below to open Feedback &amp; Support and report it directly to Admin.
+                      </p>
+                      <div className="mt-2.5 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowHelpConfirmTooltip(false)}
+                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-white/70 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowHelpConfirmTooltip(false);
+                            onClose();
+                            window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_FEEDBACK_SCREEN'));
+                          }}
+                          className="px-3 py-1 rounded-lg bg-[#8B5CF6] hover:bg-[#7C3AED] text-[11px] font-bold text-white shadow-md shadow-purple-600/30 cursor-pointer"
+                        >
+                          Go to Feedback
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {/* Selector Boxes Row: Language | Season (Series only) | Server */}

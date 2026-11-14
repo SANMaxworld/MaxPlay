@@ -23,6 +23,7 @@ import { SocialBar } from '../../components/ads/SocialBar';
 import { adManager } from '../../services/adService';
 
 import { WatchHistoryGrid } from '../../components/profile/WatchHistoryGrid';
+import { useGeneralSettings, isUpdateMessageAlreadyInstalled } from '../../hooks/useGeneralSettings';
 
 interface MeScreenProps {
   onOpenEditProfile?: () => void;
@@ -48,26 +49,48 @@ export const MeScreen: React.FC<MeScreenProps> = ({
   onPlayContent,
 }) => {
   const { user } = useAuth();
+  const { currentApkVersion, officialWebsiteUrl } = useGeneralSettings();
   const [showAnnouncement, setShowAnnouncement] = useState(true);
   const [showCopied, setShowCopied] = useState(false);
   const [modalInfo, setModalInfo] = useState<{ title: string; body: string } | null>(null);
   const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
   const [hasUnreadFeedback, setHasUnreadFeedback] = useState(false);
   const [hasUnreadLegal, setHasUnreadLegal] = useState(false);
+  const [latestMsgsCache, setLatestMsgsCache] = useState<any[]>([]);
+  const [latestFeedbackIdsCache, setLatestFeedbackIdsCache] = useState<string[]>([]);
+
+  const recomputeUnreadMessages = (msgs: any[], apkVer: string) => {
+    try {
+      const savedRead = localStorage.getItem('maxplay_read_msgs');
+      const readIds: string[] = savedRead ? JSON.parse(savedRead) : [];
+      const savedDismissed = localStorage.getItem('maxplay_dismissed_msgs');
+      const dismissedIds: string[] = savedDismissed ? JSON.parse(savedDismissed) : [];
+      const unread = msgs.some(
+        (m) =>
+          !dismissedIds.includes(m.id) &&
+          !(m as any).isWithdrawn &&
+          !(m as any).recalled &&
+          !isUpdateMessageAlreadyInstalled(m, apkVer) &&
+          !readIds.includes(m.id) &&
+          m.isUnread !== false
+      );
+      setHasUnreadMessages(unread);
+    } catch (e) {
+      setHasUnreadMessages(false);
+    }
+  };
 
   useEffect(() => {
     const unsub = subscribeToAnnouncements(user?.uid, (msgs) => {
-      try {
-        const savedRead = localStorage.getItem('maxplay_read_msgs');
-        const readIds = savedRead ? JSON.parse(savedRead) : [];
-        const unread = msgs.some(m => !readIds.includes(m.id) && m.isUnread !== false);
-        setHasUnreadMessages(unread);
-      } catch (e) {
-        setHasUnreadMessages(false);
-      }
+      setLatestMsgsCache(msgs);
+      recomputeUnreadMessages(msgs, currentApkVersion);
     });
     return () => unsub();
-  }, [user?.uid]);
+  }, [user?.uid, currentApkVersion]);
+
+  useEffect(() => {
+    recomputeUnreadMessages(latestMsgsCache, currentApkVersion);
+  }, [currentApkVersion, latestMsgsCache]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -78,12 +101,17 @@ export const MeScreen: React.FC<MeScreenProps> = ({
           const saved = localStorage.getItem('maxplay_read_feedbacks');
           const readIds = saved ? JSON.parse(saved) : [];
           let hasUnread = false;
+          const allRepliedIds: string[] = [];
           snapshot.forEach(docSnap => {
             const data = docSnap.data();
-            if (data.adminReply && !readIds.includes(docSnap.id)) {
-              hasUnread = true;
+            if (data.adminReply) {
+              allRepliedIds.push(docSnap.id);
+              if (!readIds.includes(docSnap.id)) {
+                hasUnread = true;
+              }
             }
           });
+          setLatestFeedbackIdsCache(allRepliedIds);
           setHasUnreadFeedback(hasUnread);
         } catch (e) {}
       }
@@ -91,29 +119,81 @@ export const MeScreen: React.FC<MeScreenProps> = ({
     return () => unsub();
   }, [user?.uid]);
 
-  useEffect(() => {
-    const checkLegalDocs = async () => {
-      try {
-        const snap = await getDoc(doc(db, 'settings', 'legal'));
-        if (snap.exists()) {
-          const data = snap.data();
-          const serverUpdated = data.updatedAt;
-          const localRead = localStorage.getItem('maxplay_legal_read');
-          if (serverUpdated && (!localRead || new Date(serverUpdated) > new Date(localRead))) {
-            setHasUnreadLegal(true);
-          } else {
-            setHasUnreadLegal(false);
-          }
+  const checkLegalDocs = async () => {
+    try {
+      const snap = await getDoc(doc(db, 'settings', 'legal'));
+      if (snap.exists()) {
+        const data = snap.data();
+        const serverUpdated = data.updatedAt;
+        const localRead = localStorage.getItem('maxplay_legal_read');
+        if (serverUpdated && (!localRead || new Date(serverUpdated) > new Date(localRead))) {
+          setHasUnreadLegal(true);
+        } else {
+          setHasUnreadLegal(false);
         }
-      } catch (err) {}
-    };
+      }
+    } catch (err) {}
+  };
+
+  useEffect(() => {
     checkLegalDocs();
   }, []);
 
+  // Re-evaluate unread badges whenever a sub-screen marks notifications as read
+  useEffect(() => {
+    const handleNotifReadUpdated = () => {
+      recomputeUnreadMessages(latestMsgsCache, currentApkVersion);
+      try {
+        const saved = localStorage.getItem('maxplay_read_feedbacks');
+        const readIds: string[] = saved ? JSON.parse(saved) : [];
+        setHasUnreadFeedback(latestFeedbackIdsCache.some((id) => !readIds.includes(id)));
+      } catch {}
+      checkLegalDocs();
+    };
+    window.addEventListener('MAXPLAY_NOTIFICATIONS_READ_UPDATED', handleNotifReadUpdated);
+    return () => window.removeEventListener('MAXPLAY_NOTIFICATIONS_READ_UPDATED', handleNotifReadUpdated);
+  }, [latestMsgsCache, latestFeedbackIdsCache, currentApkVersion]);
+
+  const normalizedWebsiteUrl = (officialWebsiteUrl || 'https://maxplay.app').trim();
+  const displayWebsiteLabel = normalizedWebsiteUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || 'maxplay.app';
+
   const handleCopyLink = () => {
-    navigator.clipboard.writeText('https://maxplay.app');
+    const urlToCopy = /^https?:\/\//i.test(normalizedWebsiteUrl)
+      ? normalizedWebsiteUrl
+      : `https://${normalizedWebsiteUrl}`;
+    navigator.clipboard.writeText(urlToCopy);
     setShowCopied(true);
     setTimeout(() => setShowCopied(false), 2000);
+  };
+
+  const handlePressMessages = () => {
+    try {
+      const savedRead = localStorage.getItem('maxplay_read_msgs');
+      const existing: string[] = savedRead ? JSON.parse(savedRead) : [];
+      const merged = Array.from(new Set([...existing, ...latestMsgsCache.map((m) => m.id).filter(Boolean)]));
+      localStorage.setItem('maxplay_read_msgs', JSON.stringify(merged));
+    } catch {}
+    setHasUnreadMessages(false);
+    onOpenMessages?.();
+  };
+
+  const handlePressSettings = () => {
+    try {
+      localStorage.setItem('maxplay_legal_read', new Date().toISOString());
+    } catch {}
+    setHasUnreadLegal(false);
+    onOpenSettings?.();
+  };
+
+  const handlePressFeedback = () => {
+    try {
+      const saved = localStorage.getItem('maxplay_read_feedbacks');
+      const existing: string[] = saved ? JSON.parse(saved) : [];
+      const merged = Array.from(new Set([...existing, ...latestFeedbackIdsCache]));
+      localStorage.setItem('maxplay_read_feedbacks', JSON.stringify(merged));
+    } catch {}
+    setHasUnreadFeedback(false);
+    onOpenFeedback?.();
   };
 
   return (
@@ -208,7 +288,7 @@ export const MeScreen: React.FC<MeScreenProps> = ({
             title="Messages"
             subtitle="System alerts & notifications"
             hasNotification={hasUnreadMessages}
-            onPress={onOpenMessages}
+            onPress={handlePressMessages}
           />
           <MenuItem
             icon={MessageCircle}
@@ -234,7 +314,7 @@ export const MeScreen: React.FC<MeScreenProps> = ({
             title="Settings"
             subtitle="Playback, language & security"
             hasNotification={hasUnreadLegal}
-            onPress={onOpenSettings}
+            onPress={handlePressSettings}
           />
           <MenuItem
             icon={MessageSquare}
@@ -243,7 +323,7 @@ export const MeScreen: React.FC<MeScreenProps> = ({
             title="Feedback & Support"
             subtitle="Send bug reports or suggestions"
             hasNotification={hasUnreadFeedback}
-            onPress={onOpenFeedback || (() => {})}
+            onPress={handlePressFeedback}
           />
         </div>
       </div>
@@ -262,9 +342,9 @@ export const MeScreen: React.FC<MeScreenProps> = ({
 
       {/* Footer */}
       <div className="mt-6 mb-4 flex flex-col items-center gap-1.5 text-center text-xs text-[#A1A1AA]">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-center">
           <span>Official website:</span>
-          <span className="font-bold text-[#8B5CF6]">maxplay.app</span>
+          <span className="font-bold text-[#8B5CF6]">{displayWebsiteLabel}</span>
           <button
             type="button"
             onClick={handleCopyLink}

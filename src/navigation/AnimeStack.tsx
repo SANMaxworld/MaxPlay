@@ -77,6 +77,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
       {current.name === 'detail' && (
         <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
           <ContentDetailScreen
+            key={`anime-detail-${current.item.id}-${stack.length}`}
             content={current.item}
             onBack={handleBack}
             onSelectContent={handleSelect}

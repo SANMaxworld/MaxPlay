@@ -2390,18 +2390,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const handleShare = async () => {
     const shareTitle = content.title || 'MaxPlay';
     const configuredAppLink = (shareDownloadUrl || apkDownloadUrl || '').trim();
-    const isLocalhostOrigin =
-      typeof window !== 'undefined' &&
-      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-    const baseAppUrl =
-      configuredAppLink ||
-      (!isLocalhostOrigin && typeof window !== 'undefined' && window.location.origin
-        ? window.location.origin
-        : 'https://maxplay.app');
 
-    // Deep-link URL that opens MaxPlay directly to this movie/series or lets new users download MaxPlay
-    const separator = baseAppUrl.includes('?') ? '&' : '?';
-    const watchDeepLinkUrl = `${baseAppUrl}${separator}watch=${encodeURIComponent(content.id)}`;
+    // Never use localhost, 127.0.0.1, or WebView virtual asset origin for shared content links
+    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+    const isInternalOrLocalOrigin =
+      !currentOrigin ||
+      currentOrigin.includes('localhost') ||
+      currentOrigin.includes('127.0.0.1') ||
+      currentOrigin.includes('appassets.androidplatform.net');
+
+    const publicBaseUrl = !isInternalOrLocalOrigin
+      ? currentOrigin.replace(/\/+$/, '')
+      : 'https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app';
+
+    // Line 1: Dedicated Content Deep Link that opens the MaxPlay App directly to this movie/series
+    const watchDeepLinkUrl = `${publicBaseUrl}/open/${encodeURIComponent(content.id)}`;
 
     const typeLabel = (content.type || 'movie').toUpperCase();
     const ratingLabel = content.rating ? `⭐ ${content.rating}` : '';
@@ -2416,17 +2419,17 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       metaRow,
       genresRow,
       '',
-      `▶️ Watch Now on MaxPlay App:`,
+      `▶️ Content Link (Open in MaxPlay App):`,
       watchDeepLinkUrl,
-      ...(configuredAppLink && configuredAppLink !== watchDeepLinkUrl
+      ...(configuredAppLink
         ? ['', `📲 Download MaxPlay Official App:`, configuredAppLink]
         : []),
     ].filter((line, idx, arr) => line !== '' || (idx > 0 && arr[idx - 1] !== ''));
 
     const shareText = shareCardLines.join('\n');
 
-    // 1. Native Android Share Sheet inside APK
-    if (NativeBridgeService.shareContentNative(shareTitle, shareText, watchDeepLinkUrl)) {
+    // 1. Native Android Share Sheet inside APK (pass empty url so shareText lines stay cleanly separated)
+    if (NativeBridgeService.shareContentNative(shareTitle, shareText, '')) {
       return;
     }
 
@@ -2451,7 +2454,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   await navigator.share({
                     title: `${shareTitle} | MaxPlay`,
                     text: shareText,
-                    url: watchDeepLinkUrl,
                     files: [posterFile],
                   });
                   sharedWithPoster = true;
@@ -2467,7 +2469,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           await navigator.share({
             title: `${shareTitle} | MaxPlay`,
             text: shareText,
-            url: watchDeepLinkUrl,
           });
         }
         return;

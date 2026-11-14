@@ -77,6 +77,7 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
   const [showUnlockBtn, setShowUnlockBtn] = useState(false);
   const unlockTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [activeDrawer, setActiveDrawer] = useState<'none' | 'speed' | 'quality' | 'language'>('none');
+  const [showHelpConfirmTooltip, setShowHelpConfirmTooltip] = useState(false);
 
   // Gestures Overlay State
   const [overlayType, setOverlayType] = useState<'brightness' | 'volume' | null>(null);
@@ -517,20 +518,55 @@ export const FullscreenPlayerScreen: React.FC<FullscreenPlayerScreenProps> = ({
                 </h2>
               </div>
 
-              <div className="flex items-center gap-4">
+              <div className="relative flex items-center gap-4">
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     triggerPlayerAd();
                     resetHideTimer();
-                    alert('MaxPlay Player Help: Double tap sides to seek 10s. Drag vertically on screen for volume/brightness.');
+                    setShowHelpConfirmTooltip((prev) => !prev);
                   }}
-                  className="flex flex-col items-center text-white/90 hover:text-white transition cursor-pointer active:scale-95"
+                  className="flex flex-col items-center text-white/90 hover:text-purple-400 transition cursor-pointer active:scale-95"
+                  title="Need help or want to report an issue?"
                 >
                   <HelpCircle className="h-5 w-5" />
                   <span className="text-[10px] font-normal text-white mt-0.5">Help</span>
                 </button>
+
+                {showHelpConfirmTooltip && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute right-0 top-12 z-50 w-64 rounded-xl bg-[#181820] border border-purple-500/40 p-3 shadow-2xl text-left"
+                  >
+                    <p className="text-xs font-semibold text-white leading-snug">
+                      Facing an issue with this video or audio?
+                    </p>
+                    <p className="text-[11px] text-white/60 mt-0.5">
+                      Tap below to open Feedback &amp; Support and report it directly to Admin.
+                    </p>
+                    <div className="mt-2.5 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowHelpConfirmTooltip(false)}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-white/70 cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowHelpConfirmTooltip(false);
+                          if (onBack) onBack(currentTime);
+                          window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_FEEDBACK_SCREEN'));
+                        }}
+                        className="px-3 py-1 rounded-lg bg-[#8B5CF6] hover:bg-[#7C3AED] text-[11px] font-bold text-white shadow-md shadow-purple-600/30 cursor-pointer"
+                      >
+                        Go to Feedback
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={(e) => {

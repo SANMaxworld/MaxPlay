@@ -95,6 +95,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   const [isScanningLocalVideos, setIsScanningLocalVideos] = useState(false);
 
   const [activeFilter, setActiveFilter] = useState<'moviebox' | 'local' | 'received'>('moviebox');
+  const [showLocalFoldersView, setShowLocalFoldersView] = useState(false);
+  const [selectedLocalFolder, setSelectedLocalFolder] = useState<string | null>(null);
+  const swipeTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferTab, setTransferTab] = useState<'send' | 'receive'>('send');
   const [sendSourceFilter, setSendSourceFilter] = useState<'maxbox' | 'local'>('maxbox');
@@ -260,6 +263,14 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         setActiveSeriesFolderPage(null);
         return true;
       }
+      if (selectedLocalFolder) {
+        setSelectedLocalFolder(null);
+        return true;
+      }
+      if (showLocalFoldersView) {
+        setShowLocalFoldersView(false);
+        return true;
+      }
       if (showTransferModal) {
         setShowTransferModal(false);
         return true;
@@ -269,7 +280,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
     return () => {
       delete (window as any).__handleDownloadsScreenBack;
     };
-  }, [offlinePlayingFile, activeSeriesFolderPage, showTransferModal]);
+  }, [offlinePlayingFile, activeSeriesFolderPage, selectedLocalFolder, showLocalFoldersView, showTransferModal]);
 
   const activeDownloadingTasks = tasks.filter(
     (t) => t.status === 'downloading' || t.status === 'paused' || t.status === 'queued' || t.status === 'failed'
@@ -333,15 +344,55 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
 
   const totalLocalFilesCount = manualLocalFiles.length + scannedLocalFilesAsDownloaded.length;
 
+  const allLocalFilesCombined = useMemo(
+    () => [...manualLocalFiles, ...scannedLocalFilesAsDownloaded],
+    [manualLocalFiles, scannedLocalFilesAsDownloaded]
+  );
+
+  // Group all local videos by folder name so the Folders button shows every folder containing videos
+  const localVideoFolders = useMemo(() => {
+    const folderMap = new Map<string, DownloadedFile[]>();
+    allLocalFilesCombined.forEach((file) => {
+      const folderName =
+        (file.language && file.language !== 'Phone Video' && file.language !== 'Default'
+          ? file.language
+          : file.subtitle?.split('•')[0]?.trim()) || 'Phone Storage';
+      if (!folderMap.has(folderName)) {
+        folderMap.set(folderName, []);
+      }
+      folderMap.get(folderName)!.push(file);
+    });
+    return Array.from(folderMap.entries()).map(([folderName, videos]) => {
+      const totalMb = videos.reduce((acc, v) => acc + (Number(v.fileSizeMb) || 0), 0);
+      return {
+        folderName,
+        videos,
+        totalMb,
+        previewPoster: videos[0]?.posterUrl || '',
+      };
+    });
+  }, [allLocalFilesCombined]);
+
   const filteredCompletedFiles = useMemo(() => {
     if (activeFilter === 'local') {
-      return [...manualLocalFiles, ...scannedLocalFilesAsDownloaded];
+      if (showLocalFoldersView && selectedLocalFolder) {
+        const match = localVideoFolders.find((f) => f.folderName === selectedLocalFolder);
+        return match ? match.videos : allLocalFilesCombined;
+      }
+      return allLocalFilesCombined;
     }
     if (activeFilter === 'received') {
       return completedFiles.filter((f) => f.category === 'received');
     }
     return completedFiles.filter((f) => f.category === 'moviebox' || !f.category);
-  }, [activeFilter, completedFiles, manualLocalFiles, scannedLocalFilesAsDownloaded]);
+  }, [
+    activeFilter,
+    completedFiles,
+    allLocalFilesCombined,
+    showLocalFoldersView,
+    selectedLocalFolder,
+    localVideoFolders,
+  ]);
 
   // Group completed downloads into Series Folders vs Standalone Movies
   const groupedCompleted = useMemo(() => {
@@ -375,10 +426,21 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   }, [filteredCompletedFiles]);
 
   const handlePlayItem = async (file: DownloadedFile, episodesList?: DownloadedFile[]) => {
-    const eps =
+    let eps =
       episodesList && episodesList.length > 0
         ? episodesList
         : groupedCompleted.seriesList.find((s) => s.contentId === file.contentId)?.episodes || [file];
+
+    if (file.category === 'local' && (!episodesList || episodesList.length === 0)) {
+      const folderName =
+        (file.language && file.language !== 'Phone Video' && file.language !== 'Default'
+          ? file.language
+          : file.subtitle?.split('•')[0]?.trim()) || 'Phone Storage';
+      const folderMatch = localVideoFolders.find((f) => f.folderName === folderName);
+      if (folderMatch && folderMatch.videos.length > 1) {
+        eps = folderMatch.videos;
+      }
+    }
 
     setOfflinePlayingFile(file);
     setOfflinePlayingEpisodes(eps);
@@ -1316,8 +1378,41 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         <NativeBanner />
       </div>
 
-      {/* SECTION 3: DOWNLOADED (COMPLETED) */}
-      <div className="mt-5 flex flex-col gap-3">
+      {/* SECTION 3: DOWNLOADED (COMPLETED) - Supports Horizontal Swipe Between Maxbox, Local files, and Received */}
+      <div
+        className="mt-5 flex flex-col gap-3"
+        onTouchStart={(e) => {
+          if (e.touches.length === 1) {
+            swipeTouchStartRef.current = {
+              x: e.touches[0].clientX,
+              y: e.touches[0].clientY,
+            };
+          }
+        }}
+        onTouchEnd={(e) => {
+          const start = swipeTouchStartRef.current;
+          swipeTouchStartRef.current = null;
+          if (!start || e.changedTouches.length === 0) return;
+          const dx = e.changedTouches[0].clientX - start.x;
+          const dy = e.changedTouches[0].clientY - start.y;
+          // Require clear horizontal swipe (> 50px and primarily horizontal)
+          if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.35) {
+            const pillOrder: Array<'moviebox' | 'local' | 'received'> = [
+              'moviebox',
+              'local',
+              'received',
+            ];
+            const currentIdx = pillOrder.indexOf(activeFilter);
+            if (dx < 0 && currentIdx < pillOrder.length - 1) {
+              // Swiped left -> go to next pill (Maxbox -> Local files -> Received)
+              setActiveFilter(pillOrder[currentIdx + 1]);
+            } else if (dx > 0 && currentIdx > 0) {
+              // Swiped right -> go to previous pill (Received -> Local files -> Maxbox)
+              setActiveFilter(pillOrder[currentIdx - 1]);
+            }
+          }
+        }}
+      >
         {/* Filter Tabs + Storage Pill Placed Right Next to Received */}
         <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto scrollbar-none py-0.5 max-w-full">
           <button
@@ -1370,35 +1465,125 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
               <Smartphone className="h-4 w-4 text-purple-400 shrink-0" />
               <span className="text-[11px] font-semibold text-zinc-300 truncate">
                 {deviceScannedVideos.length > 0
-                  ? `${deviceScannedVideos.length} videos auto-detected from phone storage`
-                  : 'Auto-scans all MP4/MKV videos in your phone storage'}
+                  ? `${deviceScannedVideos.length} videos auto-detected`
+                  : 'Auto-scans MP4/MKV videos in phone storage'}
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              {NativeBridgeService.isRunningInKotlinApp() && (
-                <button
-                  type="button"
-                  onClick={() => scanPhoneLocalVideos(true)}
-                  className="flex items-center gap-1 rounded-lg bg-purple-500/20 border border-purple-500/40 px-2.5 py-1 text-[11px] font-bold text-purple-300 hover:bg-purple-500/30 active:scale-95 transition cursor-pointer"
-                >
-                  <RefreshCw className={`h-3 w-3 ${isScanningLocalVideos ? 'animate-spin' : ''}`} />
-                  <span>Rescan</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (showLocalFoldersView && selectedLocalFolder) {
+                    setSelectedLocalFolder(null);
+                  } else {
+                    setShowLocalFoldersView((prev) => !prev);
+                    setSelectedLocalFolder(null);
+                  }
+                }}
+                className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-bold active:scale-95 transition cursor-pointer ${
+                  showLocalFoldersView
+                    ? 'bg-purple-600 text-white border border-purple-400/60 shadow-sm shadow-purple-600/30'
+                    : 'bg-white/10 border border-white/15 text-white hover:bg-white/15'
+                }`}
+              >
+                <FolderOpen className="h-3 w-3 text-purple-300" />
+                <span>Folders</span>
+              </button>
               <button
                 type="button"
                 onClick={() => localVideoInputRef.current?.click()}
                 className="flex items-center gap-1 rounded-lg bg-white/10 border border-white/15 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-white/15 active:scale-95 transition cursor-pointer"
               >
-                <FolderOpen className="h-3 w-3 text-purple-300" />
+                <Film className="h-3 w-3 text-purple-300" />
                 <span>Pick File</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => scanPhoneLocalVideos(true)}
+                className="flex items-center gap-1 rounded-lg bg-purple-500/20 border border-purple-500/40 px-2.5 py-1 text-[11px] font-bold text-purple-300 hover:bg-purple-500/30 active:scale-95 transition cursor-pointer"
+              >
+                <RefreshCw className={`h-3 w-3 ${isScanningLocalVideos ? 'animate-spin' : ''}`} />
+                <span>Rescan</span>
               </button>
             </div>
           </div>
         )}
 
-        {/* Downloaded List */}
-        {groupedCompleted.totalCount > 0 ? (
+        {/* Active Local Folder Header Bar when user tapped a specific folder */}
+        {activeFilter === 'local' && showLocalFoldersView && selectedLocalFolder && (
+          <div className="flex items-center justify-between gap-2 rounded-xl bg-[#181822] border border-purple-500/30 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setSelectedLocalFolder(null)}
+              className="flex items-center gap-2 text-xs font-extrabold text-purple-300 hover:text-white transition cursor-pointer"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>All Video Folders</span>
+            </button>
+            <span className="text-xs font-black text-white truncate">
+              {selectedLocalFolder} ({filteredCompletedFiles.length} videos)
+            </span>
+          </div>
+        )}
+
+        {/* Local Video Folders Grid when Folders button is toggled ON and no specific folder is selected yet */}
+        {activeFilter === 'local' && showLocalFoldersView && !selectedLocalFolder ? (
+          localVideoFolders.length > 0 ? (
+            <div className="flex flex-col gap-2.5">
+              {localVideoFolders.map((folder) => {
+                const sizeText =
+                  folder.totalMb >= 1024
+                    ? `${(folder.totalMb / 1024).toFixed(1)} GB`
+                    : `${Math.round(folder.totalMb)} MB`;
+                return (
+                  <button
+                    key={folder.folderName}
+                    type="button"
+                    onClick={() => setSelectedLocalFolder(folder.folderName)}
+                    className="flex items-center justify-between gap-3 rounded-2xl bg-[#141418] hover:bg-[#1B1B22] border border-white/10 hover:border-purple-500/40 p-3 text-left transition cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="relative h-14 w-20 rounded-xl overflow-hidden bg-[#1E1E26] border border-purple-500/30 flex items-center justify-center shrink-0">
+                        {folder.previewPoster ? (
+                          <img
+                            src={folder.previewPoster}
+                            alt={folder.folderName}
+                            className="h-full w-full object-cover opacity-75 group-hover:scale-105 transition"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : null}
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                          <FolderOpen className="h-6 w-6 text-purple-300 drop-shadow" />
+                        </div>
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-sm font-extrabold text-white truncate group-hover:text-purple-300 transition">
+                          {folder.folderName}
+                        </span>
+                        <span className="mt-0.5 text-xs font-semibold text-zinc-400">
+                          {folder.videos.length} {folder.videos.length === 1 ? 'video' : 'videos'} • {sizeText}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="rounded-lg bg-purple-500/15 border border-purple-500/30 px-2.5 py-1 text-[11px] font-bold text-purple-300 shrink-0">
+                      Open
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center rounded-2xl bg-[#121212] py-10 px-4 border border-[#1C1C1E] text-center">
+              <FolderOpen className="h-10 w-10 text-purple-400/70" />
+              <span className="mt-2 text-sm font-bold text-white">No video folders detected yet</span>
+              <span className="mt-0.5 text-xs text-[#6B7280] max-w-xs">
+                Tap Rescan or Pick File to detect folders containing videos on your device.
+              </span>
+            </div>
+          )
+        ) : groupedCompleted.totalCount > 0 ? (
           <div className="flex flex-col gap-3">
             {/* Render Series / Anime Cards (Opens Dedicated Series Episodes Page on click) */}
             {groupedCompleted.seriesList.map((series) => (
@@ -2173,6 +2358,12 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
             setOfflinePlayingFile(null);
             setOfflineBlobUrl(null);
             setOfflinePlayingEpisodes([]);
+          }}
+          onSelectContent={(content) => {
+            setOfflinePlayingFile(null);
+            setOfflineBlobUrl(null);
+            setOfflinePlayingEpisodes([]);
+            onPlayContent?.(content.id);
           }}
         />
       )}

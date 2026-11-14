@@ -44,7 +44,7 @@ export const CommentCard: React.FC<CommentCardProps> = ({
   const hasUserLiked = currentUserId && comment.likedBy?.includes(currentUserId);
   const [likes, setLikes] = useState(comment.likes || 0);
   const [isLiked, setIsLiked] = useState(Boolean(hasUserLiked));
-  const [showReplies, setShowReplies] = useState(true);
+  const [showReplies, setShowReplies] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   
   // YouTube-Style Inline Reply Box State

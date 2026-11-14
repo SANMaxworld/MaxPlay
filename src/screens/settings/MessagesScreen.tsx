@@ -28,6 +28,7 @@ import {
   extractApkUrlFromMessage,
   isAdminMessageForceUpdate,
   isVersionNewer,
+  isUpdateMessageAlreadyInstalled,
   formatVersionTag,
 } from '../../hooks/useGeneralSettings';
 import { NativeBridgeService } from '../../services/nativeBridgeService';
@@ -73,6 +74,7 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
     setReadIds(allIds);
     try {
       localStorage.setItem('maxplay_read_msgs', JSON.stringify(allIds));
+      window.dispatchEvent(new CustomEvent('MAXPLAY_NOTIFICATIONS_READ_UPDATED'));
     } catch (e) {}
   };
 
@@ -81,6 +83,7 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
     setDismissedIds(updated);
     try {
       localStorage.setItem('maxplay_dismissed_msgs', JSON.stringify(updated));
+      window.dispatchEvent(new CustomEvent('MAXPLAY_NOTIFICATIONS_READ_UPDATED'));
     } catch (e) {}
   };
 
@@ -90,6 +93,7 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
       setDismissedIds(allIds);
       try {
         localStorage.setItem('maxplay_dismissed_msgs', JSON.stringify(allIds));
+        window.dispatchEvent(new CustomEvent('MAXPLAY_NOTIFICATIONS_READ_UPDATED'));
       } catch (e) {}
     }
   };
@@ -101,6 +105,7 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
       setReadIds(updated);
       try {
         localStorage.setItem('maxplay_read_msgs', JSON.stringify(updated));
+        window.dispatchEvent(new CustomEvent('MAXPLAY_NOTIFICATIONS_READ_UPDATED'));
       } catch (e) {}
     }
     // If attached content exists, play content
@@ -109,10 +114,28 @@ export const MessagesScreen: React.FC<MessagesScreenProps> = ({ onBack, onPlayCo
     }
   };
 
-  // Filter messages (hide dismissed or recalled/withdrawn update announcements)
+  // Filter messages (hide dismissed, recalled/withdrawn, or update announcements for versions already installed)
   const activeMessages = messages.filter(
-    (m) => !dismissedIds.includes(m.id) && !(m as any).isWithdrawn && !(m as any).recalled
+    (m) =>
+      !dismissedIds.includes(m.id) &&
+      !(m as any).isWithdrawn &&
+      !(m as any).recalled &&
+      !isUpdateMessageAlreadyInstalled(m, currentApkVersion)
   );
+
+  // When user opens MessagesScreen, automatically mark all loaded messages as seen in localStorage so MeScreen red dot clears on return
+  useEffect(() => {
+    if (messages.length === 0) return;
+    try {
+      const savedRead = localStorage.getItem('maxplay_read_msgs');
+      const existing: string[] = savedRead ? JSON.parse(savedRead) : [];
+      const merged = Array.from(new Set([...existing, ...messages.map((m) => m.id).filter(Boolean)]));
+      if (merged.length !== existing.length) {
+        localStorage.setItem('maxplay_read_msgs', JSON.stringify(merged));
+        window.dispatchEvent(new CustomEvent('MAXPLAY_NOTIFICATIONS_READ_UPDATED'));
+      }
+    } catch {}
+  }, [messages]);
 
   const filteredMessages = activeMessages.filter(m => {
     const isUnread = !readIds.includes(m.id) && m.isUnread !== false;

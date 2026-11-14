@@ -65,31 +65,49 @@ export const HomeStack: React.FC<HomeStackProps> = ({
     };
     window.addEventListener('MAXPLAY_SELECT_CONTENT', handleSelectExternal);
 
-    // Handle ?watch=<contentId> deep link from shared content card
+    // Handle ?watch=<contentId> or /open/<contentId> deep link from shared content card
     let unsubDeepLink: (() => void) | undefined;
+    const openByWatchId = (targetId: string) => {
+      if (!targetId) return;
+      if (unsubDeepLink) unsubDeepLink();
+      let opened = false;
+      unsubDeepLink = subscribeToContent((items) => {
+        if (opened) return;
+        const found = items.find((c) => c.id === targetId);
+        if (found) {
+          opened = true;
+          handledDeepLinkRef.current = true;
+          try {
+            const cleanUrl = new URL(window.location.href);
+            cleanUrl.searchParams.delete('watch');
+            window.history.replaceState({}, '', cleanUrl.toString());
+          } catch {}
+          handleSelect(found);
+        }
+      });
+    };
+
     try {
       const params = new URLSearchParams(window.location.search);
-      const watchId = params.get('watch');
+      const pathMatch = window.location.pathname.match(/\/(?:open|watch)\/([^/?#]+)/i);
+      const watchId = params.get('watch') || (pathMatch ? decodeURIComponent(pathMatch[1]) : '');
       if (watchId && !handledDeepLinkRef.current) {
-        unsubDeepLink = subscribeToContent((items) => {
-          if (handledDeepLinkRef.current) return;
-          const found = items.find((c) => c.id === watchId);
-          if (found) {
-            handledDeepLinkRef.current = true;
-            try {
-              const cleanUrl = new URL(window.location.href);
-              cleanUrl.searchParams.delete('watch');
-              window.history.replaceState({}, '', cleanUrl.toString());
-            } catch {}
-            handleSelect(found);
-          }
-        });
+        openByWatchId(watchId);
       }
     } catch {}
+
+    const handleOpenWatchContentEvent = (e: any) => {
+      const watchId = e?.detail?.contentId || e?.detail;
+      if (typeof watchId === 'string' && watchId.trim()) {
+        openByWatchId(watchId.trim());
+      }
+    };
+    window.addEventListener('MAXPLAY_OPEN_WATCH_CONTENT', handleOpenWatchContentEvent);
 
     return () => {
       window.removeEventListener('MAXPLAY_POP_STACK_HOME', handlePopStack);
       window.removeEventListener('MAXPLAY_SELECT_CONTENT', handleSelectExternal);
+      window.removeEventListener('MAXPLAY_OPEN_WATCH_CONTENT', handleOpenWatchContentEvent);
       if (unsubDeepLink) unsubDeepLink();
     };
   }, []);
@@ -149,6 +167,7 @@ export const HomeStack: React.FC<HomeStackProps> = ({
             )}
             {screen.name === 'detail' && isTop && (
               <ContentDetailScreen
+                key={`detail-${screen.item.id}-${idx}`}
                 content={screen.item}
                 onBack={handleBack}
                 onSelectContent={handleSelect}

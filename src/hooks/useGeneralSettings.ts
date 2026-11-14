@@ -3,7 +3,7 @@ import { doc, onSnapshot, getDoc, getDocs, collection } from 'firebase/firestore
 import { db } from '../services/firebase';
 import { subscribeToAnnouncements, MESSAGES_COLLECTION } from '../services/contentService';
 
-export const DEFAULT_INSTALLED_APK_VERSION = 'v2.5.0';
+export const DEFAULT_INSTALLED_APK_VERSION = 'v2.6.0';
 
 export function formatVersionTag(ver?: string): string {
   if (!ver || typeof ver !== 'string') return DEFAULT_INSTALLED_APK_VERSION;
@@ -34,6 +34,20 @@ export function isVersionNewer(remoteVersion?: string, localVersion: string = DE
     if (r < l) return false;
   }
   return false;
+}
+
+/**
+ * Returns true if the message is an Admin APK/App Update announcement whose target version
+ * is already installed (i.e. targetVersion <= currentVersion).
+ * Used to hide already-installed update messages from the user's Inbox and unread badges.
+ */
+export function isUpdateMessageAlreadyInstalled(
+  msg: any,
+  currentVersion: string = DEFAULT_INSTALLED_APK_VERSION
+): boolean {
+  const detectedVer = extractVersionFromAdminMessage(msg);
+  if (!detectedVer) return false;
+  return !isVersionNewer(detectedVer, currentVersion);
 }
 
 /**
@@ -177,10 +191,11 @@ export function useGeneralSettings() {
   const [appName, setAppName] = useState('MaxPlay');
   const [customLogoUrl, setCustomLogoUrl] = useState('');
 
-  // The baseline version shown in Me -> Settings -> Check Update (from settings/general.appVersion or v2.5.0)
+  // The baseline version shown in Me -> Settings -> Check Update (from settings/general.appVersion or v2.6.0)
   const [installedAppVersion, setInstalledAppVersion] = useState<string>(DEFAULT_INSTALLED_APK_VERSION);
   const [generalDownloadUrl, setGeneralDownloadUrl] = useState<string>('');
   const [shareDownloadUrlState, setShareDownloadUrlState] = useState<string>('');
+  const [officialWebsiteUrlState, setOfficialWebsiteUrlState] = useState<string>('https://maxplay.app');
 
   // Optional direct update fields from settings/update or settings/general
   const [settingsLatestVersion, setSettingsLatestVersion] = useState<string>('');
@@ -271,6 +286,10 @@ export function useGeneralSettings() {
           if (shareLink) {
             setShareDownloadUrlState(String(shareLink).trim());
           }
+          const webLink = data.officialWebsiteUrl || data.websiteUrl || '';
+          if (webLink && String(webLink).trim()) {
+            setOfficialWebsiteUrlState(String(webLink).trim());
+          }
           applyUpdateConfigFields(data, false);
         }
       },
@@ -317,8 +336,8 @@ export function useGeneralSettings() {
   // Manual trigger to re-verify update status from Firestore on demand (used by Me -> Settings -> Check update)
   const triggerManualUpdateCheck = useCallback(async () => {
     let computedHasUpdate = false;
-    let computedLatestVer = cleanVersionDigits(installedAppVersion) || '2.5.0';
-    const currentCleanVer = cleanVersionDigits(installedAppVersion) || '2.5.0';
+    let computedLatestVer = cleanVersionDigits(installedAppVersion) || '2.6.0';
+    const currentCleanVer = cleanVersionDigits(installedAppVersion) || '2.6.0';
     try {
       const [genSnap, updSnap, msgSnap] = await Promise.allSettled([
         getDoc(doc(db, 'settings', 'general')),
@@ -336,6 +355,9 @@ export function useGeneralSettings() {
         }
         if (d.downloadUrl !== undefined || d.apkUrl !== undefined) {
           setGeneralDownloadUrl(String(d.downloadUrl || d.apkUrl || '').trim());
+        }
+        if (d.officialWebsiteUrl || d.websiteUrl) {
+          setOfficialWebsiteUrlState(String(d.officialWebsiteUrl || d.websiteUrl).trim());
         }
         if (d.updateActive !== undefined) {
           activeFlag = Boolean(d.updateActive);
@@ -468,12 +490,13 @@ export function useGeneralSettings() {
     maintenanceMode,
     appName,
     customLogoUrl,
-    currentApkVersion: cleanVersionDigits(installedAppVersion) || '2.5.0',
+    currentApkVersion: cleanVersionDigits(installedAppVersion) || '2.6.0',
     formattedCurrentVersion: formatVersionTag(installedAppVersion),
     latestApkVersion,
     formattedLatestVersion: latestApkVersion ? formatVersionTag(latestApkVersion) : formatVersionTag(installedAppVersion),
     apkDownloadUrl,
     shareDownloadUrl: shareDownloadUrlState || generalDownloadUrl || apkDownloadUrl || '',
+    officialWebsiteUrl: officialWebsiteUrlState || 'https://maxplay.app',
     hasApkUpdate,
     isRedBlinkActive,
     redBlinkEnabled: settingsRedBlinkEnabled,

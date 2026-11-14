@@ -5114,6 +5114,55 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
   let vitePromise: Promise<any> | null = null;
   let viteMiddleware: any = null;
 
+  // Content Share Deep-Link Route (/open/:id) — launches MaxPlay Android APK directly to the shared movie/series
+  app.get("/open/:id", (req, res) => {
+    const rawId = String(req.params.id || "").trim();
+    const safeId = encodeURIComponent(rawId);
+    const customSchemeUrl = `maxplay://watch/${safeId}`;
+    const androidIntentUrl = `intent://watch/${safeId}#Intent;scheme=maxplay;package=com.maxplay.app;S.browser_fallback_url=${encodeURIComponent(`/?watch=${safeId}`)};end`;
+    const webFallbackUrl = `/?watch=${safeId}`;
+    res.status(200).set({ "Content-Type": "text/html; charset=utf-8" }).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Opening in MaxPlay...</title>
+  <style>
+    body { margin: 0; background: #0A0A0A; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; text-align: center; padding: 24px; box-sizing: border-box; }
+    .card { max-width: 360px; width: 100%; background: #141418; border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 28px 22px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); }
+    .title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+    .sub { font-size: 13px; color: #9CA3AF; margin-bottom: 22px; line-height: 1.45; }
+    .btn { display: block; width: 100%; padding: 14px 16px; border-radius: 12px; background: linear-gradient(135deg, #E50914, #B81D24); color: #FFF; font-weight: 700; font-size: 14px; text-decoration: none; box-sizing: border-box; margin-bottom: 10px; }
+    .btn-sec { display: block; width: 100%; padding: 12px 16px; border-radius: 12px; background: rgba(255,255,255,0.06); color: #D1D5DB; font-weight: 600; font-size: 13px; text-decoration: none; box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">Opening MaxPlay App…</div>
+    <div class="sub">Redirecting you directly to this title inside MaxPlay.</div>
+    <a id="open-app-btn" class="btn" href="${androidIntentUrl}">Open in MaxPlay App</a>
+    <a class="btn-sec" href="${webFallbackUrl}">Continue in Browser</a>
+  </div>
+  <script>
+    (function() {
+      var isAndroid = /android/i.test(navigator.userAgent || '');
+      try {
+        window.location.href = ${JSON.stringify(customSchemeUrl)};
+      } catch (e) {}
+      if (isAndroid) {
+        setTimeout(function() {
+          try { window.location.href = ${JSON.stringify(androidIntentUrl)}; } catch (e) {}
+        }, 250);
+      }
+      setTimeout(function() {
+        window.location.replace(${JSON.stringify(webFallbackUrl)});
+      }, 1200);
+    })();
+  </script>
+</body>
+</html>`);
+  });
+
   if (!isVercel && process.env.NODE_ENV !== "production") {
     // Development mode: always use Vite middleware and dynamic index.html transformation
     vitePromise = createViteServer({

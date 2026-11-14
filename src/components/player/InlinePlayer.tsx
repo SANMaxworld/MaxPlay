@@ -416,60 +416,39 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       const newVal = Math.round(Math.max(0, Math.min(200, prev + delta)));
       // Control real Android phone hardware media volume inside APK (0-100%)
       if (NativeBridgeService.isRunningInKotlinApp()) {
-        NativeBridgeService.setNativeVolume(Math.min(100, Math.max(0, newVal)));
+        // Map 0-200% UI slider smoothly so 0->0, 100-200%->max hardware volume without muting
+        const hwVol = newVal <= 100 ? newVal : 100;
+        NativeBridgeService.setNativeVolume(Math.min(100, Math.max(0, hwVol)));
       }
       return newVal;
     });
     showIndicator('volume');
   }, []);
 
-  // Web Audio API GainNode for true 100%-200% volume boost
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
-  const connectedVideoElRef = useRef<HTMLVideoElement | null>(null);
+  const [hasRenderedFirstFrame, setHasRenderedFirstFrame] = useState(false);
 
-  // Apply volume changes directly to native HTML5 video element + Web Audio API GainNode when boosting > 100%
+  // Reset first-frame flag only when switching to a brand new content title (not during mid-stream quality switch)
+  useEffect(() => {
+    if (!isSwitchingSourceRef.current) {
+      setHasRenderedFirstFrame(false);
+    }
+  }, [title, posterUrl]);
+
+  // Apply volume changes directly to native HTML5 video element without WebAudio CORS-tainting
+  // (Calling createMediaElementSource on cross-origin or maxplay.local offline/device videos causes Chromium WebView to permanently mute audio at >100%)
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (NativeBridgeService.isRunningInKotlinApp()) {
-      video.volume = volume === 0 ? 0 : 1;
-      video.muted = volume === 0;
+    if (volume <= 0) {
+      video.volume = 0;
+      video.muted = true;
     } else {
-      const clampedVolume = Math.min(1, Math.max(0, volume / 100));
-      video.volume = clampedVolume;
-      video.muted = volume === 0;
-    }
-
-    // Apply real audio amplification up to 2.0x (200%) via Web Audio API GainNode
-    if (volume > 100 || gainNodeRef.current) {
-      try {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioCtx) {
-          if (!audioCtxRef.current) {
-            audioCtxRef.current = new AudioCtx();
-          }
-          const ctx = audioCtxRef.current;
-          if (ctx.state === 'suspended') {
-            ctx.resume().catch(() => {});
-          }
-          if (connectedVideoElRef.current !== video) {
-            const source = ctx.createMediaElementSource(video);
-            const gain = ctx.createGain();
-            source.connect(gain);
-            gain.connect(ctx.destination);
-            gainNodeRef.current = gain;
-            connectedVideoElRef.current = video;
-          }
-          if (gainNodeRef.current) {
-            const boostMultiplier = volume > 100 ? volume / 100 : 1.0;
-            gainNodeRef.current.gain.setTargetAtTime(boostMultiplier, ctx.currentTime, 0.015);
-          }
-        }
-      } catch (err) {
-        // Fallback silently if stream does not allow Web Audio source connection
-      }
+      video.muted = false;
+      // Keep HTML5 video volume at 1.0 when volume >= 100% (up to 200%) so audio never cuts out
+      video.volume = NativeBridgeService.isRunningInKotlinApp()
+        ? 1
+        : Math.min(1, Math.max(0.05, volume / 100));
     }
   }, [volume]);
 
@@ -2079,6 +2058,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               e.stopPropagation();
             }}
           onPlay={() => { 
+            // Pause any other video elements in the DOM so two videos never play simultaneously
+            try {
+              document.querySelectorAll('video').forEach((v) => {
+                if (v !== videoRef.current && !v.paused) {
+                  v.pause();
+                }
+              });
+            } catch {}
             setIsPlaying(true); 
             setHasStarted(true); 
             setIsLoading(false);
@@ -2108,6 +2095,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           onTimeUpdate={(e) => {
             const t = e.currentTarget.currentTime;
             const d = e.currentTarget.duration || duration || 0;
+            if (t > 0.05 && !hasRenderedFirstFrame) {
+              setHasRenderedFirstFrame(true);
+            }
             const now = Date.now();
             // Zero-Lag Playback Optimization: Only trigger React state updates when controls are visible or skip markers exist
             if ((showControls || normalizedSkipMarkers) && now - lastTimeStateUpdateRef.current >= 250) {
@@ -2141,7 +2131,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             onDuration?.(d);
           }}
           onWaiting={() => setIsLoading(true)}
-          onPlaying={() => setIsLoading(false)}
+          onPlaying={() => {
+            setIsLoading(false);
+            setHasRenderedFirstFrame(true);
+          }}
           onEnded={() => {
             setIsPlaying(false);
             setIsLoading(false);
@@ -2284,6 +2277,16 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         />
         )}
 
+        {/* Horizontal Poster Backdrop: Remains visible while stream resolves/loads until the first video frame renders */}
+        {!isIframe && !hasRenderedFirstFrame && posterUrl && (
+          <div
+            className="absolute inset-0 z-10 bg-black bg-cover bg-center pointer-events-none transition-opacity duration-300"
+            style={{ backgroundImage: `url(${posterUrl})` }}
+          >
+            <div className="absolute inset-0 bg-black/35" />
+          </div>
+        )}
+
         {!isIframe && !hasStarted && !isPlaying && activeVideoUrl && (
           <div 
             onClick={() => {
@@ -2301,7 +2304,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         )}
 
         {!isIframe && (isLoading || isResolvingStream || Boolean(switchingQualityLabel)) && !isInNativePip && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50 pointer-events-none gap-2.5">
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/45 pointer-events-none gap-2.5">
             <Loader2 className="w-12 h-12 text-[#8B5CF6] animate-spin" />
             {switchingQualityLabel ? (
               <span className="text-xs sm:text-sm font-bold text-white tracking-wide bg-black/85 px-4 py-1.5 rounded-full border border-[#8B5CF6]/50 shadow-xl animate-pulse">

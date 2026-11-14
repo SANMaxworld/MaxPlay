@@ -14,7 +14,7 @@ import { downloadManager } from '../services/DownloadManager';
 import { useContent } from '../hooks/useContent';
 import { useAuth } from '../hooks/useAuth';
 import { STORAGE_KEYS } from '../utils/constants';
-import { useGeneralSettings } from '../hooks/useGeneralSettings';
+import { useGeneralSettings, isUpdateMessageAlreadyInstalled } from '../hooks/useGeneralSettings';
 import { MaintenanceScreen } from '../screens/common/MaintenanceScreen';
 import { SuspendedAccountModal } from '../components/common/SuspendedAccountModal';
 import { subscribeToAnnouncements } from '../services/contentService';
@@ -91,10 +91,17 @@ export const RootNavigator: React.FC = () => {
       }, 120);
     };
 
+    const handleOpenWatchContent = () => {
+      setActiveTabState('home');
+      localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
+    };
+
     window.addEventListener('MAXPLAY_OPEN_MESSAGES_SCREEN', handleOpenMessagesFromNotification);
+    window.addEventListener('MAXPLAY_OPEN_WATCH_CONTENT', handleOpenWatchContent);
     return () => {
       window.removeEventListener('pointerdown', requestOnFirstTouch);
       window.removeEventListener('MAXPLAY_OPEN_MESSAGES_SCREEN', handleOpenMessagesFromNotification);
+      window.removeEventListener('MAXPLAY_OPEN_WATCH_CONTENT', handleOpenWatchContent);
     };
   }, []);
 
@@ -137,11 +144,18 @@ export const RootNavigator: React.FC = () => {
 
       try {
         // Always sort newest-first by createdAt / date so index 0 is guaranteed to be the latest Admin message!
-        const sortedMsgs = [...rawMsgs].sort((a, b) => {
-          const tA = new Date(a.createdAt || a.date || 0).getTime() || 0;
-          const tB = new Date(b.createdAt || b.date || 0).getTime() || 0;
-          return tB - tA;
-        });
+        const sortedMsgs = [...rawMsgs]
+          .filter(
+            (m) =>
+              !(m as any).isWithdrawn &&
+              !(m as any).recalled &&
+              !isUpdateMessageAlreadyInstalled(m, currentApkVersion)
+          )
+          .sort((a, b) => {
+            const tA = new Date(a.createdAt || a.date || 0).getTime() || 0;
+            const tB = new Date(b.createdAt || b.date || 0).getTime() || 0;
+            return tB - tA;
+          });
 
         const rawSeen = localStorage.getItem('maxplay_notified_msg_ids_v2');
         const seenIds: string[] = rawSeen ? JSON.parse(rawSeen) : [];
@@ -211,7 +225,7 @@ export const RootNavigator: React.FC = () => {
       unsub();
       window.removeEventListener('MAXPLAY_NOTIFICATION_PERMISSION_GRANTED', handlePermissionGranted);
     };
-  }, [user?.uid, showSplash]);
+  }, [user?.uid, showSplash, currentApkVersion]);
 
   // Auto-dismiss in-app push notification banner after 7 seconds
   useEffect(() => {

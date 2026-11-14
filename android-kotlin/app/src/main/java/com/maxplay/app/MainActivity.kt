@@ -178,6 +178,42 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }, 900)
         }
+
+        // Handle content share deep link: maxplay://watch/<id>, https://.../open/<id>, or ?watch=<id>
+        val dataUri = intent?.data
+        if (dataUri != null) {
+            var targetContentId: String? = dataUri.getQueryParameter("watch")?.trim()
+            if (targetContentId.isNullOrEmpty()) {
+                val scheme = dataUri.scheme?.lowercase() ?: ""
+                val host = dataUri.host?.lowercase() ?: ""
+                val path = dataUri.path ?: ""
+                if (scheme == "maxplay" && host == "watch") {
+                    targetContentId = path.trimStart('/').trim()
+                } else if (path.startsWith("/open/")) {
+                    targetContentId = path.removePrefix("/open/").trimStart('/').trim()
+                }
+            }
+            if (!targetContentId.isNullOrEmpty()) {
+                val safeId = org.json.JSONObject.quote(targetContentId)
+                intent.data = null
+                val dispatchJs = """
+                    (function() {
+                        window.__MAXPLAY_PENDING_WATCH_ID = $safeId;
+                        window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_WATCH_CONTENT', { detail: { contentId: $safeId } }));
+                    })();
+                """.trimIndent()
+                webView.postDelayed({
+                    try {
+                        webView.evaluateJavascript(dispatchJs, null)
+                    } catch (_: Exception) {}
+                }, 700)
+                webView.postDelayed({
+                    try {
+                        webView.evaluateJavascript(dispatchJs, null)
+                    } catch (_: Exception) {}
+                }, 1800)
+            }
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
