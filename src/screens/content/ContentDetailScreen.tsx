@@ -2391,21 +2391,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     const shareTitle = content.title || 'MaxPlay';
     const configuredAppLink = (shareDownloadUrl || apkDownloadUrl || '').trim();
 
-    // Never use localhost, 127.0.0.1, or WebView virtual asset origin for shared content links
-    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-    const isInternalOrLocalOrigin =
-      !currentOrigin ||
-      currentOrigin.includes('localhost') ||
-      currentOrigin.includes('127.0.0.1') ||
-      currentOrigin.includes('appassets.androidplatform.net');
-
-    const publicBaseUrl = !isInternalOrLocalOrigin
-      ? currentOrigin.replace(/\/+$/, '')
-      : 'https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app';
-
-    // Line 1: Dedicated Content Deep Link that opens the MaxPlay App directly to this movie/series
-    const watchDeepLinkUrl = `${publicBaseUrl}/open/${encodeURIComponent(content.id)}`;
-
     const typeLabel = (content.type || 'movie').toUpperCase();
     const ratingLabel = content.rating ? `⭐ ${content.rating}` : '';
     const yearLabel = content.year ? `📅 ${content.year}` : '';
@@ -2415,15 +2400,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       : '';
 
     const shareCardLines = [
-      `🎬 *${shareTitle}* — Watch Free in HD on MaxPlay`,
+      `🎬 *${shareTitle}*`,
       metaRow,
       genresRow,
       '',
-      `▶️ Content Link (Open in MaxPlay App):`,
-      watchDeepLinkUrl,
+      `🍿 Aap yahan par *${shareTitle}* full HD mein dekh sakte hain!`,
       ...(configuredAppLink
-        ? ['', `📲 Download MaxPlay Official App:`, configuredAppLink]
-        : []),
+        ? [`📲 Download MaxPlay Official App:`, configuredAppLink]
+        : [`📲 Watch now on MaxPlay Official App`]),
     ].filter((line, idx, arr) => line !== '' || (idx > 0 && arr[idx - 1] !== ''));
 
     const shareText = shareCardLines.join('\n');

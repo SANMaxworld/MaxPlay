@@ -21,6 +21,7 @@ import {
   ArrowLeft,
   Trash2,
   Tv,
+  Music2,
 } from 'lucide-react';
 import {
   doc,
@@ -43,9 +44,12 @@ import { ContentCard } from '../../components/common/ContentCard';
 import { NativeBanner } from '../../components/ads/NativeBanner';
 import { NativeBridgeService, DeviceLocalVideoItem } from '../../services/nativeBridgeService';
 import { useContent } from '../../hooks/useContent';
+import { MusicHomeScreen } from '../music/MusicHomeScreen';
+import { useMusic } from '../../context/MusicContext';
 
 interface DownloadsScreenProps {
   onPlayContent?: (contentId: string) => void;
+  onDetailOpenChange?: (isOpen: boolean) => void;
 }
 
 interface DirectTransferSession {
@@ -87,14 +91,18 @@ interface DirectTransferSession {
   createdAt: number;
 }
 
-export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent }) => {
+export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
+  onPlayContent,
+  onDetailOpenChange,
+}) => {
   const { contentList } = useContent();
+  const { visibleTracks: visibleSongs } = useMusic();
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   const [completedFiles, setCompletedFiles] = useState<DownloadedFile[]>([]);
   const [deviceScannedVideos, setDeviceScannedVideos] = useState<DeviceLocalVideoItem[]>([]);
   const [isScanningLocalVideos, setIsScanningLocalVideos] = useState(false);
 
-  const [activeFilter, setActiveFilter] = useState<'moviebox' | 'local' | 'received'>('moviebox');
+  const [activeFilter, setActiveFilter] = useState<'moviebox' | 'musics' | 'local' | 'received'>('moviebox');
   const [showLocalFoldersView, setShowLocalFoldersView] = useState(false);
   const [selectedLocalFolder, setSelectedLocalFolder] = useState<string | null>(null);
   const swipeTouchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -214,12 +222,15 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
     };
   }, [scanPhoneLocalVideos]);
 
-  // Re-scan phone local videos whenever user switches to the 'local' filter tab
+  // Defer local video auto-scan off the synchronous tab-switch render path so horizontal swiping stays 60 FPS smooth
   useEffect(() => {
-    if (activeFilter === 'local') {
-      scanPhoneLocalVideos(true);
+    if (activeFilter === 'local' && deviceScannedVideos.length === 0) {
+      const timer = setTimeout(() => {
+        scanPhoneLocalVideos(true);
+      }, 120);
+      return () => clearTimeout(timer);
     }
-  }, [activeFilter, scanPhoneLocalVideos]);
+  }, [activeFilter, deviceScannedVideos.length, scanPhoneLocalVideos]);
 
   // Auto-discover nearby/active Direct Transfer sessions when Receive tab is open
   const fetchActiveTransferSessions = useCallback(async () => {
@@ -249,6 +260,11 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
   const [offlinePlayingFile, setOfflinePlayingFile] = useState<DownloadedFile | null>(null);
   const [offlineBlobUrl, setOfflineBlobUrl] = useState<string | null>(null);
   const [offlinePlayingEpisodes, setOfflinePlayingEpisodes] = useState<DownloadedFile[]>([]);
+
+  // Notify RootNavigator whenever OfflineDetailScreen or SeriesFolderPage is open so the Bottom Navigation Bar hides cleanly
+  useEffect(() => {
+    onDetailOpenChange?.(Boolean(offlinePlayingFile || activeSeriesFolderPage));
+  }, [offlinePlayingFile, activeSeriesFolderPage, onDetailOpenChange]);
 
   // Register hardware Back button handler for DownloadsScreen sub-views
   useEffect(() => {
@@ -866,9 +882,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         let transferredOk = false;
         let transferredBytes = expectedTotalMb * 1024 * 1024;
 
-        // Path 1: High-Speed Continuous Batch Phone-to-Phone LAN/Hotspot P2P Stream (Zero Mobile Data!)
+        // Path 1: High-Speed 4-Channel Parallel Phone-to-Phone LAN/Hotspot P2P Stream (Zero Mobile Data!)
         if (NativeBridgeService.isRunningInKotlinApp()) {
-          for (let lanAttempt = 0; lanAttempt < 3 && !transferredOk; lanAttempt++) {
+          for (let lanAttempt = 0; lanAttempt < 5 && !transferredOk; lanAttempt++) {
             const p2pRes = await NativeBridgeService.receiveDirectTransferFromPeerNative(
               session.senderIp || '192.168.43.1',
               session.senderPort || 48821,
@@ -894,8 +910,8 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
               if (p2pRes.totalBytes && p2pRes.totalBytes > 0) {
                 transferredBytes = p2pRes.totalBytes;
               }
-            } else if (lanAttempt < 2) {
-              await new Promise((r) => setTimeout(r, 350 * (lanAttempt + 1)));
+            } else if (lanAttempt < 4) {
+              await new Promise((r) => setTimeout(r, 250 * (lanAttempt + 1)));
             }
           }
         }
@@ -931,14 +947,22 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
                 message: `${batchPrefix}Receiving "${itemLabel}" at High Speed (${recvMb} MB / ${expectedTotalMb} MB)...`,
               });
               syncLiveProgressToSender(overallPct);
-              await new Promise((r) => setTimeout(r, 100));
+              await new Promise((r) => setTimeout(r, 80));
             }
             transferredOk = true;
           }
         }
 
-        // Path 3: Fast Direct Stream Relay Fallback
-        if (!transferredOk) {
+        const isLocalSentVideo = Boolean(
+          (item as any).isLocalPhoneVideo ||
+            session.isLocalPhoneVideo ||
+            String(item.storageKey || '').startsWith('dev_vid_') ||
+            String(item.videoUrl || '').includes('127.0.0.1') ||
+            String(item.videoUrl || '').includes('maxplay.local')
+        );
+
+        // Path 3: Fast Direct Stream Relay Fallback (Only for online catalog streams, NEVER for local phone videos)
+        if (!transferredOk && !isLocalSentVideo) {
           let candidateUrl = item.videoUrl || '';
           let secondaryUrl = item.secondaryVideoUrl || '';
 
@@ -1043,12 +1067,6 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         const finalSizeMb = Math.max(
           1,
           Math.round((transferredBytes / (1024 * 1024)) * 10) / 10
-        );
-
-        const isLocalSentVideo = Boolean(
-          (item as any).isLocalPhoneVideo ||
-            session.isLocalPhoneVideo ||
-            String(item.storageKey || '').startsWith('dev_vid_')
         );
 
         // If a local phone video was transferred, also save/export it to the receiver phone's public Gallery (Movies/MaxPlay)
@@ -1378,9 +1396,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         <NativeBanner />
       </div>
 
-      {/* SECTION 3: DOWNLOADED (COMPLETED) - Supports Horizontal Swipe Between Maxbox, Local files, and Received */}
+      {/* SECTION 3: DOWNLOADED (COMPLETED) - Supports Smooth 60 FPS Horizontal Swipe Between Maxbox, Musics, Local files, and Received */}
       <div
-        className="mt-5 flex flex-col gap-3"
+        className="mt-5 flex flex-col gap-3 touch-pan-y"
         onTouchStart={(e) => {
           if (e.touches.length === 1) {
             swipeTouchStartRef.current = {
@@ -1395,19 +1413,20 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
           if (!start || e.changedTouches.length === 0) return;
           const dx = e.changedTouches[0].clientX - start.x;
           const dy = e.changedTouches[0].clientY - start.y;
-          // Require clear horizontal swipe (> 50px and primarily horizontal)
-          if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.35) {
-            const pillOrder: Array<'moviebox' | 'local' | 'received'> = [
+          // Responsive horizontal swipe (> 38px and primarily horizontal)
+          if (Math.abs(dx) > 38 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+            const pillOrder: Array<'moviebox' | 'musics' | 'local' | 'received'> = [
               'moviebox',
+              'musics',
               'local',
               'received',
             ];
             const currentIdx = pillOrder.indexOf(activeFilter);
             if (dx < 0 && currentIdx < pillOrder.length - 1) {
-              // Swiped left -> go to next pill (Maxbox -> Local files -> Received)
+              // Swiped left -> go to next pill (Maxbox -> Musics -> Local files -> Received)
               setActiveFilter(pillOrder[currentIdx + 1]);
             } else if (dx > 0 && currentIdx > 0) {
-              // Swiped right -> go to previous pill (Received -> Local files -> Maxbox)
+              // Swiped right -> go to previous pill (Received -> Local files -> Musics -> Maxbox)
               setActiveFilter(pillOrder[currentIdx - 1]);
             }
           }
@@ -1425,6 +1444,18 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
             }`}
           >
             Maxbox ({completedFiles.filter((f) => f.category === 'moviebox' || !f.category).length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveFilter('musics')}
+            className={`shrink-0 flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold transition cursor-pointer ${
+              activeFilter === 'musics'
+                ? 'bg-gradient-to-r from-[#6A11CB] to-[#8E2DE2] text-white shadow-md shadow-purple-700/35 border border-purple-400/50'
+                : 'bg-[#121212] text-[#A1A1AA] border border-[#1C1C1E] hover:border-purple-500/40'
+            }`}
+          >
+            <Music2 className={`h-3.5 w-3.5 ${activeFilter === 'musics' ? 'text-white' : 'text-[#B517FF]'}`} />
+            <span>Musics{visibleSongs.length > 0 ? ` (${visibleSongs.length})` : ''}</span>
           </button>
           <button
             type="button"
@@ -1457,6 +1488,9 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
             </span>
           </div>
         </div>
+
+        {/* MUSICS PILL CONTENT: MAXPLAY PREMIUM LOCAL MUSIC PLAYER */}
+        {activeFilter === 'musics' && <MusicHomeScreen />}
 
         {/* Local Files Quick Action Bar when viewing Local files tab */}
         {activeFilter === 'local' && (
@@ -1583,7 +1617,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
               </span>
             </div>
           )
-        ) : groupedCompleted.totalCount > 0 ? (
+        ) : activeFilter === 'musics' ? null : groupedCompleted.totalCount > 0 ? (
           <div className="flex flex-col gap-3">
             {/* Render Series / Anime Cards (Opens Dedicated Series Episodes Page on click) */}
             {groupedCompleted.seriesList.map((series) => (
@@ -1698,43 +1732,47 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({ onPlayContent 
         )}
       </div>
 
-      {/* SECTION 4: FOR YOU (REAL CATALOG RECOMMENDATIONS) */}
-      <div className="mt-8 flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            <h3 className="text-sm font-bold text-white">Recommended For You</h3>
-          </div>
-          <span className="text-[11px] text-[#71717A]">Tap any title to watch or download</span>
-        </div>
-
-        <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
-          {recommendedContent.map((item, index) => (
-            <div
-              key={`${item.id}-${refreshSeed}-${index}`}
-              onClick={() => onPlayContent?.(item.id)}
-              className="w-[120px] flex-shrink-0 cursor-pointer"
-            >
-              <ContentCard
-                item={item}
-                onPress={() => onPlayContent?.(item.id)}
-              />
+      {/* SECTION 4: FOR YOU (REAL CATALOG RECOMMENDATIONS - Hidden when inside Musics Player) */}
+      {activeFilter !== 'musics' && (
+        <>
+          <div className="mt-8 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <h3 className="text-sm font-bold text-white">Recommended For You</h3>
+              </div>
+              <span className="text-[11px] text-[#71717A]">Tap any title to watch or download</span>
             </div>
-          ))}
-        </div>
-      </div>
 
-      {/* SECTION 5: REFRESH BUTTON */}
-      <div className="mt-6 flex justify-center">
-        <button
-          type="button"
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-          className="flex items-center gap-2 rounded-2xl bg-[#121212] px-6 py-3 text-xs font-bold text-white border border-[#1C1C1E] hover:bg-[#1C1C1E] active:scale-95 transition cursor-pointer"
-        >
-          <RefreshCw className={`h-4 w-4 text-[#06B6D4] ${isRefreshing ? 'animate-spin' : ''}`} />
-          <span>{isRefreshing ? 'Refreshing...' : 'Refresh new content'}</span>
-        </button>
-      </div>
+            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
+              {recommendedContent.map((item, index) => (
+                <div
+                  key={`${item.id}-${refreshSeed}-${index}`}
+                  onClick={() => onPlayContent?.(item.id)}
+                  className="w-[120px] flex-shrink-0 cursor-pointer"
+                >
+                  <ContentCard
+                    item={item}
+                    onPress={() => onPlayContent?.(item.id)}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* SECTION 5: REFRESH BUTTON */}
+          <div className="mt-6 flex justify-center">
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="flex items-center gap-2 rounded-2xl bg-[#121212] px-6 py-3 text-xs font-bold text-white border border-[#1C1C1E] hover:bg-[#1C1C1E] active:scale-95 transition cursor-pointer"
+            >
+              <RefreshCw className={`h-4 w-4 text-[#06B6D4] ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>{isRefreshing ? 'Refreshing...' : 'Refresh new content'}</span>
+            </button>
+          </div>
+        </>
+      )}
 
       {/* DIRECT APP-TO-APP MAXPLAY TRANSFER MODAL */}
       {showTransferModal && (

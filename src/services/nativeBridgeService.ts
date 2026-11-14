@@ -86,6 +86,7 @@ interface MaxPlayKotlinBridge {
   setAutoPipEnabled?: (enabled: boolean) => boolean;
   setVideoPlayingState?: (isPlaying: boolean) => boolean;
   scanDeviceLocalVideos?: () => string;
+  scanDeviceLocalAudio?: () => string;
   requestVideoStoragePermission?: () => boolean;
   startDirectTransferServer?: (storageKey: string, transferCode: string, metadataJson: string) => string;
   stopDirectTransferServer?: () => boolean;
@@ -128,6 +129,27 @@ export interface DeviceLocalVideoItem {
   dateModified: number;
   playbackUrl: string;
   thumbnailUrl?: string;
+}
+
+export interface DeviceLocalAudioItem {
+  id: string;
+  mediaId?: string;
+  title: string;
+  fileName: string;
+  artist: string;
+  album: string;
+  albumId?: string;
+  durationSec: number;
+  sizeMb: number;
+  sizeBytes?: number;
+  folderName: string;
+  folderPath: string;
+  format: string;
+  mimeType: string;
+  dateAdded: number;
+  dateModified: number;
+  playbackUrl: string;
+  artworkUrl?: string;
 }
 
 declare global {
@@ -1176,7 +1198,32 @@ export class NativeBridgeService {
   }
 
   /**
-   * Requests Android READ_MEDIA_VIDEO / READ_EXTERNAL_STORAGE runtime permission.
+   * Scans the user's phone storage for all local music/audio files via Android MediaStore.Audio.Media.
+   */
+  public static scanDeviceLocalAudio(requestPermissionIfEmpty = false): DeviceLocalAudioItem[] {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.scanDeviceLocalAudio === 'function') {
+        const raw = window.MaxPlayNative.scanDeviceLocalAudio();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && Array.isArray(parsed.songs)) {
+            if (
+              parsed.songs.length === 0 &&
+              requestPermissionIfEmpty &&
+              typeof window.MaxPlayNative?.requestVideoStoragePermission === 'function'
+            ) {
+              window.MaxPlayNative.requestVideoStoragePermission();
+            }
+            return parsed.songs;
+          }
+        }
+      }
+    } catch {}
+    return [];
+  }
+
+  /**
+   * Requests Android READ_MEDIA_VIDEO / READ_MEDIA_AUDIO / READ_EXTERNAL_STORAGE runtime permission.
    */
   public static requestVideoStoragePermission(): boolean {
     try {

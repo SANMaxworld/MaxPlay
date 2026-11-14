@@ -20,6 +20,9 @@ import { SuspendedAccountModal } from '../components/common/SuspendedAccountModa
 import { subscribeToAnnouncements } from '../services/contentService';
 import { NativeBridgeService } from '../services/nativeBridgeService';
 import { adManager } from '../services/adService';
+import { MusicProvider } from '../context/MusicContext';
+import { MiniMusicPlayer } from '../components/music/MiniMusicPlayer';
+import { FullScreenMusicPlayer } from '../components/music/FullScreenMusicPlayer';
 import { motion, AnimatePresence } from 'motion/react';
 import { WifiOff, X, Download, ShieldAlert, ArrowUp, Bell } from 'lucide-react';
 
@@ -329,6 +332,7 @@ export const RootNavigator: React.FC = () => {
   }, []);
 
   const handleHomeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('home', isOpen), [handleDetailOpenChange]);
+  const handleDownloadsDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('downloads', isOpen), [handleDetailOpenChange]);
   const handleSearchDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('search', isOpen), [handleDetailOpenChange]);
   const handleAnimeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('anime', isOpen), [handleDetailOpenChange]);
   const handleMeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('me', isOpen), [handleDetailOpenChange]);
@@ -602,73 +606,79 @@ export const RootNavigator: React.FC = () => {
 
   // Handle Main App Tab Navigator
   return (
-    <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
-      {/* Account Suspended Overlay Modal */}
-      <SuspendedAccountModal />
+    <MusicProvider>
+      <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
+        {/* Account Suspended Overlay Modal */}
+        <SuspendedAccountModal />
 
-      {/* Persistent Active Tab Screens */}
-      <div className={`absolute inset-0 ${isCurrentDetailOpen ? 'pb-0 md:pb-0 md:pl-0' : 'pb-[calc(58px+max(env(safe-area-inset-bottom,0px),8px))] md:pb-0 md:pl-[80px]'}`}>
-        <div className={`h-full w-full ${activeTab === 'home' ? 'block' : 'hidden'}`}>
-          <HomeStack
-            onSelectContent={(content) => {
-              console.log('Selected Content:', content);
-            }}
-            onOpenSearch={() => setActiveTab('search')}
-            onOpenNotifications={() => setActiveTab('me')}
-            onDetailOpenChange={handleHomeDetailChange}
-          />
+        {/* Persistent Active Tab Screens */}
+        <div className={`absolute inset-0 ${isCurrentDetailOpen ? 'pb-0 md:pb-0 md:pl-0' : 'pb-[calc(58px+max(env(safe-area-inset-bottom,0px),8px))] md:pb-0 md:pl-[80px]'}`}>
+          <div className={`h-full w-full ${activeTab === 'home' ? 'block' : 'hidden'}`}>
+            <HomeStack
+              onSelectContent={(content) => {
+                console.log('Selected Content:', content);
+              }}
+              onOpenSearch={() => setActiveTab('search')}
+              onOpenNotifications={() => setActiveTab('me')}
+              onDetailOpenChange={handleHomeDetailChange}
+            />
+          </div>
+
+          <div className={`h-full w-full ${activeTab === 'downloads' ? 'block' : 'hidden'}`}>
+            <DownloadsScreen
+              onPlayContent={(contentId) => {
+                const item = contentList.find((c) => c.id === contentId);
+                if (item) {
+                  setActiveTab('home');
+                  window.dispatchEvent(new CustomEvent('MAXPLAY_SELECT_CONTENT', { detail: item }));
+                }
+              }}
+              onDetailOpenChange={handleDownloadsDetailChange}
+            />
+          </div>
+
+          <div className={`h-full w-full ${activeTab === 'search' ? 'block' : 'hidden'}`}>
+            <SearchStack
+              onSelectContent={(content) => {
+                console.log('Selected Content:', content);
+              }}
+              onDetailOpenChange={handleSearchDetailChange}
+            />
+          </div>
+
+          <div className={`h-full w-full ${activeTab === 'anime' ? 'block' : 'hidden'}`}>
+            <AnimeStack
+              onOpenSearch={() => setActiveTab('search')}
+              onSelectContent={(content) => {
+                console.log('Selected Anime Content:', content);
+              }}
+              onDetailOpenChange={handleAnimeDetailChange}
+            />
+          </div>
+
+          <div className={`h-full w-full ${activeTab === 'me' ? 'block' : 'hidden'}`}>
+            <MeStack
+              onLogout={logout}
+              onPlayContent={(contentId) => {
+                console.log('Play content from Me tab:', contentId);
+              }}
+              onDetailOpenChange={handleMeDetailChange}
+            />
+          </div>
         </div>
 
-        <div className={`h-full w-full ${activeTab === 'downloads' ? 'block' : 'hidden'}`}>
-          <DownloadsScreen
-            onPlayContent={(contentId) => {
-              const item = contentList.find((c) => c.id === contentId);
-              if (item) {
-                setActiveTab('home');
-                window.dispatchEvent(new CustomEvent('MAXPLAY_SELECT_CONTENT', { detail: item }));
-              }
-            }}
-          />
-        </div>
+        {/* Persistent Mini Music Player & Full-Screen Now Playing Music Player */}
+        <MiniMusicPlayer hasBottomNav={!isCurrentDetailOpen} />
+        <FullScreenMusicPlayer />
 
-        <div className={`h-full w-full ${activeTab === 'search' ? 'block' : 'hidden'}`}>
-          <SearchStack
-            onSelectContent={(content) => {
-              console.log('Selected Content:', content);
-            }}
-            onDetailOpenChange={handleSearchDetailChange}
+        {/* Bottom Tab Bar / Side Tab Bar - Automatically hidden when in Details screen */}
+        {!isCurrentDetailOpen && (
+          <MainTabNavigator
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            downloadBadgeCount={downloadBadgeCount}
           />
-        </div>
-
-        <div className={`h-full w-full ${activeTab === 'anime' ? 'block' : 'hidden'}`}>
-          <AnimeStack
-            onOpenSearch={() => setActiveTab('search')}
-            onSelectContent={(content) => {
-              console.log('Selected Anime Content:', content);
-            }}
-            onDetailOpenChange={handleAnimeDetailChange}
-          />
-        </div>
-
-        <div className={`h-full w-full ${activeTab === 'me' ? 'block' : 'hidden'}`}>
-          <MeStack
-            onLogout={logout}
-            onPlayContent={(contentId) => {
-              console.log('Play content from Me tab:', contentId);
-            }}
-            onDetailOpenChange={handleMeDetailChange}
-          />
-        </div>
-      </div>
-
-      {/* Bottom Tab Bar / Side Tab Bar - Automatically hidden when in Details screen */}
-      {!isCurrentDetailOpen && (
-        <MainTabNavigator
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          downloadBadgeCount={downloadBadgeCount}
-        />
-      )}
+        )}
 
       {/* Double Back-button Exit Toast Popup */}
       <AnimatePresence>
@@ -785,6 +795,7 @@ export const RootNavigator: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+      </div>
+    </MusicProvider>
   );
 };

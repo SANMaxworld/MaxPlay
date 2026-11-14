@@ -1027,6 +1027,11 @@ class MaxPlayNativeBridge(
     }
 
     @JavascriptInterface
+    fun scanDeviceLocalAudio(): String {
+        return MaxPlayOfflineVault.scanDeviceLocalAudio(activity.applicationContext).toString()
+    }
+
+    @JavascriptInterface
     fun requestVideoStoragePermission(): Boolean {
         return activity.requestVideoStoragePermission()
     }

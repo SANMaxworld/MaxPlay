@@ -141,6 +141,17 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 if (thumbResp != null) {
                     return thumbResp
                 }
+            } else if (path.startsWith("/device-audio/")) {
+                val rangeHeader = request.requestHeaders?.get("Range") ?: request.requestHeaders?.get("range")
+                val audResp = MaxPlayOfflineVault.interceptDeviceAudioRequest(context.applicationContext, reqUrl, rangeHeader)
+                if (audResp != null) {
+                    return audResp
+                }
+            } else if (path.startsWith("/device-audio-art/")) {
+                val artResp = MaxPlayOfflineVault.interceptDeviceAudioArtRequest(context.applicationContext, reqUrl)
+                if (artResp != null) {
+                    return artResp
+                }
             }
         }
 

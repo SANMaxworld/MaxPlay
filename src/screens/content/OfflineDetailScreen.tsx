@@ -1,19 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Check,
-  Play,
   Film,
   Tv,
   ChevronRight,
-  ChevronDown,
-  Server,
-  Download,
-  Plus,
-  Share2,
   HelpCircle,
-  Globe,
-  Sliders,
-  Layers,
   X,
   Star,
   RefreshCw,
@@ -24,8 +14,6 @@ import { InlinePlayer } from '../../components/player/InlinePlayer';
 import { NativeBanner } from '../../components/ads/NativeBanner';
 import { ContentCard } from '../../components/common/ContentCard';
 import { useContent } from '../../hooks/useContent';
-import { useGeneralSettings } from '../../hooks/useGeneralSettings';
-import { NativeBridgeService } from '../../services/nativeBridgeService';
 import { ContentItem } from '../../types';
 
 interface OfflineDetailScreenProps {
@@ -44,25 +32,25 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
   onSelectContent,
 }) => {
   const { contentList } = useContent();
-  const { apkDownloadUrl, shareDownloadUrl } = useGeneralSettings();
 
   const [currentFile, setCurrentFile] = useState<DownloadedFile>(initialFile);
   const [currentBlobUrl, setCurrentBlobUrl] = useState<string | undefined>(initialBlobUrl);
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [showAllEpisodesDrawer, setShowAllEpisodesDrawer] = useState(false);
-  const [showLanguageDrawer, setShowLanguageDrawer] = useState(false);
-  const [showQualityDrawer, setShowQualityDrawer] = useState(false);
-  const [showServerDrawer, setShowServerDrawer] = useState(false);
   const [showHelpConfirmTooltip, setShowHelpConfirmTooltip] = useState(false);
   const [isRefreshingRecs, setIsRefreshingRecs] = useState(false);
   const [recSeed, setRecSeed] = useState(1);
-  const [shareToast, setShareToast] = useState<string | null>(null);
-  const [savedInMyList, setSavedInMyList] = useState<boolean>(false);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Match catalog content item if this offline download came from MaxPlay catalog
+  const isLocalDeviceVideo =
+    currentFile.category === 'local' ||
+    String(currentFile.id || '').startsWith('dev_vid_') ||
+    String(currentFile.storageKey || '').startsWith('dev_vid_');
+
+  // Match catalog content item ONLY if this offline download came from MaxPlay catalog (never for local phone videos)
   const matchedCatalogItem = useMemo(() => {
+    if (isLocalDeviceVideo) return null;
     if (!contentList || contentList.length === 0) return null;
     if (currentFile.contentId && !currentFile.contentId.startsWith('dev_vid_')) {
       const byId = contentList.find((c) => c.id === currentFile.contentId);
@@ -70,7 +58,7 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
     }
     const cleanTitle = (currentFile.title || '').toLowerCase().trim();
     return contentList.find((c) => (c.title || '').toLowerCase().trim() === cleanTitle) || null;
-  }, [contentList, currentFile]);
+  }, [contentList, currentFile, isLocalDeviceVideo]);
 
   useEffect(() => {
     // Pause any background video players in other tabs so Android hardware MediaCodec decoders are freed
@@ -241,102 +229,26 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
     }, 350);
   };
 
-  useEffect(() => {
-    try {
-      const targetId = matchedCatalogItem?.id || currentFile.contentId || currentFile.id;
-      const list = JSON.parse(localStorage.getItem('maxplay_my_list') || '[]');
-      setSavedInMyList(Array.isArray(list) && list.some((item: any) => item?.id === targetId || item === targetId));
-    } catch {
-      setSavedInMyList(false);
-    }
-  }, [matchedCatalogItem, currentFile]);
-
-  const handleToggleMyList = () => {
-    try {
-      const targetId = matchedCatalogItem?.id || currentFile.contentId || currentFile.id;
-      const raw = JSON.parse(localStorage.getItem('maxplay_my_list') || '[]');
-      const list = Array.isArray(raw) ? raw : [];
-      const exists = list.some((item: any) => item?.id === targetId || item === targetId);
-      if (exists) {
-        const next = list.filter((item: any) => item?.id !== targetId && item !== targetId);
-        localStorage.setItem('maxplay_my_list', JSON.stringify(next));
-        setSavedInMyList(false);
-      } else {
-        const entry = matchedCatalogItem || {
-          id: targetId,
-          title: currentFile.title,
-          posterUrl: currentFile.posterUrl,
-          type: isMovie ? 'movie' : 'series',
-        };
-        localStorage.setItem('maxplay_my_list', JSON.stringify([entry, ...list]));
-        setSavedInMyList(true);
-      }
-    } catch {}
-  };
-
-  const handleShare = async () => {
-    const itemTitle = matchedCatalogItem?.title || currentFile.title || 'MaxPlay Video';
-    const contentId = matchedCatalogItem?.id || currentFile.contentId || '';
-    const adminDownloadUrl = (shareDownloadUrl || apkDownloadUrl || '').trim();
-    const isRealCatalogContent = Boolean(contentId && !contentId.startsWith('dev_vid_'));
-
-    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-    const isInternalOrLocalOrigin =
-      !currentOrigin ||
-      currentOrigin.includes('localhost') ||
-      currentOrigin.includes('127.0.0.1') ||
-      currentOrigin.includes('appassets.androidplatform.net');
-
-    const publicBaseUrl = !isInternalOrLocalOrigin
-      ? currentOrigin.replace(/\/+$/, '')
-      : 'https://ais-pre-yzg6gpi5jxavdg2ivlhyef-775675507395.asia-southeast1.run.app';
-
-    const lines: string[] = [`🎬 *${itemTitle}* — Watch Free in HD on MaxPlay`];
-    if (isRealCatalogContent) {
-      lines.push('');
-      lines.push(`▶️ Content Link (Open in MaxPlay App):`);
-      lines.push(`${publicBaseUrl}/open/${encodeURIComponent(contentId)}`);
-    }
-    if (adminDownloadUrl) {
-      lines.push('');
-      lines.push(`📲 Download MaxPlay Official App:`);
-      lines.push(adminDownloadUrl);
-    }
-
-    const sharePayloadText = lines.join('\n');
-    if (NativeBridgeService.shareContentNative(itemTitle, sharePayloadText, '')) {
-      return;
-    }
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: itemTitle,
-          text: sharePayloadText,
-        });
-        return;
-      }
-    } catch {}
-
-    try {
-      await navigator.clipboard.writeText(sharePayloadText);
-      setShareToast('Share link copied to clipboard!');
-      setTimeout(() => setShareToast(null), 2500);
-    } catch {}
-  };
-
-  const isLocalDeviceVideo = currentFile.category === 'local';
   const sizeFormatted =
     currentFile.fileSizeMb >= 1024
       ? `${(currentFile.fileSizeMb / 1024).toFixed(1)} GB`
       : `${Math.round(currentFile.fileSizeMb || 0)} MB`;
-  const ratingValue = matchedCatalogItem?.rating || '8.8';
-  const yearOrSize = matchedCatalogItem?.year || sizeFormatted;
+
+  // Only show real rating if it came from a MaxPlay catalog download (never show fake ratings or ratings on local files)
+  const realCatalogRating =
+    !isLocalDeviceVideo && matchedCatalogItem?.rating && Number(matchedCatalogItem.rating) > 0
+      ? String(matchedCatalogItem.rating)
+      : null;
+
+  const yearOrSize = !isLocalDeviceVideo && matchedCatalogItem?.year ? matchedCatalogItem.year : sizeFormatted;
   const countryOrFolder =
-    matchedCatalogItem?.country ||
-    (isLocalDeviceVideo ? currentFile.language || 'Phone Storage' : 'Offline Vault');
+    !isLocalDeviceVideo && matchedCatalogItem?.country
+      ? matchedCatalogItem.country
+      : isLocalDeviceVideo
+      ? currentFile.language || 'Phone Storage'
+      : sizeFormatted;
   const genresText =
-    matchedCatalogItem?.genres && matchedCatalogItem.genres.length > 0
+    !isLocalDeviceVideo && matchedCatalogItem?.genres && matchedCatalogItem.genres.length > 0
       ? matchedCatalogItem.genres.join(' / ')
       : isLocalDeviceVideo
       ? 'Local Video'
@@ -345,8 +257,8 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
       : 'Series';
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-[#09090B] text-white overflow-hidden select-none">
-      {/* 1. STICKY TOP VIDEO PLAYER SECTION (Identical to ContentDetailScreen) */}
+    <div className="fixed inset-0 z-[100] flex flex-col bg-[#09090B] text-white overflow-hidden select-none">
+      {/* 1. STICKY TOP VIDEO PLAYER SECTION */}
       <div className="w-full bg-black shrink-0 relative z-30 shadow-2xl">
         <div className="w-full max-w-5xl mx-auto aspect-video max-h-[48vh] sm:max-h-[55vh]">
           <InlinePlayer
@@ -364,17 +276,16 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
             activeQuality={currentFile.quality || 'auto'}
             onBack={onBack}
             autoPlay={true}
-            hasNextEpisode={hasNextEpisode}
-            onNextEpisode={hasNextEpisode ? handleNextEpisode : undefined}
+            onNext={hasNextEpisode ? handleNextEpisode : undefined}
             streamKey={`offline_${currentFile.id}_${currentFile.storageKey || ''}`}
           />
         </div>
       </div>
 
-      {/* 2. SCROLLABLE DETAILS CONTENT BELOW PLAYER (Unified with ContentDetailScreen) */}
+      {/* 2. SCROLLABLE DETAILS CONTENT BELOW PLAYER */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 w-full overflow-y-auto overflow-x-hidden bg-[#09090B] text-white font-sans scroll-smooth pb-24"
+        className="flex-1 w-full overflow-y-auto overflow-x-hidden bg-[#09090B] text-white font-sans scroll-smooth pb-12"
       >
         <div className="w-full max-w-5xl mx-auto px-4 pt-3 pb-6 space-y-3.5 text-left">
           {/* ROW 1: Title (left) & Info > Button (right) */}
@@ -392,228 +303,109 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
             </button>
           </div>
 
-          {/* ROW 2: Single-Line Horizontal Metadata Scroll Row */}
+          {/* ROW 2: Single-Line Horizontal Metadata Scroll Row (No fake ratings!) */}
           <div className="flex items-center gap-2 text-xs text-white/70 overflow-x-auto no-scrollbar whitespace-nowrap py-0.5">
-            <span className="flex items-center text-white/80 shrink-0">
+            <span className="inline-flex items-center text-white/80 shrink-0">
               {isMovie ? <Film className="w-3.5 h-3.5" /> : <Tv className="w-3.5 h-3.5" />}
             </span>
 
-            <span className="text-white/20">|</span>
-
-            <span className="flex items-center gap-1 text-amber-400 font-bold shrink-0">
-              <span>★</span>
-              <span>{ratingValue}</span>
-            </span>
-
-            {currentFile.quality && (
+            {realCatalogRating && (
               <>
-                <span className="text-white/20">|</span>
-                <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px] font-bold uppercase shrink-0">
-                  {currentFile.quality}
+                <span className="text-white/25">|</span>
+                <span className="inline-flex items-center gap-1 font-semibold text-amber-400 shrink-0">
+                  <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                  {realCatalogRating}
                 </span>
               </>
             )}
 
-            <span className="text-white/20">|</span>
+            {currentFile.quality && (
+              <>
+                <span className="text-white/25">|</span>
+                <span className="font-semibold text-emerald-400 uppercase shrink-0">
+                  {currentFile.quality.toUpperCase()}
+                </span>
+              </>
+            )}
+
+            <span className="text-white/25">|</span>
             <span className="shrink-0">{yearOrSize}</span>
 
-            <span className="text-white/20">|</span>
-            <span className="shrink-0">{countryOrFolder}</span>
+            {countryOrFolder && countryOrFolder !== yearOrSize && (
+              <>
+                <span className="text-white/25">|</span>
+                <span className="shrink-0">{countryOrFolder}</span>
+              </>
+            )}
 
-            <span className="text-white/20">|</span>
+            <span className="text-white/25">|</span>
             <span className="text-white/60 shrink-0">{genresText}</span>
           </div>
 
-          {/* ROW 3: 4-Button Horizontal Action Pill Bar (Server | Downloaded | My List | Share) */}
-          <div className="grid grid-cols-4 gap-2 pt-2">
-            {/* 1. Server Button */}
-            <button
-              type="button"
-              onClick={() => setShowServerDrawer(true)}
-              className="flex items-center justify-center gap-1.5 h-10 px-2 rounded-xl text-xs font-semibold transition cursor-pointer border bg-[#16161C] hover:bg-[#1E1E26] text-white/90 border-white/10"
-            >
-              <Server className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-              <span className="truncate">{isLocalDeviceVideo ? 'Local' : 'Vault'}</span>
-            </button>
-
-            {/* 2. Download Status Button */}
-            <button
-              type="button"
-              onClick={onBack}
-              className="flex items-center justify-center gap-1.5 h-10 px-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition cursor-pointer active:scale-95"
-            >
-              <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span className="truncate">Downloaded</span>
-            </button>
-
-            {/* 3. My List Button */}
-            <button
-              type="button"
-              onClick={handleToggleMyList}
-              className={`flex items-center justify-center gap-1.5 h-10 px-2 rounded-xl text-xs font-semibold transition cursor-pointer border ${
-                savedInMyList
-                  ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
-                  : 'bg-[#16161C] hover:bg-[#1E1E26] text-white/90 border-white/10'
-              }`}
-            >
-              {savedInMyList ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="truncate">Saved</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="w-3.5 h-3.5 text-white/80 shrink-0" />
-                  <span className="truncate">My List</span>
-                </>
-              )}
-            </button>
-
-            {/* 4. Share Button */}
-            <button
-              type="button"
-              onClick={handleShare}
-              className="flex items-center justify-center gap-1.5 h-10 px-2 rounded-xl bg-[#16161C] hover:bg-[#1E1E26] text-white/90 border border-white/10 text-xs font-semibold transition cursor-pointer active:scale-95"
-            >
-              <Share2 className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-              <span className="truncate">Share</span>
-            </button>
-          </div>
-
-          {shareToast && (
-            <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3 py-2 text-xs font-bold text-emerald-300 text-center">
-              {shareToast}
-            </div>
-          )}
-
-          {/* ROW 4: Playback & Resources Section */}
-          <div className="pt-2 space-y-2.5">
-            {/* Header Row */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-[#8B5CF6] shadow-[0_0_8px_#8B5CF6]" />
-                <span className="text-xs sm:text-sm font-bold text-white tracking-wide">
-                  Playback &amp; Resources
-                </span>
-              </div>
-              <div className="relative flex items-center gap-1 text-[11px] text-white/50">
-                <span>Uploaded by MaxPlay Admin</span>
-                <button
-                  type="button"
-                  onClick={() => setShowHelpConfirmTooltip((prev) => !prev)}
-                  className="p-0.5 text-white/50 hover:text-purple-400 transition cursor-pointer"
-                  title="Need help or want to report an issue?"
-                >
-                  <HelpCircle className="w-3.5 h-3.5" />
-                </button>
-
-                <AnimatePresence>
-                  {showHelpConfirmTooltip && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 6, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 6, scale: 0.95 }}
-                      transition={{ duration: 0.16 }}
-                      className="absolute right-0 top-6 z-50 w-64 rounded-xl bg-[#181820] border border-purple-500/40 p-3 shadow-2xl text-left"
-                    >
-                      <p className="text-xs font-semibold text-white leading-snug">
-                        Facing an issue with this video or audio?
-                      </p>
-                      <p className="text-[11px] text-white/60 mt-0.5">
-                        Tap below to open Feedback &amp; Support and report it directly to Admin.
-                      </p>
-                      <div className="mt-2.5 flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setShowHelpConfirmTooltip(false)}
-                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-white/70 cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowHelpConfirmTooltip(false);
-                            onBack();
-                            window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_FEEDBACK_SCREEN'));
-                          }}
-                          className="px-3 py-1 rounded-lg bg-[#8B5CF6] hover:bg-[#7C3AED] text-[11px] font-bold text-white shadow-md shadow-purple-600/30 cursor-pointer"
-                        >
-                          Go to Feedback
-                        </button>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </div>
-
-            {/* Selector Boxes Row: Language | Quality | Season (if series) */}
-            <div
-              className={`grid ${
-                !isMovie && sortedEpisodes.length > 0 ? 'grid-cols-3' : 'grid-cols-2'
-              } gap-2`}
-            >
-              {/* Language Selector Box */}
-              <button
-                type="button"
-                onClick={() => setShowLanguageDrawer(true)}
-                className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-[#141419] hover:bg-[#1B1B22] border border-white/10 text-left transition cursor-pointer"
-              >
-                <div className="min-w-0">
-                  <div className="text-[10px] text-white/45 font-medium flex items-center gap-1">
-                    <Globe className="w-3 h-3 text-purple-400 shrink-0" />
-                    <span>Language</span>
-                  </div>
-                  <div className="text-xs font-bold text-white truncate mt-0.5">
-                    {currentFile.language || 'Default'}
-                  </div>
+          {/* ROW 3: Playback Header (ONLY for MaxPlay downloaded videos, NEVER for Local files) & Episode/Movie Bar */}
+          <div className="pt-1 space-y-2.5">
+            {!isLocalDeviceVideo && (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-[#8B5CF6] shadow-[0_0_8px_#8B5CF6]" />
+                  <span className="text-xs sm:text-sm font-bold text-white tracking-wide">
+                    Playback &amp; Resources
+                  </span>
                 </div>
-                <ChevronDown className="w-3.5 h-3.5 text-white/40 shrink-0 ml-1" />
-              </button>
+                <div className="relative flex items-center gap-1 text-[11px] text-white/50">
+                  <span>Uploaded by MaxPlay Admin</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowHelpConfirmTooltip((prev) => !prev)}
+                    className="p-0.5 text-white/50 hover:text-purple-400 transition cursor-pointer"
+                    title="Need help or want to report an issue?"
+                  >
+                    <HelpCircle className="w-3.5 h-3.5" />
+                  </button>
 
-              {/* Quality Selector Box */}
-              <button
-                type="button"
-                onClick={() => setShowQualityDrawer(true)}
-                className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-[#141419] hover:bg-[#1B1B22] border border-white/10 text-left transition cursor-pointer"
-              >
-                <div className="min-w-0">
-                  <div className="text-[10px] text-white/45 font-medium flex items-center gap-1">
-                    <Sliders className="w-3 h-3 text-blue-400 shrink-0" />
-                    <span>Quality</span>
-                  </div>
-                  <div className="text-xs font-bold text-white uppercase truncate mt-0.5">
-                    {currentFile.quality || 'HD'}
-                  </div>
+                  <AnimatePresence>
+                    {showHelpConfirmTooltip && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 6, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                        transition={{ duration: 0.16 }}
+                        className="absolute right-0 top-6 z-50 w-64 rounded-xl bg-[#181820] border border-purple-500/40 p-3 shadow-2xl text-left"
+                      >
+                        <p className="text-xs font-semibold text-white leading-snug">
+                          Facing an issue with this video or audio?
+                        </p>
+                        <p className="text-[11px] text-white/60 mt-0.5">
+                          Tap below to open Feedback &amp; Support and report it directly to Admin.
+                        </p>
+                        <div className="mt-2.5 flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowHelpConfirmTooltip(false)}
+                            className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-white/70 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowHelpConfirmTooltip(false);
+                              onBack();
+                              window.dispatchEvent(new CustomEvent('MAXPLAY_OPEN_FEEDBACK_SCREEN'));
+                            }}
+                            className="px-3 py-1 rounded-lg bg-[#8B5CF6] hover:bg-[#7C3AED] text-[11px] font-bold text-white shadow-md shadow-purple-600/30 cursor-pointer"
+                          >
+                            Go to Feedback
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
-                <ChevronDown className="w-3.5 h-3.5 text-white/40 shrink-0 ml-1" />
-              </button>
+              </div>
+            )}
 
-              {/* Season / Folder Selector Box (Series or Multi-video Folder) */}
-              {!isMovie && sortedEpisodes.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAllEpisodesDrawer(true)}
-                  className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-[#141419] hover:bg-[#1B1B22] border border-white/10 text-left transition cursor-pointer"
-                >
-                  <div className="min-w-0">
-                    <div className="text-[10px] text-white/45 font-medium flex items-center gap-1">
-                      <Layers className="w-3 h-3 text-amber-400 shrink-0" />
-                      <span>{isLocalDeviceVideo ? 'Folder' : 'Season'}</span>
-                    </div>
-                    <div className="text-xs font-bold text-white truncate mt-0.5">
-                      {isLocalDeviceVideo
-                        ? `${sortedEpisodes.length} Videos`
-                        : `Season ${(currentFile.seasonIndex ?? 0) + 1}`}
-                    </div>
-                  </div>
-                  <ChevronDown className="w-3.5 h-3.5 text-white/40 shrink-0 ml-1" />
-                </button>
-              )}
-            </div>
-
-            {/* Movie Title Bar OR Horizontal Episode Selector Row */}
+            {/* Movie Title Bar OR Horizontal Episode Selector Row (No Language/Quality/Season selector boxes) */}
             {isMovie || sortedEpisodes.length <= 1 ? (
               <button
                 type="button"
@@ -623,7 +415,7 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
                 {currentFile.title}
               </button>
             ) : (
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex items-center gap-2 pt-0.5">
                 {/* "All" Button on Left */}
                 <button
                   type="button"
@@ -674,7 +466,7 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
             <NativeBanner />
           </div>
 
-          {/* FOR YOU SECTION (Identical to ContentDetailScreen) */}
+          {/* FOR YOU SECTION */}
           {recommendations.length > 0 && (
             <div className="pt-2 space-y-3">
               <div className="flex items-center justify-between">
@@ -749,14 +541,22 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
                     {matchedCatalogItem?.title || currentFile.title}
                   </h4>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-white/70">
-                    <span className="flex items-center gap-1 text-amber-400 font-bold">
-                      <Star className="w-3.5 h-3.5 fill-amber-400" />
-                      {ratingValue}
-                    </span>
-                    <span>•</span>
+                    {realCatalogRating && (
+                      <>
+                        <span className="flex items-center gap-1 text-amber-400 font-bold">
+                          <Star className="w-3.5 h-3.5 fill-amber-400" />
+                          {realCatalogRating}
+                        </span>
+                        <span>•</span>
+                      </>
+                    )}
                     <span>{yearOrSize}</span>
-                    <span>•</span>
-                    <span>{countryOrFolder}</span>
+                    {countryOrFolder && countryOrFolder !== yearOrSize && (
+                      <>
+                        <span>•</span>
+                        <span>{countryOrFolder}</span>
+                      </>
+                    )}
                     {currentFile.quality && (
                       <>
                         <span>•</span>
@@ -782,7 +582,7 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
                 <p className="text-xs sm:text-sm text-white/80 leading-relaxed whitespace-pre-line">
                   {matchedCatalogItem?.description ||
                     currentFile.subtitle ||
-                    `Saved offline in your device storage (${sizeFormatted} • ${currentFile.quality || 'HD'} • ${currentFile.language || 'Default'}). Ready for instant zero-data playback.`}
+                    `Saved offline in your device storage (${sizeFormatted} • ${currentFile.quality || 'HD'}). Ready for instant zero-data playback.`}
                 </p>
               </div>
             </motion.div>
@@ -790,144 +590,7 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
         )}
       </AnimatePresence>
 
-      {/* SLIDE-UP MODAL 2: LANGUAGE SELECTOR DRAWER */}
-      <AnimatePresence>
-        {showLanguageDrawer && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end justify-center"
-            onClick={() => setShowLanguageDrawer(false)}
-          >
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="w-full max-w-lg bg-[#121217] border-t border-white/15 rounded-t-3xl p-5 space-y-3 text-left"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <h3 className="text-sm font-bold text-white">Select Audio Language</h3>
-                <button
-                  type="button"
-                  onClick={() => setShowLanguageDrawer(false)}
-                  className="p-1.5 rounded-full bg-white/10 text-white/70 hover:text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowLanguageDrawer(false)}
-                  className="flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold border bg-purple-600/20 border-purple-500 text-purple-300 cursor-pointer"
-                >
-                  <span className="truncate">{currentFile.language || 'Default'}</span>
-                  <Check className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* SLIDE-UP MODAL 3: QUALITY SELECTOR DRAWER */}
-      <AnimatePresence>
-        {showQualityDrawer && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end justify-center"
-            onClick={() => setShowQualityDrawer(false)}
-          >
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="w-full max-w-lg bg-[#121217] border-t border-white/15 rounded-t-3xl p-5 space-y-3 text-left"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <h3 className="text-sm font-bold text-white">Offline Video Quality</h3>
-                <button
-                  type="button"
-                  onClick={() => setShowQualityDrawer(false)}
-                  className="p-1.5 rounded-full bg-white/10 text-white/70 hover:text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowQualityDrawer(false)}
-                  className="flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold uppercase border bg-purple-600/20 border-purple-500 text-purple-300 cursor-pointer"
-                >
-                  <span>{currentFile.quality || 'HD'} ({sizeFormatted})</span>
-                  <Check className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* SLIDE-UP MODAL 4: SERVER SOURCE DRAWER */}
-      <AnimatePresence>
-        {showServerDrawer && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end justify-center"
-            onClick={() => setShowServerDrawer(false)}
-          >
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="w-full max-w-lg bg-[#121217] border-t border-white/15 rounded-t-3xl p-5 space-y-3 text-left"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <h3 className="text-sm font-bold text-white">Playback Source</h3>
-                <button
-                  type="button"
-                  onClick={() => setShowServerDrawer(false)}
-                  className="p-1.5 rounded-full bg-white/10 text-white/70 hover:text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowServerDrawer(false)}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-bold border bg-purple-600/20 border-purple-500 text-purple-300 cursor-pointer"
-              >
-                <div className="flex flex-col text-left">
-                  <span className="text-sm font-extrabold text-white">
-                    {isLocalDeviceVideo ? 'Phone Local Storage' : 'MaxPlay Offline Vault'}
-                  </span>
-                  <span className="text-[11px] text-white/60 mt-0.5">
-                    Zero internet data • Direct hardware playback ({sizeFormatted})
-                  </span>
-                </div>
-                <Check className="w-4 h-4 text-purple-400 shrink-0" />
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* SLIDE-UP MODAL 5: ALL EPISODES DRAWER */}
+      {/* SLIDE-UP MODAL 2: ALL EPISODES DRAWER */}
       <AnimatePresence>
         {showAllEpisodesDrawer && sortedEpisodes.length > 0 && (
           <motion.div

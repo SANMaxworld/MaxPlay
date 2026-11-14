@@ -781,6 +781,266 @@ object MaxPlayOfflineVault {
     }
 
     /**
+     * Scans the user's Android device storage via MediaStore.Audio.Media for all local music/audio files
+     * (MP3, M4A, AAC, WAV, FLAC, OGG, OPUS) so they can be played in MaxPlay's Premium Local Music Player.
+     */
+    fun scanDeviceLocalAudio(context: Context): JSONObject {
+        val out = JSONObject()
+        val arr = JSONArray()
+        try {
+            val hasRelPath = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
+            val baseProjection = mutableListOf(
+                android.provider.MediaStore.Audio.Media._ID,
+                android.provider.MediaStore.Audio.Media.DISPLAY_NAME,
+                android.provider.MediaStore.Audio.Media.TITLE,
+                android.provider.MediaStore.Audio.Media.ARTIST,
+                android.provider.MediaStore.Audio.Media.ALBUM,
+                android.provider.MediaStore.Audio.Media.ALBUM_ID,
+                android.provider.MediaStore.Audio.Media.SIZE,
+                android.provider.MediaStore.Audio.Media.DURATION,
+                android.provider.MediaStore.Audio.Media.MIME_TYPE,
+                android.provider.MediaStore.Audio.Media.DATE_ADDED,
+                android.provider.MediaStore.Audio.Media.DATE_MODIFIED
+            )
+            if (hasRelPath) {
+                baseProjection.add(android.provider.MediaStore.Audio.Media.RELATIVE_PATH)
+                baseProjection.add(android.provider.MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
+            } else {
+                @Suppress("DEPRECATION")
+                baseProjection.add(android.provider.MediaStore.Audio.Media.DATA)
+            }
+
+            val sortOrder = "${android.provider.MediaStore.Audio.Media.DATE_ADDED} DESC"
+            val cursor = context.contentResolver.query(
+                android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                baseProjection.toTypedArray(),
+                null,
+                null,
+                sortOrder
+            )
+
+            val localPort = ensureLocalVideoHttpServer(context)
+            val supportedExts = setOf("mp3", "m4a", "aac", "wav", "flac", "ogg", "opus")
+
+            cursor?.use { c ->
+                val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID)
+                val nameCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DISPLAY_NAME)
+                val titleCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.TITLE)
+                val artistCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ARTIST)
+                val albumCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ALBUM)
+                val albumIdCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ALBUM_ID)
+                val sizeCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.SIZE)
+                val durCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DURATION)
+                val mimeCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.MIME_TYPE)
+                val dateAddCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATE_ADDED)
+                val dateModCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATE_MODIFIED)
+                val relPathCol = if (hasRelPath) c.getColumnIndex(android.provider.MediaStore.Audio.Media.RELATIVE_PATH) else -1
+                val bucketCol = if (hasRelPath) c.getColumnIndex(android.provider.MediaStore.Audio.Media.BUCKET_DISPLAY_NAME) else -1
+                @Suppress("DEPRECATION")
+                val dataCol = if (!hasRelPath) c.getColumnIndex(android.provider.MediaStore.Audio.Media.DATA) else -1
+
+                var count = 0
+                while (c.moveToNext() && count < 1500) {
+                    val id = c.getLong(idCol)
+                    val sizeBytes = c.getLong(sizeCol)
+                    if (sizeBytes < 16 * 1024L) continue
+
+                    val displayName = c.getString(nameCol) ?: ""
+                    val durMs = c.getLong(durCol)
+                    if (durMs < 1500L) continue
+
+                    val mime = (c.getString(mimeCol) ?: "audio/mpeg").lowercase()
+                    val ext = displayName.substringAfterLast('.', "").lowercase()
+                    val isSupported = supportedExts.contains(ext) ||
+                        mime.startsWith("audio/") && (
+                            mime.contains("mpeg") || mime.contains("mp3") || mime.contains("mp4") ||
+                            mime.contains("aac") || mime.contains("wav") || mime.contains("flac") ||
+                            mime.contains("ogg") || mime.contains("opus")
+                        )
+                    if (!isSupported) continue
+
+                    val rawTitle = (c.getString(titleCol) ?: displayName)
+                        .replace(Regex("\\.(mp3|m4a|aac|wav|flac|ogg|opus)$", RegexOption.IGNORE_CASE), "")
+                        .trim()
+                        .ifBlank { "Track $id" }
+
+                    val rawArtist = (c.getString(artistCol) ?: "").trim()
+                    val cleanArtist = if (rawArtist.isEmpty() || rawArtist.equals("<unknown>", ignoreCase = true)) {
+                        "Unknown Artist"
+                    } else {
+                        rawArtist
+                    }
+
+                    val rawAlbum = (c.getString(albumCol) ?: "").trim()
+                    val cleanAlbum = if (rawAlbum.isEmpty() || rawAlbum.equals("<unknown>", ignoreCase = true)) {
+                        "Unknown Album"
+                    } else {
+                        rawAlbum
+                    }
+
+                    val albumId = c.getLong(albumIdCol)
+                    val dateAdded = c.getLong(dateAddCol)
+                    val dateMod = c.getLong(dateModCol)
+
+                    var folderName = "Music"
+                    var folderPath = "Internal Storage/Music"
+                    if (hasRelPath) {
+                        val rel = if (relPathCol >= 0) (c.getString(relPathCol) ?: "").trim('/') else ""
+                        val bkt = if (bucketCol >= 0) (c.getString(bucketCol) ?: "") else ""
+                        if (rel.isNotEmpty()) {
+                            folderPath = "Internal Storage/$rel"
+                            folderName = bkt.ifBlank { rel.substringAfterLast('/', rel) }
+                        } else if (bkt.isNotEmpty()) {
+                            folderName = bkt
+                            folderPath = "Internal Storage/$bkt"
+                        }
+                    } else if (dataCol >= 0) {
+                        val fullData = c.getString(dataCol) ?: ""
+                        if (fullData.isNotEmpty()) {
+                            val parent = File(fullData).parentFile
+                            if (parent != null) {
+                                folderName = parent.name.ifBlank { "Music" }
+                                folderPath = parent.absolutePath.replace("/storage/emulated/0", "Internal Storage")
+                            }
+                        }
+                    }
+
+                    val sizeMb = String.format(java.util.Locale.US, "%.2f", sizeBytes / (1024.0 * 1024.0)).toDouble()
+                    val playbackUrl = if (localPort > 0) {
+                        "http://127.0.0.1:$localPort/device-audio/$id"
+                    } else {
+                        "https://maxplay.local/device-audio/$id"
+                    }
+                    val artworkUrl = "https://maxplay.local/device-audio-art/$albumId?songId=$id"
+
+                    val obj = JSONObject().apply {
+                        put("id", "dev_aud_$id")
+                        put("mediaId", id.toString())
+                        put("title", rawTitle)
+                        put("fileName", displayName.ifBlank { "$rawTitle.mp3" })
+                        put("artist", cleanArtist)
+                        put("album", cleanAlbum)
+                        put("albumId", albumId.toString())
+                        put("durationSec", (durMs / 1000L).toInt())
+                        put("sizeMb", sizeMb)
+                        put("sizeBytes", sizeBytes)
+                        put("folderName", folderName)
+                        put("folderPath", folderPath)
+                        put("format", ext.uppercase().ifBlank { "MP3" })
+                        put("mimeType", mime)
+                        put("dateAdded", dateAdded)
+                        put("dateModified", dateMod)
+                        put("playbackUrl", playbackUrl)
+                        put("artworkUrl", artworkUrl)
+                    }
+                    arr.put(obj)
+                    count++
+                }
+            }
+            out.put("ok", true)
+            out.put("songs", arr)
+        } catch (e: Exception) {
+            out.put("ok", false)
+            out.put("songs", arr)
+            out.put("error", e.message ?: "Audio scan failed")
+        }
+        return out
+    }
+
+    /**
+     * Serves embedded or MediaStore album artwork (`https://maxplay.local/device-audio-art/{albumId}?songId={id}`)
+     * with disk caching.
+     */
+    fun interceptDeviceAudioArtRequest(
+        context: Context,
+        url: String
+    ): WebResourceResponse? {
+        return try {
+            val marker = "/device-audio-art/"
+            val idx = url.indexOf(marker)
+            if (idx == -1) return null
+
+            val afterMarker = url.substring(idx + marker.length)
+            val albumIdStr = afterMarker.substringBefore("?").substringBefore("/").trim()
+            val albumId = albumIdStr.toLongOrNull() ?: 0L
+            val songIdStr = afterMarker.substringAfter("songId=", "").substringBefore("&").trim()
+            val songId = songIdStr.toLongOrNull() ?: 0L
+
+            val corsHeaders = mapOf(
+                "Access-Control-Allow-Origin" to "*",
+                "Access-Control-Allow-Methods" to "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers" to "*",
+                "Cache-Control" to "public, max-age=86400"
+            )
+
+            val artDir = File(context.cacheDir, "audio_art")
+            if (!artDir.exists()) artDir.mkdirs()
+            val cacheKey = if (albumId > 0L) "alb_$albumId" else "sng_$songId"
+            val cachedArt = File(artDir, "$cacheKey.jpg")
+            if (cachedArt.exists() && cachedArt.length() > 256L) {
+                return WebResourceResponse(
+                    "image/jpeg",
+                    null,
+                    200,
+                    "OK",
+                    corsHeaders,
+                    FileInputStream(cachedArt)
+                )
+            }
+
+            var artBytes: ByteArray? = null
+
+            // 1. Try embedded ID3 / MP4 cover art via MediaMetadataRetriever
+            if (songId > 0L) {
+                val songUri = android.content.ContentUris.withAppendedId(
+                    android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    songId
+                )
+                val retriever = android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, songUri)
+                    artBytes = retriever.embeddedPicture
+                } catch (_: Exception) {
+                } finally {
+                    try { retriever.release() } catch (_: Exception) {}
+                }
+            }
+
+            // 2. Fallback: Android 10+ MediaStore Album Thumbnail
+            if ((artBytes == null || artBytes.isEmpty()) && albumId > 0L && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                try {
+                    val albumUri = android.content.ContentUris.withAppendedId(
+                        android.provider.MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
+                        albumId
+                    )
+                    val bmp = context.contentResolver.loadThumbnail(albumUri, android.util.Size(512, 512), null)
+                    val baos = java.io.ByteArrayOutputStream()
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 86, baos)
+                    artBytes = baos.toByteArray()
+                } catch (_: Exception) {}
+            }
+
+            val finalBytes = artBytes
+            if (finalBytes != null && finalBytes.isNotEmpty()) {
+                try {
+                    FileOutputStream(cachedArt).use { it.write(finalBytes) }
+                } catch (_: Exception) {}
+                return WebResourceResponse(
+                    "image/jpeg",
+                    null,
+                    200,
+                    "OK",
+                    corsHeaders,
+                    ByteArrayInputStream(finalBytes)
+                )
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Generates and serves a real video frame thumbnail for any local video (`https://maxplay.local/device-video-thumb/{id}`)
      * with disk caching so subsequent opens render in 0ms.
      */
@@ -1065,6 +1325,47 @@ object MaxPlayOfflineVault {
                     return
                 }
 
+                // Route 3: /device-audio/{id}
+                if (reqPath.startsWith("/device-audio/")) {
+                    val idStr = reqPath.removePrefix("/device-audio/").substringBefore("/").trim()
+                    val audioId = idStr.toLongOrNull() ?: return
+                    val contentUri = android.content.ContentUris.withAppendedId(
+                        android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        audioId
+                    )
+                    val rawMime = (context.contentResolver.getType(contentUri) ?: "audio/mpeg").lowercase()
+                    val mimeType = when {
+                        rawMime.contains("mp4") || rawMime.contains("m4a") -> "audio/mp4"
+                        rawMime.contains("aac") -> "audio/aac"
+                        rawMime.contains("wav") -> "audio/wav"
+                        rawMime.contains("flac") -> "audio/flac"
+                        rawMime.contains("ogg") || rawMime.contains("opus") -> "audio/ogg"
+                        else -> "audio/mpeg"
+                    }
+
+                    val pfd = context.contentResolver.openFileDescriptor(contentUri, "r")
+                    if (pfd == null) {
+                        outStream.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                        outStream.flush()
+                        return
+                    }
+
+                    pfd.use { descriptor ->
+                        val totalLength = descriptor.statSize.coerceAtLeast(0L)
+                        val fis = FileInputStream(descriptor.fileDescriptor)
+                        streamByteRangeOverSocket(
+                            method = method,
+                            mimeType = mimeType,
+                            totalLength = totalLength,
+                            rangeHeader = rangeHeader,
+                            fileDescriptor = descriptor.fileDescriptor,
+                            fis = fis,
+                            outStream = outStream
+                        )
+                    }
+                    return
+                }
+
                 outStream.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                 outStream.flush()
             } catch (_: Exception) {}
@@ -1320,6 +1621,66 @@ object MaxPlayOfflineVault {
                     fis
                 )
             }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Fallback WebResourceResponse handler for `https://maxplay.local/device-audio/{id}`
+     */
+    fun interceptDeviceAudioRequest(
+        context: Context,
+        url: String,
+        rangeHeader: String?
+    ): WebResourceResponse? {
+        return try {
+            val marker = "/device-audio/"
+            val idx = url.indexOf(marker)
+            if (idx == -1) return null
+
+            val idStr = url.substring(idx + marker.length).substringBefore("?").substringBefore("/").trim()
+            val audioId = idStr.toLongOrNull() ?: return null
+
+            val contentUri = android.content.ContentUris.withAppendedId(
+                android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                audioId
+            )
+
+            val rawMime = (context.contentResolver.getType(contentUri) ?: "audio/mpeg").lowercase()
+            val mimeType = when {
+                rawMime.contains("mp4") || rawMime.contains("m4a") -> "audio/mp4"
+                rawMime.contains("aac") -> "audio/aac"
+                rawMime.contains("wav") -> "audio/wav"
+                rawMime.contains("flac") -> "audio/flac"
+                rawMime.contains("ogg") || rawMime.contains("opus") -> "audio/ogg"
+                else -> "audio/mpeg"
+            }
+
+            val pfd = context.contentResolver.openFileDescriptor(contentUri, "r") ?: return null
+            val totalLength = pfd.statSize.coerceAtLeast(0L)
+            val fis = android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)
+
+            val baseHeaders = mutableMapOf(
+                "Access-Control-Allow-Origin" to "*",
+                "Access-Control-Allow-Methods" to "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers" to "Range, Content-Type, Accept, Origin",
+                "Access-Control-Expose-Headers" to "Content-Length, Content-Range, Accept-Ranges",
+                "Accept-Ranges" to "bytes",
+                "Cache-Control" to "no-store"
+            )
+
+            if (totalLength > 0L) {
+                baseHeaders["Content-Length"] = totalLength.toString()
+            }
+            WebResourceResponse(
+                mimeType,
+                null,
+                200,
+                "OK",
+                baseHeaders,
+                fis
+            )
         } catch (_: Exception) {
             null
         }
@@ -1705,6 +2066,52 @@ object MaxPlayOfflineVault {
                         return
                     }
 
+                    if (targetName == "rawstream") {
+                        var startByte = 0L
+                        var endByte = localFileBytes - 1L
+                        for (pair in queryStr.split("&")) {
+                            val kv = pair.split("=")
+                            if (kv.size == 2) {
+                                when (kv[0]) {
+                                    "start" -> startByte = kv[1].toLongOrNull() ?: 0L
+                                    "end" -> endByte = kv[1].toLongOrNull() ?: (localFileBytes - 1L)
+                                }
+                            }
+                        }
+                        val clampedStart = startByte.coerceIn(0L, (localFileBytes - 1L).coerceAtLeast(0L))
+                        val clampedEnd = endByte.coerceIn(clampedStart, (localFileBytes - 1L).coerceAtLeast(clampedStart))
+                        val len = (clampedEnd - clampedStart + 1L).coerceAtLeast(0L)
+
+                        val headers = "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: application/octet-stream\r\n" +
+                            "Access-Control-Allow-Origin: *\r\n" +
+                            "Content-Length: $len\r\n" +
+                            "Connection: close\r\n\r\n"
+                        outStream.write(headers.toByteArray(Charsets.UTF_8))
+
+                        val copyBuf = ByteArray(1024 * 1024)
+                        context.contentResolver.openFileDescriptor(contentUri, "r")?.use { pfd ->
+                            val fis = FileInputStream(pfd.fileDescriptor)
+                            if (clampedStart > 0L) {
+                                try {
+                                    android.system.Os.lseek(pfd.fileDescriptor, clampedStart, android.system.OsConstants.SEEK_SET)
+                                } catch (_: Exception) {
+                                    try { fis.channel.position(clampedStart) } catch (_: Exception) {}
+                                }
+                            }
+                            var remaining = len
+                            while (remaining > 0L) {
+                                val toRead = minOf(copyBuf.size.toLong(), remaining).toInt()
+                                val r = fis.read(copyBuf, 0, toRead)
+                                if (r <= 0) break
+                                outStream.write(copyBuf, 0, r)
+                                remaining -= r.toLong()
+                            }
+                        }
+                        outStream.flush()
+                        return
+                    }
+
                     if (targetName.startsWith("seg_") && targetName.endsWith(".ts")) {
                         val idx = targetName.removePrefix("seg_").removeSuffix(".ts").toIntOrNull() ?: -1
                         val offset = idx.toLong() * VIRTUAL_LOCAL_CHUNK_SIZE
@@ -1817,6 +2224,55 @@ object MaxPlayOfflineVault {
                     outStream.write(manifestJson)
                     outStream.flush()
                     return
+                }
+
+                // Direct Zero-Copy Raw Byte-Range Stream for direct.mp4 vault items
+                if (targetName == "rawstream") {
+                    val directFile = File(itemDir, "direct.mp4").takeIf { it.exists() && it.length() > 0L }
+                        ?: activeSegFiles.firstOrNull()?.takeIf { activeSegFiles.size == 1 && it.exists() && it.length() > 0L }
+                    if (directFile != null) {
+                        val fileLen = directFile.length()
+                        var startByte = 0L
+                        var endByte = fileLen - 1L
+                        for (pair in queryStr.split("&")) {
+                            val kv = pair.split("=")
+                            if (kv.size == 2) {
+                                when (kv[0]) {
+                                    "start" -> startByte = kv[1].toLongOrNull() ?: 0L
+                                    "end" -> endByte = kv[1].toLongOrNull() ?: (fileLen - 1L)
+                                }
+                            }
+                        }
+                        val clampedStart = startByte.coerceIn(0L, (fileLen - 1L).coerceAtLeast(0L))
+                        val clampedEnd = endByte.coerceIn(clampedStart, (fileLen - 1L).coerceAtLeast(clampedStart))
+                        val len = (clampedEnd - clampedStart + 1L).coerceAtLeast(0L)
+
+                        val headers = "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: application/octet-stream\r\n" +
+                            "Access-Control-Allow-Origin: *\r\n" +
+                            "Content-Length: $len\r\n" +
+                            "Connection: close\r\n\r\n"
+                        outStream.write(headers.toByteArray(Charsets.UTF_8))
+
+                        val copyBuf = ByteArray(1024 * 1024)
+                        FileInputStream(directFile).use { fis ->
+                            if (clampedStart > 0L) {
+                                try {
+                                    fis.channel.position(clampedStart)
+                                } catch (_: Exception) {}
+                            }
+                            var remaining = len
+                            while (remaining > 0L) {
+                                val toRead = minOf(copyBuf.size.toLong(), remaining).toInt()
+                                val r = fis.read(copyBuf, 0, toRead)
+                                if (r <= 0) break
+                                outStream.write(copyBuf, 0, r)
+                                remaining -= r.toLong()
+                            }
+                        }
+                        outStream.flush()
+                        return
+                    }
                 }
 
                 // High-Speed Multiplexed Batch Stream Endpoint:
@@ -1942,6 +2398,38 @@ object MaxPlayOfflineVault {
                 .filter { it.isNotEmpty() && it != "127.0.0.1" && it != "0.0.0.0" }
                 .toMutableList()
 
+            // Also discover DHCP gateway / Hotspot host IPs on the receiver phone so Hotspot transfers always connect!
+            try {
+                val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                val dhcp = wm?.dhcpInfo
+                if (dhcp != null) {
+                    for (ipInt in listOf(dhcp.gateway, dhcp.serverAddress)) {
+                        if (ipInt != 0) {
+                            val gwIp = String.format(
+                                java.util.Locale.US,
+                                "%d.%d.%d.%d",
+                                ipInt and 0xff,
+                                ipInt shr 8 and 0xff,
+                                ipInt shr 16 and 0xff,
+                                ipInt shr 24 and 0xff
+                            )
+                            if (gwIp != "0.0.0.0" && gwIp != "127.0.0.1" && !candidateIps.contains(gwIp)) {
+                                candidateIps.add(0, gwIp)
+                            }
+                        }
+                    }
+                }
+                for (localAddr in getAllLocalLanIpAddresses(context)) {
+                    val prefix = localAddr.substringBeforeLast('.', "")
+                    if (prefix.isNotEmpty()) {
+                        val subnetGateway = "$prefix.1"
+                        if (!candidateIps.contains(subnetGateway)) {
+                            candidateIps.add(subnetGateway)
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
             // Always include standard Android Hotspot & Wi-Fi Direct gateway IPs as fast fallback candidates
             for (hotspotGateway in listOf("192.168.43.1", "192.168.49.1", "192.168.137.1")) {
                 if (!candidateIps.contains(hotspotGateway)) {
@@ -1973,7 +2461,7 @@ object MaxPlayOfflineVault {
                                 val str = resp.body?.string()
                                 if (!str.isNullOrBlank()) {
                                     val parsed = JSONObject(str)
-                                    if (parsed.optInt("totalSegments", 0) > 0) {
+                                    if (parsed.optInt("totalSegments", 0) > 0 || parsed.optLong("totalBytes", 0L) > 0L) {
                                         synchronized(probeLatch) {
                                             if (winningIp == null) {
                                                 winningIp = candIp
@@ -1994,7 +2482,7 @@ object MaxPlayOfflineVault {
                 }
             }
 
-            probeLatch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            probeLatch.await(8, java.util.concurrent.TimeUnit.SECONDS)
 
             val resolvedIp = winningIp
                 ?: throw Exception("Could not reach sender on Wi-Fi/Hotspot (${candidateIps.firstOrNull() ?: senderIp}:$senderPort)")
@@ -2007,14 +2495,15 @@ object MaxPlayOfflineVault {
             val totalSegs = validManifest.optInt("totalSegments", 0)
             val totalAudSegs = validManifest.optInt("totalAudioSegments", 0)
             val totalDur = validManifest.optDouble("totalDurationSec", totalSegs * 4.0)
+            val totalExpectedBytes = validManifest.optLong("totalBytes", 0L)
             val isSingleFile = validManifest.optBoolean("isSingleFile", totalSegs == 1)
             val isDirectMp4 = validManifest.optBoolean("isDirectMp4", false) ||
                 targetStorageKey.startsWith("dev_vid_")
             val metaObj = validManifest.optJSONObject("metadata") ?: JSONObject()
             val langLabel = metaObj.optString("language", "Default")
 
-            if (totalSegs <= 0) {
-                throw Exception("Sender has 0 segments for this item")
+            if (totalSegs <= 0 && totalExpectedBytes <= 0L) {
+                throw Exception("Sender has 0 bytes for this item")
             }
 
             val itemDir = getItemDir(context, targetStorageKey)
@@ -2024,6 +2513,98 @@ object MaxPlayOfflineVault {
             val startTimeMs = System.currentTimeMillis()
             val lastEmitTimeMs = java.util.concurrent.atomic.AtomicLong(0L)
             val firstError = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
+
+            // ULTRA-FAST ZERO-COPY DIRECT STREAM FOR LOCAL VIDEOS & SINGLE-FILE MP4s:
+            // Writes 4 parallel byte-range channels directly into direct.mp4 without creating temporary .ts chunks or re-copying at 98%!
+            if (isDirectMp4 && totalExpectedBytes > 0L) {
+                val directMp4Tmp = File(itemDir, "direct.mp4.tmp")
+                val directMp4File = File(itemDir, "direct.mp4")
+                var rawStreamSuccess = false
+                try {
+                    java.io.RandomAccessFile(directMp4Tmp, "rw").use { raf ->
+                        raf.setLength(totalExpectedBytes)
+                    }
+                    val channelCount = if (totalExpectedBytes >= 16L * 1024L * 1024L) 4 else 1
+                    val sliceSize = (totalExpectedBytes + channelCount - 1L) / channelCount
+                    val rawLatch = java.util.concurrent.CountDownLatch(channelCount)
+                    val rawErr = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
+
+                    for (ch in 0 until channelCount) {
+                        val sliceStart = ch.toLong() * sliceSize
+                        val sliceEnd = minOf(totalExpectedBytes - 1L, sliceStart + sliceSize - 1L)
+                        if (sliceStart > sliceEnd) {
+                            rawLatch.countDown()
+                            continue
+                        }
+                        InbuiltStreamScraper.backgroundExecutor.execute {
+                            try {
+                                val rawUrl = "$baseUrl/rawstream?key=$encodedTargetKey&start=$sliceStart&end=$sliceEnd"
+                                val req = Request.Builder().url(rawUrl).build()
+                                p2pLanHttpClient.newCall(req).execute().use { resp ->
+                                    if (!resp.isSuccessful) throw Exception("RawStream HTTP ${resp.code}")
+                                    val body = resp.body ?: throw Exception("Empty rawstream")
+                                    java.io.RandomAccessFile(directMp4Tmp, "rw").use { raf ->
+                                        raf.seek(sliceStart)
+                                        val buf = ByteArray(1024 * 1024)
+                                        body.byteStream().use { input ->
+                                            var r: Int
+                                            while (input.read(buf).also { r = it } != -1) {
+                                                raf.write(buf, 0, r)
+                                                val totalNow = receivedBytes.addAndGet(r.toLong())
+                                                val nowMs = System.currentTimeMillis()
+                                                val prevEmit = lastEmitTimeMs.get()
+                                                if (nowMs - prevEmit >= 120L && lastEmitTimeMs.compareAndSet(prevEmit, nowMs)) {
+                                                    val pct = (8 + ((totalNow.toDouble() / totalExpectedBytes.toDouble()) * 90.0)).toInt().coerceIn(8, 98)
+                                                    val mbNow = String.format(java.util.Locale.US, "%.1f", totalNow / (1024.0 * 1024.0))
+                                                    val elapsedSec = ((nowMs - startTimeMs) / 1000.0).coerceAtLeast(0.2)
+                                                    val speedMb = String.format(java.util.Locale.US, "%.1f", (totalNow / (1024.0 * 1024.0)) / elapsedSec)
+                                                    onProgress(pct, "Turbo Direct ($mbNow MB • $speedMb MB/s)...")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                rawErr.compareAndSet(null, e)
+                            } finally {
+                                rawLatch.countDown()
+                            }
+                        }
+                    }
+                    rawLatch.await()
+                    if (rawErr.get() == null && receivedBytes.get() >= totalExpectedBytes) {
+                        if (directMp4File.exists()) directMp4File.delete()
+                        directMp4Tmp.renameTo(directMp4File)
+                        val metaFile = File(itemDir, "manifest.json")
+                        val json = JSONObject().apply {
+                            put("storageKey", targetStorageKey)
+                            put("totalSegments", 1)
+                            put("totalAudioSegments", 0)
+                            put("languageLabel", langLabel)
+                            put("totalDurationSec", totalDur)
+                            put("isSingleFile", true)
+                            put("isDirectMp4", true)
+                            put("updatedAt", System.currentTimeMillis())
+                        }
+                        metaFile.writeText(json.toString())
+                        rawStreamSuccess = true
+                    } else {
+                        receivedBytes.set(0L)
+                        try { directMp4Tmp.delete() } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {
+                    receivedBytes.set(0L)
+                    try { directMp4Tmp.delete() } catch (_: Exception) {}
+                }
+
+                if (rawStreamSuccess) {
+                    onProgress(100, "Transfer Complete!")
+                    out.put("ok", true)
+                    out.put("totalBytes", receivedBytes.get())
+                    out.put("metadata", metaObj)
+                    return out
+                }
+            }
 
             fun emitProgressIfNeeded(force: Boolean = false) {
                 val doneNow = completedUnits.get()
@@ -2039,13 +2620,13 @@ object MaxPlayOfflineVault {
                 }
             }
 
-            // Group segments into contiguous batches (smaller batches of 4 for 4MB local video chunks so all 12 workers run in parallel!)
+            // Group segments into contiguous batches
             data class P2pBatchJob(val isAudio: Boolean, val startIdx: Int, val endIdx: Int)
             val batchJobs = java.util.concurrent.ConcurrentLinkedQueue<P2pBatchJob>()
             val batchSize = when {
                 totalSegs == 1 -> 1
-                isDirectMp4 -> 4
-                else -> 40
+                isDirectMp4 -> 8
+                else -> 64
             }
 
             var sIdx = 0

@@ -795,6 +795,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       if ((videoRef.current && !videoRef.current.paused) || isPlaying) {
         wasPlayingBeforeSwitchRef.current = true;
       }
+      setHasRenderedFirstFrame(false);
+      setIsLoading(true);
       triggerQualitySwitchBanner(activeQuality);
     }
 
@@ -809,6 +811,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       } else {
         const levelIdx = findMatchingHlsLevelIndex(hls.levels, activeQuality);
         if (levelIdx !== -1 && hls.currentLevel !== levelIdx) {
+          setHasRenderedFirstFrame(false);
+          setIsLoading(true);
           hls.loadLevel = levelIdx;
           hls.nextLevel = levelIdx;
           hls.currentLevel = levelIdx;
@@ -1097,7 +1101,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     return false;
   }, [currentQuality, actualQuality, availableQualities]);
 
-  // When selectedServer switches (Server 1 <-> Server 2), preserve timestamp & quality while resetting stale server tracks
+  // When selectedServer switches (Server 1 <-> Server 2), preserve timestamp & quality while showing poster until new stream's first frame loads
   useEffect(() => {
     if (prevServerRef.current !== selectedServer) {
       prevServerRef.current = selectedServer;
@@ -1109,6 +1113,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
         wasPlayingBeforeSwitchRef.current = true;
       }
+      setHasRenderedFirstFrame(false);
+      setIsLoading(true);
       setHlsQualities([]);
       setHlsAudioTracks([]);
       setEmbedFallbackUrl('');
@@ -1123,6 +1129,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       setIsResolvingStream(false);
       return;
     }
+
+    // Show poster while resolving or switching active stream URL until the first frame of the new source loads
+    setHasRenderedFirstFrame(false);
 
     // Preserve current playback position BEFORE resolving new quality/server link
     if (prevStreamKeyRef.current === streamKey) {
@@ -1256,6 +1265,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
     targetSeekTimeRef.current = targetStartTime;
 
+    setHasRenderedFirstFrame(false);
     setIsLoading(true);
     setPlaybackError(null);
 
@@ -1464,6 +1474,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             lvl.bitrate || 0
           );
           setActualQuality(label);
+          if (video.readyState >= 2 && !video.paused) {
+            setHasRenderedFirstFrame(true);
+            setIsLoading(false);
+          }
           setSwitchingQualityLabel((prev) => {
             if (prev) {
               if (switchFeedbackTimerRef.current) clearTimeout(switchFeedbackTimerRef.current);
@@ -1473,6 +1487,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             }
             return null;
           });
+        }
+      });
+
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        if (video.readyState >= 2 && (isPlaying || !video.paused || video.currentTime > 0.05)) {
+          setHasRenderedFirstFrame(true);
+          setIsLoading(false);
         }
       });
 
@@ -1940,6 +1961,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
 
     const cleanQual = qual.replace(/\s*\[(S1|S2)\]/i, '').trim() || 'auto';
+    setHasRenderedFirstFrame(false);
+    setIsLoading(true);
     triggerQualitySwitchBanner(cleanQual);
     setCurrentQuality(cleanQual);
     prevActiveQualityPropRef.current = cleanQual;
@@ -1954,6 +1977,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         hlsRef.current.loadLevel = -1;
         hlsRef.current.nextLevel = -1;
         hlsRef.current.currentLevel = -1;
+        if (videoRef.current && videoRef.current.readyState >= 2 && !videoRef.current.paused) {
+          setHasRenderedFirstFrame(true);
+          setIsLoading(false);
+        }
       } else {
         const levelIdx = findMatchingHlsLevelIndex(hlsRef.current.levels, cleanQual);
         if (levelIdx !== -1) {
@@ -2058,8 +2085,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               e.stopPropagation();
             }}
           onPlay={() => { 
-            // Pause any other video elements in the DOM so two videos never play simultaneously
+            // Pause any other video elements in the DOM AND notify Music Player so video & music never play simultaneously
             try {
+              window.dispatchEvent(new CustomEvent('MAXPLAY_VIDEO_PLAYING'));
               document.querySelectorAll('video').forEach((v) => {
                 if (v !== videoRef.current && !v.paused) {
                   v.pause();

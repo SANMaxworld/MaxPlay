@@ -274,10 +274,24 @@ class MainActivity : AppCompatActivity() {
 
                     val acceptTypes = fileChooserParams?.acceptTypes ?: emptyArray()
                     val wantsVideo = acceptTypes.any { it.contains("video", ignoreCase = true) }
+                    val wantsAudio = acceptTypes.any {
+                        it.contains("audio", ignoreCase = true) ||
+                        it.contains(".mp3", ignoreCase = true) ||
+                        it.contains(".m4a", ignoreCase = true) ||
+                        it.contains(".flac", ignoreCase = true)
+                    }
+                    val allowMulti = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE || wantsAudio
 
                     val pickerIntent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
                         addCategory(android.content.Intent.CATEGORY_OPENABLE)
-                        type = if (wantsVideo) "video/*" else "*/*"
+                        type = when {
+                            wantsVideo -> "video/*"
+                            wantsAudio -> "audio/*"
+                            else -> "*/*"
+                        }
+                        if (allowMulti) {
+                            putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
                     }
                     @Suppress("DEPRECATION")
                     startActivityForResult(
@@ -539,6 +553,9 @@ class MainActivity : AppCompatActivity() {
                     if (checkSelfPermission("android.permission.READ_MEDIA_VIDEO") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                         needed.add("android.permission.READ_MEDIA_VIDEO")
                     }
+                    if (checkSelfPermission("android.permission.READ_MEDIA_AUDIO") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        needed.add("android.permission.READ_MEDIA_AUDIO")
+                    }
                 } else {
                     if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                         needed.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -631,15 +648,18 @@ class MainActivity : AppCompatActivity() {
     fun requestVideoStoragePermission(): Boolean {
         return try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                val perm = if (android.os.Build.VERSION.SDK_INT >= 33) {
-                    "android.permission.READ_MEDIA_VIDEO"
+                val perms = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    arrayOf("android.permission.READ_MEDIA_VIDEO", "android.permission.READ_MEDIA_AUDIO")
                 } else {
-                    android.Manifest.permission.READ_EXTERNAL_STORAGE
+                    arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
                 }
-                if (checkSelfPermission(perm) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                val missing = perms.filter {
+                    checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                }
+                if (missing.isNotEmpty()) {
                     runOnUiThread {
                         try {
-                            requestPermissions(arrayOf(perm), 1002)
+                            requestPermissions(missing.toTypedArray(), 1002)
                         } catch (_: Exception) {}
                     }
                     return true
