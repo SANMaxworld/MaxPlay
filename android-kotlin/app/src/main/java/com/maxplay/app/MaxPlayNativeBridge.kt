@@ -1172,6 +1172,42 @@ class MaxPlayNativeBridge(
         }
     }
 
+    @JavascriptInterface
+    fun updateMusicNotification(
+        title: String,
+        artist: String,
+        album: String,
+        isPlaying: Boolean,
+        artworkUrl: String,
+        durationMs: Long,
+        positionMs: Long
+    ): Boolean {
+        return try {
+            activity.updateMusicNotificationState(
+                title = title,
+                artist = artist,
+                album = album,
+                isPlaying = isPlaying,
+                artworkUrl = artworkUrl,
+                durationMs = durationMs,
+                positionMs = positionMs
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun cancelMusicNotification(): Boolean {
+        return try {
+            activity.cancelMusicNotificationState()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun parseHeadersJson(headersJson: String?): Map<String, String> {
         if (headersJson.isNullOrBlank()) return emptyMap()
         val map = mutableMapOf<String, String>()

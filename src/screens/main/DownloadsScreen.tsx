@@ -44,8 +44,6 @@ import { ContentCard } from '../../components/common/ContentCard';
 import { NativeBanner } from '../../components/ads/NativeBanner';
 import { NativeBridgeService, DeviceLocalVideoItem } from '../../services/nativeBridgeService';
 import { useContent } from '../../hooks/useContent';
-import { MusicHomeScreen } from '../music/MusicHomeScreen';
-import { useMusic } from '../../context/MusicContext';
 
 interface DownloadsScreenProps {
   onPlayContent?: (contentId: string) => void;
@@ -96,13 +94,12 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
   onDetailOpenChange,
 }) => {
   const { contentList } = useContent();
-  const { visibleTracks: visibleSongs } = useMusic();
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   const [completedFiles, setCompletedFiles] = useState<DownloadedFile[]>([]);
   const [deviceScannedVideos, setDeviceScannedVideos] = useState<DeviceLocalVideoItem[]>([]);
   const [isScanningLocalVideos, setIsScanningLocalVideos] = useState(false);
 
-  const [activeFilter, setActiveFilter] = useState<'moviebox' | 'musics' | 'local' | 'received'>('moviebox');
+  const [activeFilter, setActiveFilter] = useState<'moviebox' | 'local' | 'received'>('moviebox');
   const [showLocalFoldersView, setShowLocalFoldersView] = useState(false);
   const [selectedLocalFolder, setSelectedLocalFolder] = useState<string | null>(null);
   const swipeTouchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -1415,18 +1412,17 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
           const dy = e.changedTouches[0].clientY - start.y;
           // Responsive horizontal swipe (> 38px and primarily horizontal)
           if (Math.abs(dx) > 38 && Math.abs(dx) > Math.abs(dy) * 1.2) {
-            const pillOrder: Array<'moviebox' | 'musics' | 'local' | 'received'> = [
+            const pillOrder: Array<'moviebox' | 'local' | 'received'> = [
               'moviebox',
-              'musics',
               'local',
               'received',
             ];
             const currentIdx = pillOrder.indexOf(activeFilter);
             if (dx < 0 && currentIdx < pillOrder.length - 1) {
-              // Swiped left -> go to next pill (Maxbox -> Musics -> Local files -> Received)
+              // Swiped left -> go to next pill (Maxbox -> Local files -> Received)
               setActiveFilter(pillOrder[currentIdx + 1]);
             } else if (dx > 0 && currentIdx > 0) {
-              // Swiped right -> go to previous pill (Received -> Local files -> Musics -> Maxbox)
+              // Swiped right -> go to previous pill (Received -> Local files -> Maxbox)
               setActiveFilter(pillOrder[currentIdx - 1]);
             }
           }
@@ -1444,18 +1440,6 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
             }`}
           >
             Maxbox ({completedFiles.filter((f) => f.category === 'moviebox' || !f.category).length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveFilter('musics')}
-            className={`shrink-0 flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold transition cursor-pointer ${
-              activeFilter === 'musics'
-                ? 'bg-gradient-to-r from-[#6A11CB] to-[#8E2DE2] text-white shadow-md shadow-purple-700/35 border border-purple-400/50'
-                : 'bg-[#121212] text-[#A1A1AA] border border-[#1C1C1E] hover:border-purple-500/40'
-            }`}
-          >
-            <Music2 className={`h-3.5 w-3.5 ${activeFilter === 'musics' ? 'text-white' : 'text-[#B517FF]'}`} />
-            <span>Musics{visibleSongs.length > 0 ? ` (${visibleSongs.length})` : ''}</span>
           </button>
           <button
             type="button"
@@ -1488,9 +1472,6 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
             </span>
           </div>
         </div>
-
-        {/* MUSICS PILL CONTENT: MAXPLAY PREMIUM LOCAL MUSIC PLAYER */}
-        {activeFilter === 'musics' && <MusicHomeScreen />}
 
         {/* Local Files Quick Action Bar when viewing Local files tab */}
         {activeFilter === 'local' && (
@@ -1617,7 +1598,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
               </span>
             </div>
           )
-        ) : activeFilter === 'musics' ? null : groupedCompleted.totalCount > 0 ? (
+        ) : groupedCompleted.totalCount > 0 ? (
           <div className="flex flex-col gap-3">
             {/* Render Series / Anime Cards (Opens Dedicated Series Episodes Page on click) */}
             {groupedCompleted.seriesList.map((series) => (
@@ -1732,47 +1713,43 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
         )}
       </div>
 
-      {/* SECTION 4: FOR YOU (REAL CATALOG RECOMMENDATIONS - Hidden when inside Musics Player) */}
-      {activeFilter !== 'musics' && (
-        <>
-          <div className="mt-8 flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <h3 className="text-sm font-bold text-white">Recommended For You</h3>
-              </div>
-              <span className="text-[11px] text-[#71717A]">Tap any title to watch or download</span>
-            </div>
-
-            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
-              {recommendedContent.map((item, index) => (
-                <div
-                  key={`${item.id}-${refreshSeed}-${index}`}
-                  onClick={() => onPlayContent?.(item.id)}
-                  className="w-[120px] flex-shrink-0 cursor-pointer"
-                >
-                  <ContentCard
-                    item={item}
-                    onPress={() => onPlayContent?.(item.id)}
-                  />
-                </div>
-              ))}
-            </div>
+      {/* SECTION 4: FOR YOU (REAL CATALOG RECOMMENDATIONS) */}
+      <div className="mt-8 flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <h3 className="text-sm font-bold text-white">Recommended For You</h3>
           </div>
+          <span className="text-[11px] text-[#71717A]">Tap any title to watch or download</span>
+        </div>
 
-          {/* SECTION 5: REFRESH BUTTON */}
-          <div className="mt-6 flex justify-center">
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="flex items-center gap-2 rounded-2xl bg-[#121212] px-6 py-3 text-xs font-bold text-white border border-[#1C1C1E] hover:bg-[#1C1C1E] active:scale-95 transition cursor-pointer"
+        <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
+          {recommendedContent.map((item, index) => (
+            <div
+              key={`${item.id}-${refreshSeed}-${index}`}
+              onClick={() => onPlayContent?.(item.id)}
+              className="w-[120px] flex-shrink-0 cursor-pointer"
             >
-              <RefreshCw className={`h-4 w-4 text-[#06B6D4] ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>{isRefreshing ? 'Refreshing...' : 'Refresh new content'}</span>
-            </button>
-          </div>
-        </>
-      )}
+              <ContentCard
+                item={item}
+                onPress={() => onPlayContent?.(item.id)}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* SECTION 5: REFRESH BUTTON */}
+      <div className="mt-6 flex justify-center">
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+          className="flex items-center gap-2 rounded-2xl bg-[#121212] px-6 py-3 text-xs font-bold text-white border border-[#1C1C1E] hover:bg-[#1C1C1E] active:scale-95 transition cursor-pointer"
+        >
+          <RefreshCw className={`h-4 w-4 text-[#06B6D4] ${isRefreshing ? 'animate-spin' : ''}`} />
+          <span>{isRefreshing ? 'Refreshing...' : 'Refresh new content'}</span>
+        </button>
+      </div>
 
       {/* DIRECT APP-TO-APP MAXPLAY TRANSFER MODAL */}
       {showTransferModal && (

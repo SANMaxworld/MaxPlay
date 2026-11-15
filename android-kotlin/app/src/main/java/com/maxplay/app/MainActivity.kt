@@ -536,8 +536,19 @@ class MainActivity : AppCompatActivity() {
                     description = "Shows live background download progress for movies and episodes"
                     enableVibration(false)
                 }
+                val musicChannel = android.app.NotificationChannel(
+                    "maxplay_music_player",
+                    "MaxPlay Music Player",
+                    android.app.NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Notification shade and lock-screen playback controls for MaxPlay Music"
+                    enableVibration(false)
+                    setSound(null, null)
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                }
                 nm?.createNotificationChannel(channel)
                 nm?.createNotificationChannel(dlChannel)
+                nm?.createNotificationChannel(musicChannel)
             }
         } catch (_: Exception) {}
     }
@@ -1729,8 +1740,259 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    private var musicMediaSession: android.media.session.MediaSession? = null
+    private var musicControlReceiverRegistered = false
+    private var musicWakeLock: android.os.PowerManager.WakeLock? = null
+
+    private val musicControlReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            val action = intent?.getStringExtra("cmd") ?: return
+            dispatchMusicActionToWebView(action)
+        }
+    }
+
+    private fun dispatchMusicActionToWebView(action: String, seekTimeSec: Double = -1.0) {
+        runOnUiThread {
+            try {
+                val safeAction = org.json.JSONObject.quote(action)
+                val js = "window.dispatchEvent(new CustomEvent('MAXPLAY_NATIVE_MEDIA_ACTION', { detail: { action: $safeAction, seekTime: $seekTimeSec } }));"
+                webView.evaluateJavascript(js, null)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun ensureMusicMediaSession() {
+        if (musicMediaSession == null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val session = android.media.session.MediaSession(this, "MaxPlayMusicSession")
+                session.setCallback(object : android.media.session.MediaSession.Callback() {
+                    override fun onPlay() {
+                        dispatchMusicActionToWebView("play")
+                    }
+                    override fun onPause() {
+                        dispatchMusicActionToWebView("pause")
+                    }
+                    override fun onSkipToNext() {
+                        dispatchMusicActionToWebView("next")
+                    }
+                    override fun onSkipToPrevious() {
+                        dispatchMusicActionToWebView("prev")
+                    }
+                    override fun onSeekTo(pos: Long) {
+                        dispatchMusicActionToWebView("seek", pos / 1000.0)
+                    }
+                })
+                session.isActive = true
+                musicMediaSession = session
+            } catch (_: Exception) {}
+        }
+        if (!musicControlReceiverRegistered) {
+            try {
+                val filter = android.content.IntentFilter("com.maxplay.app.MUSIC_CONTROL")
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    registerReceiver(musicControlReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    registerReceiver(musicControlReceiver, filter)
+                }
+                musicControlReceiverRegistered = true
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun resolveMusicArtworkBitmap(artworkUrl: String): android.graphics.Bitmap? {
+        return try {
+            if (artworkUrl.contains("/device-audio-art/")) {
+                val after = artworkUrl.substringAfter("/device-audio-art/")
+                val albumId = after.substringBefore("?").substringBefore("/").toLongOrNull() ?: 0L
+                val songId = after.substringAfter("songId=", "").substringBefore("&").toLongOrNull() ?: 0L
+                val artDir = java.io.File(cacheDir, "audio_art")
+                val cacheKey = if (albumId > 0L) "alb_$albumId" else "sng_$songId"
+                val cachedFile = java.io.File(artDir, "$cacheKey.jpg")
+                if (cachedFile.exists() && cachedFile.length() > 256L) {
+                    return android.graphics.BitmapFactory.decodeFile(cachedFile.absolutePath)
+                }
+                if (songId > 0L) {
+                    val songUri = android.content.ContentUris.withAppendedId(
+                        android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        songId
+                    )
+                    val retriever = android.media.MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(this, songUri)
+                        val bytes = retriever.embeddedPicture
+                        if (bytes != null && bytes.isNotEmpty()) {
+                            return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        try { retriever.release() } catch (_: Exception) {}
+                    }
+                }
+            }
+            android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    @SuppressLint("WakelockTimeout")
+    fun updateMusicNotificationState(
+        title: String,
+        artist: String,
+        album: String,
+        isPlaying: Boolean,
+        artworkUrl: String,
+        durationMs: Long,
+        positionMs: Long
+    ) {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val artBitmap = resolveMusicArtworkBitmap(artworkUrl)
+            runOnUiThread {
+                try {
+                    ensureMusicMediaSession()
+                    if (isPlaying) {
+                        webView.resumeTimers()
+                        if (musicWakeLock == null) {
+                            val pm = getSystemService(POWER_SERVICE) as? android.os.PowerManager
+                            musicWakeLock = pm?.newWakeLock(
+                                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                                "MaxPlay::MusicPlaybackWakeLock"
+                            )?.apply { setReferenceCounted(false) }
+                        }
+                        if (musicWakeLock?.isHeld == false) {
+                            musicWakeLock?.acquire(4 * 60 * 60 * 1000L)
+                        }
+                    } else {
+                        if (musicWakeLock?.isHeld == true) {
+                            musicWakeLock?.release()
+                        }
+                    }
+
+                    val session = musicMediaSession
+                    if (session != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        val stateBuilder = android.media.session.PlaybackState.Builder()
+                            .setActions(
+                                android.media.session.PlaybackState.ACTION_PLAY or
+                                android.media.session.PlaybackState.ACTION_PAUSE or
+                                android.media.session.PlaybackState.ACTION_PLAY_PAUSE or
+                                android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT or
+                                android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                                android.media.session.PlaybackState.ACTION_SEEK_TO
+                            )
+                            .setState(
+                                if (isPlaying) android.media.session.PlaybackState.STATE_PLAYING else android.media.session.PlaybackState.STATE_PAUSED,
+                                positionMs.coerceAtLeast(0L),
+                                if (isPlaying) 1.0f else 0f
+                            )
+                        session.setPlaybackState(stateBuilder.build())
+
+                        val metaBuilder = android.media.MediaMetadata.Builder()
+                            .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, title.ifBlank { "MaxPlay Audio" })
+                            .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, artist.ifBlank { "Unknown artist" })
+                            .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, album.ifBlank { "MaxPlay" })
+                            .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, durationMs.coerceAtLeast(0L))
+                        if (artBitmap != null) {
+                            metaBuilder.putBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART, artBitmap)
+                        }
+                        session.setMetadata(metaBuilder.build())
+                    }
+
+                    val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return@runOnUiThread
+                    val flags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    } else {
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+
+                    fun buildCmdPendingIntent(reqCode: Int, cmd: String): android.app.PendingIntent {
+                        val intent = android.content.Intent("com.maxplay.app.MUSIC_CONTROL").apply {
+                            setPackage(packageName)
+                            putExtra("cmd", cmd)
+                        }
+                        return android.app.PendingIntent.getBroadcast(this, reqCode, intent, flags)
+                    }
+
+                    val openIntent = android.content.Intent(this, MainActivity::class.java).apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    val contentPi = android.app.PendingIntent.getActivity(this, 9200, openIntent, flags)
+
+                    val builder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        android.app.Notification.Builder(this, "maxplay_music_player")
+                    } else {
+                        @Suppress("DEPRECATION")
+                        android.app.Notification.Builder(this)
+                    }
+
+                    builder.setSmallIcon(R.drawable.ic_stat_maxplay)
+                        .setContentTitle(title.ifBlank { "MaxPlay Music" })
+                        .setContentText(artist.ifBlank { "Unknown artist" })
+                        .setSubText(album.ifBlank { "MaxPlay" })
+                        .setContentIntent(contentPi)
+                        .setOngoing(isPlaying)
+                        .setOnlyAlertOnce(true)
+                        .setVisibility(android.app.Notification.VISIBILITY_PUBLIC)
+
+                    if (artBitmap != null) {
+                        builder.setLargeIcon(artBitmap)
+                    }
+
+                    val prevAction = android.app.Notification.Action.Builder(
+                        android.R.drawable.ic_media_previous,
+                        "Previous",
+                        buildCmdPendingIntent(9201, "prev")
+                    ).build()
+                    val playPauseAction = android.app.Notification.Action.Builder(
+                        if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                        if (isPlaying) "Pause" else "Play",
+                        buildCmdPendingIntent(9202, "toggle")
+                    ).build()
+                    val nextAction = android.app.Notification.Action.Builder(
+                        android.R.drawable.ic_media_next,
+                        "Next",
+                        buildCmdPendingIntent(9203, "next")
+                    ).build()
+
+                    builder.addAction(prevAction)
+                    builder.addAction(playPauseAction)
+                    builder.addAction(nextAction)
+
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        val mediaStyle = android.app.Notification.MediaStyle()
+                            .setShowActionsInCompactView(0, 1, 2)
+                        if (session != null) {
+                            mediaStyle.setMediaSession(session.sessionToken)
+                        }
+                        builder.style = mediaStyle
+                    }
+
+                    nm.notify(9105, builder.build())
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun cancelMusicNotificationState() {
+        runOnUiThread {
+            try {
+                if (musicWakeLock?.isHeld == true) {
+                    musicWakeLock?.release()
+                }
+                val nm = getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                nm?.cancel(9105)
+                musicMediaSession?.isActive = false
+            } catch (_: Exception) {}
+        }
+    }
+
     override fun onDestroy() {
         try {
+            cancelMusicNotificationState()
+            if (musicControlReceiverRegistered) {
+                unregisterReceiver(musicControlReceiver)
+                musicControlReceiverRegistered = false
+            }
+            musicMediaSession?.release()
             closeNativePopunderAd()
             bgNotificationScheduler.shutdownNow()
             MaxPlayOfflineVault.stopDirectTransferServer()

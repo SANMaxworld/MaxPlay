@@ -1,10 +1,17 @@
-import React, { useState } from 'react';
-import { Heart, Music2, Pause, Play, SkipForward, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Music2, Pause, Play, SkipForward } from 'lucide-react';
 import { useMusic } from '../../context/MusicContext';
 
 interface MiniMusicPlayerProps {
   hasBottomNav?: boolean;
 }
+
+const PILL_GRADIENTS = [
+  'from-[#4E3A6B]/95 via-[#5E4382]/95 to-[#3D2C56]/95 border-purple-400/25',
+  'from-[#A66332]/95 via-[#B86E38]/95 to-[#8C5025]/95 border-amber-300/25',
+  'from-[#3B5978]/95 via-[#4A6B8C]/95 to-[#2D4661]/95 border-sky-300/25',
+  'from-[#6B3B5E]/95 via-[#824672]/95 to-[#522B48]/95 border-pink-300/25',
+];
 
 export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav = true }) => {
   const {
@@ -13,128 +20,130 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
     currentTime,
     duration,
     isFullScreenPlayerOpen,
+    isEqualizerOpen,
     setIsFullScreenPlayerOpen,
     togglePlayPause,
     playNextTrack,
-    toggleFavorite,
-    clearQueue,
   } = useMusic();
 
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({});
 
-  if (!currentTrack || isFullScreenPlayerOpen) return null;
+  const pillGradientClass = useMemo(() => {
+    if (!currentTrack) return PILL_GRADIENTS[0];
+    let hash = 0;
+    for (let i = 0; i < currentTrack.id.length; i++) {
+      hash = (hash * 31 + currentTrack.id.charCodeAt(i)) >>> 0;
+    }
+    return PILL_GRADIENTS[hash % PILL_GRADIENTS.length];
+  }, [currentTrack]);
+
+  if (!currentTrack || isFullScreenPlayerOpen || isEqualizerOpen) return null;
 
   const progressPct =
     duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
   const showArt = Boolean(currentTrack.artworkUrl && !imgFailed[currentTrack.id]);
 
+  // SVG circle progress math (radius = 15, circumference = 94.25)
+  const radius = 15;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (progressPct / 100) * circumference;
+
   return (
     <div
-      className={`fixed left-2.5 right-2.5 md:left-[92px] md:right-4 z-[85] transition-all duration-300 select-none ${
-        hasBottomNav ? 'bottom-[72px] md:bottom-3' : 'bottom-3'
+      data-testid="mini-music-player"
+      className={`fixed left-3 right-3 md:left-[92px] md:right-4 z-[85] transition-all duration-300 select-none ${
+        hasBottomNav ? 'bottom-[68px] md:bottom-3' : 'bottom-3'
       }`}
     >
       <div
         onClick={() => setIsFullScreenPlayerOpen(true)}
-        className="relative overflow-hidden rounded-2xl bg-[#141418]/95 backdrop-blur-xl border border-[#8E2DE2]/35 shadow-[0_12px_36px_rgba(106,17,203,0.42)] px-3 py-2.5 flex items-center gap-3 cursor-pointer active:scale-[0.99] transition-transform"
+        className={`relative flex items-center justify-between h-[52px] pl-14 pr-3.5 rounded-full bg-gradient-to-r ${pillGradientClass} backdrop-blur-xl border shadow-[0_10px_30px_rgba(0,0,0,0.65)] cursor-pointer active:scale-[0.99] transition-transform`}
       >
-        {/* Subtle ambient purple sheen */}
-        <div className="pointer-events-none absolute -left-8 -top-8 w-28 h-28 rounded-full bg-[#6A11CB]/25 blur-2xl" />
-
-        {/* Artwork or MaxPlay Purple Fallback */}
-        <div className="relative w-11 h-11 rounded-xl overflow-hidden shrink-0 bg-gradient-to-br from-[#6A11CB] via-[#8E2DE2] to-[#1C1C22] border border-white/15 flex items-center justify-center shadow-md">
-          {showArt ? (
-            <img
-              src={currentTrack.artworkUrl}
-              alt={currentTrack.title}
-              className="w-full h-full object-cover"
-              onError={() =>
-                setImgFailed((prev) => ({ ...prev, [currentTrack.id]: true }))
-              }
-            />
-          ) : (
-            <Music2 className="w-5 h-5 text-white drop-shadow" />
-          )}
-          {isPlaying && (
-            <div className="absolute inset-0 bg-black/30 flex items-end justify-center gap-0.5 pb-1.5">
-              <span className="w-0.5 h-2.5 bg-[#B517FF] rounded-full animate-pulse" />
-              <span className="w-0.5 h-3.5 bg-white rounded-full animate-bounce" />
-              <span className="w-0.5 h-2 bg-[#8E2DE2] rounded-full animate-pulse" />
-            </div>
-          )}
-        </div>
-
-        {/* Song Info */}
-        <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-bold text-white truncate leading-tight">
-            {currentTrack.title}
-          </p>
-          <p className="text-[11px] font-medium text-[#A1A1AA] truncate mt-0.5">
-            {currentTrack.artist}
-            {currentTrack.album && currentTrack.album !== 'Unknown Album'
-              ? ` • ${currentTrack.album}`
-              : ''}
-          </p>
-        </div>
-
-        {/* Controls */}
+        {/* Left Protruding Vinyl Record Disc with Center Artwork */}
         <div
-          className="flex items-center gap-1 shrink-0"
+          className={`absolute -left-1 -top-1 w-[58px] h-[58px] rounded-full bg-zinc-950 border-[3px] border-zinc-800 shadow-[0_4px_16px_rgba(0,0,0,0.85)] flex items-center justify-center overflow-hidden ${
+            isPlaying ? 'animate-[spin_9s_linear_infinite]' : ''
+          }`}
+        >
+          {/* Vinyl Grooves Ring */}
+          <div className="absolute inset-1 rounded-full border border-white/10 pointer-events-none" />
+          <div className="absolute inset-2 rounded-full border border-white/5 pointer-events-none" />
+
+          {/* Center Label / Album Cover */}
+          <div className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#6D28D9] to-[#3B0764] flex items-center justify-center border border-white/20">
+            {showArt ? (
+              <img
+                src={currentTrack.artworkUrl}
+                alt={currentTrack.title}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+                onError={() =>
+                  setImgFailed((prev) => ({ ...prev, [currentTrack.id]: true }))
+                }
+              />
+            ) : (
+              <Music2 className="w-4 h-4 text-white drop-shadow" />
+            )}
+          </div>
+        </div>
+
+        {/* Song Title & Artist */}
+        <div className="min-w-0 flex-1 pl-2 pr-3 text-left">
+          <h4 className="text-[14px] font-extrabold text-white truncate leading-tight">
+            {currentTrack.title}
+          </h4>
+          <p className="text-[11px] font-medium text-white/80 truncate mt-0.5">
+            {currentTrack.artist}
+          </p>
+        </div>
+
+        {/* Play/Pause with Circular Progress Ring + Next Track */}
+        <div
+          className="flex items-center gap-2 shrink-0"
           onClick={(e) => e.stopPropagation()}
         >
           <button
             type="button"
-            onClick={() => toggleFavorite(currentTrack.id)}
-            aria-label="Favorite Song"
-            className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-300 hover:text-white active:scale-90 transition-transform"
-          >
-            <Heart
-              className={`w-4 h-4 ${
-                currentTrack.isFavorite
-                  ? 'fill-[#B517FF] text-[#B517FF]'
-                  : 'text-zinc-400'
-              }`}
-            />
-          </button>
-
-          <button
-            type="button"
-            onClick={togglePlayPause}
             aria-label={isPlaying ? 'Pause' : 'Play'}
-            className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#6A11CB] to-[#8E2DE2] text-white flex items-center justify-center shadow-[0_0_14px_rgba(142,45,226,0.55)] active:scale-90 transition-transform"
+            onClick={togglePlayPause}
+            className="relative w-9 h-9 flex items-center justify-center rounded-full text-white hover:scale-105 active:scale-95 transition cursor-pointer"
           >
+            <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 36 36">
+              <circle
+                cx="18"
+                cy="18"
+                r={radius}
+                fill="none"
+                stroke="rgba(255,255,255,0.28)"
+                strokeWidth="2.2"
+              />
+              <circle
+                cx="18"
+                cy="18"
+                r={radius}
+                fill="none"
+                stroke="#FFFFFF"
+                strokeWidth="2.4"
+                strokeDasharray={circumference}
+                strokeDashoffset={strokeDashoffset}
+                strokeLinecap="round"
+              />
+            </svg>
             {isPlaying ? (
-              <Pause className="w-4 h-4 fill-white" />
+              <Pause className="w-4 h-4 fill-current relative z-10" />
             ) : (
-              <Play className="w-4 h-4 fill-white ml-0.5" />
+              <Play className="w-4 h-4 fill-current ml-0.5 relative z-10" />
             )}
           </button>
 
           <button
             type="button"
-            onClick={playNextTrack}
             aria-label="Next Track"
-            className="w-8 h-8 rounded-full flex items-center justify-center text-white/90 hover:text-white active:scale-90 transition-transform"
+            onClick={playNextTrack}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white/90 hover:text-white hover:bg-white/10 active:scale-95 transition cursor-pointer"
           >
-            <SkipForward className="w-4 h-4 fill-white" />
+            <SkipForward className="w-4 h-4 fill-current" />
           </button>
-
-          <button
-            type="button"
-            onClick={clearQueue}
-            aria-label="Close Mini Player"
-            className="w-7 h-7 rounded-full flex items-center justify-center text-zinc-500 hover:text-zinc-300 active:scale-90 transition-transform"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Bottom Progress Indicator */}
-        <div className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-white/10">
-          <div
-            className="h-full bg-gradient-to-r from-[#6A11CB] via-[#8E2DE2] to-[#B517FF] transition-all duration-150"
-            style={{ width: `${progressPct}%` }}
-          />
         </div>
       </div>
     </div>

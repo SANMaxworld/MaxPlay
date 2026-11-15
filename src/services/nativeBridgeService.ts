@@ -104,6 +104,16 @@ interface MaxPlayKotlinBridge {
   shareContent?: (title: string, text: string, url: string) => boolean;
   requestBackgroundDownloadPermission?: () => boolean;
   setBackgroundDownloadActive?: (active: boolean, title: string, progress: number) => boolean;
+  updateMusicNotification?: (
+    title: string,
+    artist: string,
+    album: string,
+    isPlaying: boolean,
+    artworkUrl: string,
+    durationMs: number,
+    positionMs: number
+  ) => boolean;
+  cancelMusicNotification?: () => boolean;
 }
 
 export interface ApkUpdateProgressState {
@@ -1614,6 +1624,55 @@ export class NativeBridgeService {
         }
       }
     } catch {}
+  }
+
+  /**
+   * Updates the Native Android System Notification Shade & Lock-Screen Media Player Widget
+   * with poster artwork, Play/Pause, Previous, Next controls, and seek bar.
+   */
+  public static updateMusicNotificationNative(params: {
+    title: string;
+    artist: string;
+    album: string;
+    isPlaying: boolean;
+    artworkUrl?: string;
+    durationSec: number;
+    positionSec: number;
+  }): boolean {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.updateMusicNotification === 'function'
+      ) {
+        return Boolean(
+          window.MaxPlayNative.updateMusicNotification(
+            params.title || 'MaxPlay Music',
+            params.artist || 'Unknown artist',
+            params.album || 'MaxPlay',
+            Boolean(params.isPlaying),
+            params.artworkUrl || '',
+            Math.max(0, Math.round((params.durationSec || 0) * 1000)),
+            Math.max(0, Math.round((params.positionSec || 0) * 1000))
+          )
+        );
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Dismisses the Native Android System Music Notification when playback is stopped/cleared.
+   */
+  public static cancelMusicNotificationNative(): boolean {
+    try {
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.cancelMusicNotification === 'function'
+      ) {
+        return Boolean(window.MaxPlayNative.cancelMusicNotification());
+      }
+    } catch {}
+    return false;
   }
 }
 

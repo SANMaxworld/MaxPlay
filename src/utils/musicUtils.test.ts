@@ -5,11 +5,13 @@ import {
   computeNextQueueIndex,
   filterVisibleLibrarySongs,
   formatMusicDuration,
+  getEqualizerPresetBands,
   groupTracksByAlbum,
   groupTracksByArtist,
   groupTracksByFolder,
   insertPlayNextInQueue,
   parseMetadataFromFilename,
+  resolvePlaylistFirstSongArtwork,
   searchLocalMusicLibrary,
   sortMusicTracks,
 } from './musicUtils';
@@ -155,4 +157,19 @@ describe('musicUtils pure logic', () => {
     assert.equal(searchRes.songs.length, 1);
     assert.equal(searchRes.artists.length, 1);
   });
+
+  it('resolves Equalizer 5-band dB presets and playlist first-song artwork accurately', () => {
+    assert.deepEqual(getEqualizerPresetBands('Flat'), [0, 0, 0, 0, 0]);
+    assert.deepEqual(getEqualizerPresetBands('Heavy metal'), [4, 1, 9, 3, 0]);
+    assert.deepEqual(getEqualizerPresetBands('Custom', [2, -1, 4, 3, -2]), [2, -1, 4, 3, -2]);
+
+    const tracksWithPoster: MusicTrack[] = [
+      { ...sampleTracks[0], artworkUrl: 'https://maxplay.local/art/1.jpg' },
+      { ...sampleTracks[1], artworkUrl: 'https://maxplay.local/art/2.jpg' },
+    ];
+    assert.equal(resolvePlaylistFirstSongArtwork(tracksWithPoster), 'https://maxplay.local/art/1.jpg');
+    assert.equal(resolvePlaylistFirstSongArtwork([sampleTracks[0]]), undefined);
+    assert.equal(resolvePlaylistFirstSongArtwork([]), undefined);
+  });
 });
+

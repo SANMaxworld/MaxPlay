@@ -23,6 +23,8 @@ import { adManager } from '../services/adService';
 import { MusicProvider } from '../context/MusicContext';
 import { MiniMusicPlayer } from '../components/music/MiniMusicPlayer';
 import { FullScreenMusicPlayer } from '../components/music/FullScreenMusicPlayer';
+import { MusicEqualizerModal } from '../components/music/MusicEqualizerModal';
+import { MusicHomeScreen } from '../screens/music/MusicHomeScreen';
 import { motion, AnimatePresence } from 'motion/react';
 import { WifiOff, X, Download, ShieldAlert, ArrowUp, Bell } from 'lucide-react';
 
@@ -252,7 +254,7 @@ export const RootNavigator: React.FC = () => {
   const [activeTab, setActiveTabState] = useState<TabType>(() => {
     if (hasActiveSession) {
       const saved = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
-      return (saved && ['home', 'downloads', 'anime', 'me', 'search'].includes(saved)) ? saved : 'home';
+      return (saved && ['home', 'downloads', 'music', 'anime', 'me', 'search'].includes(saved)) ? saved : 'home';
     }
     // For a fresh start, always go to home
     localStorage.setItem('MAXPLAY_PWA_LAST_TAB', 'home');
@@ -262,6 +264,7 @@ export const RootNavigator: React.FC = () => {
   const [detailOpenByTab, setDetailOpenByTab] = useState<Record<string, boolean>>({
     home: false,
     downloads: false,
+    music: false,
     search: false,
     anime: false,
     me: false,
@@ -333,6 +336,7 @@ export const RootNavigator: React.FC = () => {
 
   const handleHomeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('home', isOpen), [handleDetailOpenChange]);
   const handleDownloadsDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('downloads', isOpen), [handleDetailOpenChange]);
+  const handleMusicDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('music', isOpen), [handleDetailOpenChange]);
   const handleSearchDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('search', isOpen), [handleDetailOpenChange]);
   const handleAnimeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('anime', isOpen), [handleDetailOpenChange]);
   const handleMeDetailChange = useCallback((isOpen: boolean) => handleDetailOpenChange('me', isOpen), [handleDetailOpenChange]);
@@ -430,7 +434,7 @@ export const RootNavigator: React.FC = () => {
       if (document.visibilityState === 'visible') {
         // App resumed from background - restore tab state without resetting
         const savedTab = localStorage.getItem('MAXPLAY_PWA_LAST_TAB') as TabType;
-        if (savedTab && ['home', 'downloads', 'search', 'anime', 'me'].includes(savedTab)) {
+        if (savedTab && ['home', 'downloads', 'music', 'search', 'anime', 'me'].includes(savedTab)) {
           setActiveTabState(savedTab);
         }
       }
@@ -646,6 +650,10 @@ export const RootNavigator: React.FC = () => {
             />
           </div>
 
+          <div className={`h-full w-full ${activeTab === 'music' ? 'block' : 'hidden'}`}>
+            <MusicHomeScreen onDetailOpenChange={handleMusicDetailChange} />
+          </div>
+
           <div className={`h-full w-full ${activeTab === 'anime' ? 'block' : 'hidden'}`}>
             <AnimeStack
               onOpenSearch={() => setActiveTab('search')}
@@ -667,9 +675,10 @@ export const RootNavigator: React.FC = () => {
           </div>
         </div>
 
-        {/* Persistent Mini Music Player & Full-Screen Now Playing Music Player */}
+        {/* Persistent Mini Music Player, Full-Screen Now Playing Music Player & Equaliser */}
         <MiniMusicPlayer hasBottomNav={!isCurrentDetailOpen} />
         <FullScreenMusicPlayer />
+        <MusicEqualizerModal />
 
         {/* Bottom Tab Bar / Side Tab Bar - Automatically hidden when in Details screen */}
         {!isCurrentDetailOpen && (

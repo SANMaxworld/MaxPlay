@@ -1,4 +1,5 @@
 import {
+  EqualizerPreset,
   MusicAlbum,
   MusicArtist,
   MusicFolder,
@@ -370,3 +371,57 @@ export function searchLocalMusicLibrary(
     playlists: playlists.filter((p) => p.name.toLowerCase().includes(q)),
   };
 }
+
+export const EQUALIZER_BAND_LABELS = ['60Hz', '230Hz', '910Hz', '3.6kHz', '14.0kHz'] as const;
+export const EQUALIZER_FREQUENCIES = [60, 230, 910, 3600, 14000] as const;
+
+export const EQUALIZER_PRESET_LIST: EqualizerPreset[] = [
+  'Custom',
+  'Regular',
+  'Classical',
+  'Dance',
+  'Flat',
+  'Folk',
+  'Heavy metal',
+  'Hip-hop',
+  'Jazz',
+  'Pop',
+  'Rock',
+];
+
+export const EQUALIZER_PRESET_BANDS: Record<EqualizerPreset, [number, number, number, number, number]> = {
+  Custom: [0, 0, 0, 0, 0],
+  Regular: [3, 0, 0, 0, 3],
+  Classical: [5, 3, -2, 4, 4],
+  Dance: [6, 0, 2, 4, 1],
+  Flat: [0, 0, 0, 0, 0],
+  Folk: [3, 0, 0, 2, -1],
+  'Heavy metal': [4, 1, 9, 3, 0],
+  'Hip-hop': [5, 3, 0, 1, 3],
+  Jazz: [4, 2, -2, 2, 5],
+  Pop: [-1, 2, 5, 1, -2],
+  Rock: [5, 3, -1, 3, 5],
+};
+
+export function getEqualizerPresetBands(
+  preset: EqualizerPreset,
+  fallbackCustom: [number, number, number, number, number] = [0, 0, 0, 0, 0]
+): [number, number, number, number, number] {
+  if (preset === 'Custom') {
+    return [...fallbackCustom] as [number, number, number, number, number];
+  }
+  const bands = EQUALIZER_PRESET_BANDS[preset] || EQUALIZER_PRESET_BANDS.Flat;
+  return [...bands] as [number, number, number, number, number];
+}
+
+/**
+ * Resolves the cover artwork of a playlist from its first song that has an artwork URL.
+ */
+export function resolvePlaylistFirstSongArtwork(
+  playlistTracks: MusicTrack[]
+): string | undefined {
+  if (!Array.isArray(playlistTracks) || playlistTracks.length === 0) return undefined;
+  const firstTrack = playlistTracks[0];
+  return firstTrack?.artworkUrl || undefined;
+}
+

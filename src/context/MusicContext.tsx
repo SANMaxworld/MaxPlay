@@ -8,8 +8,11 @@ import React, {
   useState,
 } from 'react';
 import {
+  CustomSongMetadata,
+  EqualizerPreset,
   MusicAlbum,
   MusicArtist,
+  MusicEqualizerState,
   MusicFolder,
   MusicPlaylist,
   MusicSettingsState,
@@ -21,7 +24,9 @@ import {
 import {
   computeLibraryDiscovery,
   computeNextQueueIndex,
+  EQUALIZER_FREQUENCIES,
   filterVisibleLibrarySongs,
+  getEqualizerPresetBands,
   groupTracksByAlbum,
   groupTracksByArtist,
   groupTracksByFolder,
@@ -41,6 +46,16 @@ const MUSIC_STORAGE_KEYS = {
   SETTINGS: 'maxplay_music_settings_v1',
   SORT_BY: 'maxplay_music_sort_by_v1',
   LAST_QUEUE_STATE: 'maxplay_music_last_queue_v1',
+  EQUALIZER: 'maxplay_music_equalizer_v1',
+  CUSTOM_META: 'maxplay_music_custom_meta_v1',
+};
+
+const DEFAULT_EQUALIZER_STATE: MusicEqualizerState = {
+  enabled: true,
+  preset: 'Flat',
+  bands: [0, 0, 0, 0, 0],
+  bassLevel: 25,
+  immersiveLevel: 20,
 };
 
 const DEFAULT_MUSIC_SETTINGS: MusicSettingsState = {
@@ -214,6 +229,14 @@ interface MusicContextValue {
   isShuffle: boolean;
   isFullScreenPlayerOpen: boolean;
   setIsFullScreenPlayerOpen: (open: boolean) => void;
+  isEqualizerOpen: boolean;
+  setIsEqualizerOpen: (open: boolean) => void;
+  equalizer: MusicEqualizerState;
+  setEqualizerEnabled: (enabled: boolean) => void;
+  setEqualizerPreset: (preset: EqualizerPreset) => void;
+  setEqualizerBand: (bandIndex: number, dbValue: number) => void;
+  setEqualizerBass: (level: number) => void;
+  setEqualizerImmersive: (level: number) => void;
   sleepTimerMode: SleepTimerMode;
   sleepTimerRemainingSec: number | null;
   activeQueueSourceLabel: string;
@@ -242,8 +265,10 @@ interface MusicContextValue {
   clearQueue: () => void;
   jumpToQueueIndex: (idx: number) => void;
 
-  // Favorites, Playlists & Folders
+  // Favorites, Playlists, Metadata & Folders
   toggleFavorite: (trackId: string) => void;
+  updateSongMetadata: (trackId: string, meta: CustomSongMetadata) => void;
+  clearRecentHistory: () => void;
   createPlaylist: (name: string, initialTrackIds?: string[]) => MusicPlaylist;
   renamePlaylist: (playlistId: string, newName: string) => void;
   deletePlaylist: (playlistId: string) => void;
@@ -349,11 +374,50 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
   const [isFullScreenPlayerOpen, setIsFullScreenPlayerOpen] = useState<boolean>(false);
+  const [isEqualizerOpen, setIsEqualizerOpen] = useState<boolean>(false);
   const [sleepTimerMode, setSleepTimerMode] = useState<SleepTimerMode>('off');
   const [sleepTimerRemainingSec, setSleepTimerRemainingSec] = useState<number | null>(null);
   const [activeQueueSourceLabel, setActiveQueueSourceLabel] = useState<string>('Library');
 
+  const [equalizer, setEqualizer] = useState<MusicEqualizerState>(() => {
+    try {
+      const raw = localStorage.getItem(MUSIC_STORAGE_KEYS.EQUALIZER);
+      return raw ? { ...DEFAULT_EQUALIZER_STATE, ...JSON.parse(raw) } : DEFAULT_EQUALIZER_STATE;
+    } catch {
+      return DEFAULT_EQUALIZER_STATE;
+    }
+  });
+
+  const [customTracksMeta, setCustomTracksMeta] = useState<Record<string, CustomSongMetadata>>(() => {
+    try {
+      const raw = localStorage.getItem(MUSIC_STORAGE_KEYS.CUSTOM_META);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // Web Audio API Equaliser Nodes Ref
+  const eqAudioGraphRef = useRef<{
+    ctx: AudioContext;
+    bands: BiquadFilterNode[];
+    bassFilter: BiquadFilterNode;
+    immersiveFilter: BiquadFilterNode;
+  } | null>(null);
+
   // Persist user preferences
+  useEffect(() => {
+    try {
+      localStorage.setItem(MUSIC_STORAGE_KEYS.EQUALIZER, JSON.stringify(equalizer));
+    } catch {}
+  }, [equalizer]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MUSIC_STORAGE_KEYS.CUSTOM_META, JSON.stringify(customTracksMeta));
+    } catch {}
+  }, [customTracksMeta]);
+
   useEffect(() => {
     try {
       localStorage.setItem(MUSIC_STORAGE_KEYS.FAVORITES, JSON.stringify(favoriteIds));
@@ -535,21 +599,26 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     []
   );
 
-  // Merge native + imported tracks with user favorites & play stats
+  // Merge native + imported tracks with user favorites, custom metadata edits & play stats
   const allRawTracks = useMemo(() => {
     const favSet = new Set(favoriteIds);
     const mergedMap = new Map<string, MusicTrack>();
     for (const t of [...nativeTracks, ...importedTracks]) {
       const stats = playStats[t.id];
+      const custom = customTracksMeta[t.id];
       mergedMap.set(t.id, {
         ...t,
+        title: custom?.title?.trim() || t.title,
+        artist: custom?.artist?.trim() || t.artist,
+        album: custom?.album?.trim() || t.album,
+        artworkUrl: custom?.artworkUrl || t.artworkUrl,
         isFavorite: favSet.has(t.id),
         playCount: stats?.playCount || 0,
         lastPlayedAt: stats?.lastPlayedAt || 0,
       });
     }
     return Array.from(mergedMap.values());
-  }, [nativeTracks, importedTracks, favoriteIds, playStats]);
+  }, [nativeTracks, importedTracks, favoriteIds, playStats, customTracksMeta]);
 
   const visibleTracks = useMemo(
     () =>
@@ -825,29 +894,206 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsShuffle((prev) => !prev);
   }, []);
 
-  // Sync MediaSession API for Lock Screen, Notification & Headphone Controls
+  // Sync Web MediaSession API + Native Android Notification Shade & Lock-Screen Media Widget
   useEffect(() => {
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || !currentTrack) return;
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
+    if (!currentTrack) {
+      NativeBridgeService.cancelMusicNotificationNative();
+      return;
+    }
+
+    if (settings.notificationControls || settings.lockScreenControls) {
+      NativeBridgeService.updateMusicNotificationNative({
         title: currentTrack.title,
         artist: currentTrack.artist,
         album: currentTrack.album,
-        artwork: currentTrack.artworkUrl
-          ? [{ src: currentTrack.artworkUrl, sizes: '512x512', type: 'image/jpeg' }]
-          : [],
+        isPlaying,
+        artworkUrl: currentTrack.artworkUrl,
+        durationSec: duration || currentTrack.durationSec || 0,
+        positionSec: currentTime || 0,
       });
-      navigator.mediaSession.setActionHandler('play', () => togglePlayPause());
-      navigator.mediaSession.setActionHandler('pause', () => togglePlayPause());
-      navigator.mediaSession.setActionHandler('previoustrack', () => playPreviousTrack());
-      navigator.mediaSession.setActionHandler('nexttrack', () => playNextTrack());
-      navigator.mediaSession.setActionHandler('seekto', (details) => {
-        if (typeof details.seekTime === 'number') {
-          seekTo(details.seekTime);
+    }
+
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          album: currentTrack.album,
+          artwork: currentTrack.artworkUrl
+            ? [
+                { src: currentTrack.artworkUrl, sizes: '96x96', type: 'image/jpeg' },
+                { src: currentTrack.artworkUrl, sizes: '256x256', type: 'image/jpeg' },
+                { src: currentTrack.artworkUrl, sizes: '512x512', type: 'image/jpeg' },
+              ]
+            : [],
+        });
+        navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+        navigator.mediaSession.setActionHandler('play', () => togglePlayPause());
+        navigator.mediaSession.setActionHandler('pause', () => togglePlayPause());
+        navigator.mediaSession.setActionHandler('previoustrack', () => playPreviousTrack());
+        navigator.mediaSession.setActionHandler('nexttrack', () => playNextTrack());
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+          if (typeof details.seekTime === 'number') {
+            seekTo(details.seekTime);
+          }
+        });
+      } catch {}
+    }
+  }, [
+    currentTrack,
+    isPlaying,
+    duration,
+    settings.notificationControls,
+    settings.lockScreenControls,
+    togglePlayPause,
+    playPreviousTrack,
+    playNextTrack,
+    seekTo,
+  ]);
+
+  // Listen to Native Android Notification Shade & Lock-Screen Media Button events
+  useEffect(() => {
+    const handleNativeMediaAction = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail || !detail.action) return;
+      const act = String(detail.action);
+      if (act === 'toggle' || act === 'play' || act === 'pause') {
+        togglePlayPause();
+      } else if (act === 'next') {
+        playNextTrack();
+      } else if (act === 'prev') {
+        playPreviousTrack();
+      } else if (act === 'seek' && typeof detail.seekTime === 'number' && detail.seekTime >= 0) {
+        seekTo(detail.seekTime);
+      }
+    };
+    window.addEventListener('MAXPLAY_NATIVE_MEDIA_ACTION', handleNativeMediaAction);
+    return () => {
+      window.removeEventListener('MAXPLAY_NATIVE_MEDIA_ACTION', handleNativeMediaAction);
+    };
+  }, [togglePlayPause, playNextTrack, playPreviousTrack, seekTo]);
+
+  // Apply 5-Band Equaliser + Bass + Immersive Audio via Web Audio API when enabled
+  const ensureEqualizerGraph = useCallback(() => {
+    if (typeof window === 'undefined' || !audioRef.current) return null;
+    if (eqAudioGraphRef.current) {
+      if (eqAudioGraphRef.current.ctx.state === 'suspended') {
+        eqAudioGraphRef.current.ctx.resume().catch(() => {});
+      }
+      return eqAudioGraphRef.current;
+    }
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return null;
+      const ctx: AudioContext = new AudioCtx();
+      const source = ctx.createMediaElementSource(audioRef.current);
+
+      const bands = EQUALIZER_FREQUENCIES.map((freq) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'peaking';
+        filter.frequency.value = freq;
+        filter.Q.value = 1.4;
+        filter.gain.value = 0;
+        return filter;
+      });
+
+      const bassFilter = ctx.createBiquadFilter();
+      bassFilter.type = 'lowshelf';
+      bassFilter.frequency.value = 95;
+      bassFilter.gain.value = 0;
+
+      const immersiveFilter = ctx.createBiquadFilter();
+      immersiveFilter.type = 'highshelf';
+      immersiveFilter.frequency.value = 6500;
+      immersiveFilter.gain.value = 0;
+
+      let prevNode: AudioNode = source;
+      for (const b of bands) {
+        prevNode.connect(b);
+        prevNode = b;
+      }
+      prevNode.connect(bassFilter);
+      bassFilter.connect(immersiveFilter);
+      immersiveFilter.connect(ctx.destination);
+
+      eqAudioGraphRef.current = { ctx, bands, bassFilter, immersiveFilter };
+      return eqAudioGraphRef.current;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const graph = eqAudioGraphRef.current;
+    if (!graph) return;
+    const active = equalizer.enabled;
+    graph.bands.forEach((filter, idx) => {
+      filter.gain.value = active ? equalizer.bands[idx] || 0 : 0;
+    });
+    graph.bassFilter.gain.value = active ? (equalizer.bassLevel / 100) * 10 : 0;
+    graph.immersiveFilter.gain.value = active ? (equalizer.immersiveLevel / 100) * 8 : 0;
+  }, [equalizer]);
+
+  const setEqualizerEnabled = useCallback(
+    (enabled: boolean) => {
+      ensureEqualizerGraph();
+      setEqualizer((prev) => ({ ...prev, enabled }));
+    },
+    [ensureEqualizerGraph]
+  );
+
+  const setEqualizerPreset = useCallback(
+    (preset: EqualizerPreset) => {
+      ensureEqualizerGraph();
+      setEqualizer((prev) => ({
+        ...prev,
+        preset,
+        bands: getEqualizerPresetBands(preset, prev.bands),
+      }));
+    },
+    [ensureEqualizerGraph]
+  );
+
+  const setEqualizerBand = useCallback(
+    (bandIndex: number, dbValue: number) => {
+      ensureEqualizerGraph();
+      const clamped = Math.max(-12, Math.min(12, Math.round(dbValue)));
+      setEqualizer((prev) => {
+        const nextBands = [...prev.bands] as [number, number, number, number, number];
+        if (bandIndex >= 0 && bandIndex < 5) {
+          nextBands[bandIndex] = clamped;
         }
+        return {
+          ...prev,
+          preset: 'Custom',
+          bands: nextBands,
+        };
       });
-    } catch {}
-  }, [currentTrack, togglePlayPause, playPreviousTrack, playNextTrack, seekTo]);
+    },
+    [ensureEqualizerGraph]
+  );
+
+  const setEqualizerBass = useCallback(
+    (level: number) => {
+      ensureEqualizerGraph();
+      setEqualizer((prev) => ({
+        ...prev,
+        bassLevel: Math.max(0, Math.min(100, Math.round(level))),
+      }));
+    },
+    [ensureEqualizerGraph]
+  );
+
+  const setEqualizerImmersive = useCallback(
+    (level: number) => {
+      ensureEqualizerGraph();
+      setEqualizer((prev) => ({
+        ...prev,
+        immersiveLevel: Math.max(0, Math.min(100, Math.round(level))),
+      }));
+    },
+    [ensureEqualizerGraph]
+  );
 
   // Queue operations
   const playNextInQueue = useCallback(
@@ -943,11 +1189,32 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [queue, loadAndPlayTrackAtIndex]
   );
 
-  // Favorites, Playlists & Folders
+  // Favorites, Playlists, Custom Metadata & Folders
   const toggleFavorite = useCallback((trackId: string) => {
     setFavoriteIds((prev) =>
       prev.includes(trackId) ? prev.filter((id) => id !== trackId) : [trackId, ...prev]
     );
+  }, []);
+
+  const updateSongMetadata = useCallback((trackId: string, meta: CustomSongMetadata) => {
+    setCustomTracksMeta((prev) => ({
+      ...prev,
+      [trackId]: {
+        ...(prev[trackId] || {}),
+        ...meta,
+      },
+    }));
+  }, []);
+
+  const clearRecentHistory = useCallback(() => {
+    setPlayStats((prev) => {
+      const next: Record<string, { playCount: number; lastPlayedAt: number }> = {};
+      for (const k of Object.keys(prev)) {
+        const entry = prev[k];
+        next[k] = { playCount: entry?.playCount || 0, lastPlayedAt: 0 };
+      }
+      return next;
+    });
   }, []);
 
   const createPlaylist = useCallback(
@@ -1086,6 +1353,14 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isShuffle,
     isFullScreenPlayerOpen,
     setIsFullScreenPlayerOpen,
+    isEqualizerOpen,
+    setIsEqualizerOpen,
+    equalizer,
+    setEqualizerEnabled,
+    setEqualizerPreset,
+    setEqualizerBand,
+    setEqualizerBass,
+    setEqualizerImmersive,
     sleepTimerMode,
     sleepTimerRemainingSec,
     activeQueueSourceLabel,
@@ -1110,6 +1385,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     clearQueue,
     jumpToQueueIndex,
     toggleFavorite,
+    updateSongMetadata,
+    clearRecentHistory,
     createPlaylist,
     renamePlaylist,
     deletePlaylist,

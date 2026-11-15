@@ -91,3 +91,32 @@ export interface MusicSettingsState {
   pauseOnDisconnect: boolean;
   audioFocusHandling: boolean;
 }
+
+export type EqualizerPreset =
+  | 'Custom'
+  | 'Regular'
+  | 'Classical'
+  | 'Dance'
+  | 'Flat'
+  | 'Folk'
+  | 'Heavy metal'
+  | 'Hip-hop'
+  | 'Jazz'
+  | 'Pop'
+  | 'Rock';
+
+export interface MusicEqualizerState {
+  enabled: boolean;
+  preset: EqualizerPreset;
+  bands: [number, number, number, number, number]; // [60Hz, 230Hz, 910Hz, 3.6kHz, 14.0kHz] in dB (-12 to +12)
+  bassLevel: number; // 0 to 100
+  immersiveLevel: number; // 0 to 100
+}
+
+export interface CustomSongMetadata {
+  title?: string;
+  artist?: string;
+  album?: string;
+  artworkUrl?: string;
+}
+

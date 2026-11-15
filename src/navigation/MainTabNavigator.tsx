@@ -1,10 +1,10 @@
 import React from 'react';
-import { Home, Download, Sparkles, User, Search } from 'lucide-react';
+import { Home, Download, Music2, Sparkles, User, Search } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../hooks/useAuth';
 import { adManager } from '../services/adService';
 
-export type TabType = 'home' | 'downloads' | 'anime' | 'me' | 'search';
+export type TabType = 'home' | 'downloads' | 'music' | 'anime' | 'me' | 'search';
 
 interface MainTabNavigatorProps {
   activeTab: TabType;
@@ -27,7 +27,7 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
   const tabs = [
     { id: 'home' as const, label: 'Home', icon: Home },
     { id: 'downloads' as const, label: 'Downloads', icon: Download },
-    { id: 'anime' as const, label: 'Anime', icon: Sparkles },
+    { id: 'music' as const, label: 'Music', icon: Music2 },
     { id: 'me' as const, label: 'Me', icon: User },
   ];
 
@@ -56,8 +56,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                 <motion.div
                   layoutId="activeTabPill"
                   className={`absolute inset-x-1.5 top-1 bottom-1 rounded-2xl ${
-                    tab.id === 'anime'
-                      ? 'bg-gradient-to-r from-[#8B5CF6]/30 via-[#EC4899]/30 to-[#38BDF8]/30 border border-[#EC4899]/50 shadow-[0_0_18px_rgba(236,72,153,0.35)]'
+                    tab.id === 'music'
+                      ? 'bg-gradient-to-r from-[#8B5CF6]/30 via-[#A855F7]/30 to-[#EC4899]/30 border border-[#A855F7]/50 shadow-[0_0_18px_rgba(168,85,247,0.35)]'
                       : tab.id === 'downloads'
                       ? 'bg-gradient-to-r from-[#06B6D4]/25 to-[#8B5CF6]/25 border border-[#06B6D4]/40 shadow-[0_0_15px_rgba(6,182,212,0.3)]'
                       : tab.id === 'home'
@@ -80,8 +80,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                       animate={{ opacity: [0.3, 0.6, 0.3] }}
                       transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                       className={`absolute inset-0 rounded-full blur-md ${
-                        tab.id === "anime"
-                          ? "bg-[#F472B6]"
+                        tab.id === "music"
+                          ? "bg-[#A855F7]"
                           : tab.id === "downloads"
                           ? "bg-[#06B6D4]"
                           : "bg-[#8B5CF6]"
@@ -91,8 +91,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                   <Icon
                     className={`h-5 w-5 transition-colors duration-200 ${
                       isActive
-                        ? tab.id === "anime"
-                          ? "text-[#F472B6] drop-shadow-[0_0_8px_rgba(244,114,182,0.8)]"
+                        ? tab.id === "music"
+                          ? "text-[#C084FC] drop-shadow-[0_0_8px_rgba(192,132,252,0.85)]"
                           : tab.id === "downloads"
                           ? "text-[#22D3EE] drop-shadow-[0_0_8px_rgba(34,211,238,0.8)]"
                           : "text-[#A78BFA] drop-shadow-[0_0_8px_rgba(167,139,250,0.8)]"
@@ -117,8 +117,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                 transition={{ duration: 0.2 }}
                 className={`mt-1 text-[11px] font-bold tracking-tight z-10 whitespace-nowrap ${
                   isActive
-                    ? tab.id === 'anime'
-                      ? 'bg-gradient-to-r from-[#C084FC] via-[#F472B6] to-[#38BDF8] bg-clip-text text-transparent font-extrabold'
+                    ? tab.id === 'music'
+                      ? 'bg-gradient-to-r from-[#C084FC] via-[#A855F7] to-[#F472B6] bg-clip-text text-transparent font-extrabold'
                       : tab.id === 'downloads'
                       ? 'bg-gradient-to-r from-[#22D3EE] to-[#A78BFA] bg-clip-text text-transparent font-extrabold'
                       : tab.id === 'me'
@@ -135,8 +135,8 @@ export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({
                 <motion.div
                   layoutId="activeTabDot"
                   className={`absolute top-0.5 md:top-1/2 md:bottom-auto md:left-0 md:h-6 md:w-1 md:-translate-y-1/2 md:rounded-r-full h-0.5 w-4 rounded-full z-20 ${
-                    tab.id === 'anime'
-                      ? 'bg-gradient-to-r from-[#EC4899] to-[#38BDF8]'
+                    tab.id === 'music'
+                      ? 'bg-gradient-to-r from-[#A855F7] to-[#EC4899]'
                       : tab.id === 'downloads'
                       ? 'bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6]'
                       : tab.id === 'me'
