@@ -788,6 +788,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       prevActiveQualityPropRef.current.toLowerCase() !== activeQuality.toLowerCase();
     prevActiveQualityPropRef.current = activeQuality;
 
+    const hls = hlsRef.current;
+    const hasInPlaceHlsLevels = Boolean(
+      hls && isHlsStreamRef.current && hls.levels && hls.levels.length > 1 && !/\[(S1|S2)\]/i.test(activeQuality)
+    );
+
     if (isExternalQualitySwitch && hasStarted) {
       if (videoRef.current && videoRef.current.currentTime > 0.5) {
         savedSwitchTimeRef.current = videoRef.current.currentTime;
@@ -795,27 +800,25 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       if ((videoRef.current && !videoRef.current.paused) || isPlaying) {
         wasPlayingBeforeSwitchRef.current = true;
       }
-      setHasRenderedFirstFrame(false);
-      setIsLoading(true);
+      if (!hasInPlaceHlsLevels) {
+        setHasRenderedFirstFrame(false);
+        setIsLoading(true);
+      }
       triggerQualitySwitchBanner(activeQuality);
     }
 
     setCurrentQuality(activeQuality);
 
-    const hls = hlsRef.current;
     if (hls && isHlsStreamRef.current && hls.levels && hls.levels.length > 0) {
       if (activeQuality.toLowerCase() === 'auto') {
         hls.loadLevel = -1;
         hls.nextLevel = -1;
-        hls.currentLevel = -1;
       } else {
         const levelIdx = findMatchingHlsLevelIndex(hls.levels, activeQuality);
-        if (levelIdx !== -1 && hls.currentLevel !== levelIdx) {
-          setHasRenderedFirstFrame(false);
-          setIsLoading(true);
+        if (levelIdx !== -1 && hls.loadLevel !== levelIdx) {
+          // Use loadLevel + nextLevel so hls.js switches at the next fragment boundary with 0ms buffer flush stall!
           hls.loadLevel = levelIdx;
           hls.nextLevel = levelIdx;
-          hls.currentLevel = levelIdx;
         }
       }
     }
@@ -1159,6 +1162,16 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       return;
     }
 
+    // 0ms Instant Cache Hit: If SmartStreamService already has this URL pre-warmed in memory/session cache,
+    // resolve synchronously without waiting for an async microtask tick!
+    const instantCachedUrl = SmartStreamService.getCachedStreamUrl(activeVideoUrl);
+    if (instantCachedUrl && !instantCachedUrl.includes('/e/')) {
+      setResolvedStreamUrl(instantCachedUrl);
+      setEmbedFallbackUrl('');
+      setIsResolvingStream(false);
+      return;
+    }
+
     let isMounted = true;
     setIsResolvingStream(true);
     setIsLoading(true);
@@ -1290,17 +1303,22 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         lowLatencyMode: false,
         startFragPrefetch: true,
         backBufferLength: 30,
-        maxBufferLength: 45,
-        maxMaxBufferLength: 90,
-        maxBufferSize: 90 * 1000 * 1000,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
+        maxBufferSize: 120 * 1000 * 1000,
         maxBufferHole: 0.5,
-        fragLoadingTimeOut: 30000,
+        highBufferWatchdogPeriod: 2,
+        nudgeOffset: 0.1,
+        nudgeMaxRetry: 6,
+        fragLoadingTimeOut: 25000,
         fragLoadingMaxRetry: 8,
-        fragLoadingRetryDelay: 800,
-        manifestLoadingTimeOut: 18000,
+        fragLoadingRetryDelay: 350,
+        manifestLoadingTimeOut: 15000,
         manifestLoadingMaxRetry: 5,
-        levelLoadingTimeOut: 18000,
+        manifestLoadingRetryDelay: 350,
+        levelLoadingTimeOut: 15000,
         levelLoadingMaxRetry: 5,
+        levelLoadingRetryDelay: 350,
       });
       hlsRef.current = hls;
       hls.loadSource(resolvedStreamUrl);
@@ -1963,8 +1981,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     }
 
     const cleanQual = qual.replace(/\s*\[(S1|S2)\]/i, '').trim() || 'auto';
-    setHasRenderedFirstFrame(false);
-    setIsLoading(true);
+    const hasInPlaceHlsLevels = Boolean(
+      hlsRef.current &&
+      isHlsStreamRef.current &&
+      hlsRef.current.levels &&
+      hlsRef.current.levels.length > 1 &&
+      !/\[(S1|S2)\]/i.test(qual)
+    );
+    if (!hasInPlaceHlsLevels) {
+      setHasRenderedFirstFrame(false);
+      setIsLoading(true);
+    }
     triggerQualitySwitchBanner(cleanQual);
     setCurrentQuality(cleanQual);
     prevActiveQualityPropRef.current = cleanQual;
@@ -1973,12 +2000,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     } catch {}
     if (onQualityChange) onQualityChange(qual);
 
-    // If HLS stream has internal multi-quality levels, switch level immediately using widescreen-aware matcher
+    // If HLS stream has internal multi-quality levels, switch level seamlessly via loadLevel + nextLevel without flushing buffer!
     if (hlsRef.current && isHlsStreamRef.current && hlsRef.current.levels && hlsRef.current.levels.length > 0) {
       if (cleanQual.toLowerCase() === 'auto') {
         hlsRef.current.loadLevel = -1;
         hlsRef.current.nextLevel = -1;
-        hlsRef.current.currentLevel = -1;
         if (videoRef.current && videoRef.current.readyState >= 2 && !videoRef.current.paused) {
           setHasRenderedFirstFrame(true);
           setIsLoading(false);
@@ -1988,7 +2014,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         if (levelIdx !== -1) {
           hlsRef.current.loadLevel = levelIdx;
           hlsRef.current.nextLevel = levelIdx;
-          hlsRef.current.currentLevel = levelIdx;
         }
       }
     }

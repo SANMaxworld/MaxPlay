@@ -266,6 +266,8 @@ export class ClientHlsDownloader {
     return false;
   }
 
+  private static probeMasterCache = new Map<string, { ts: number; data: any }>();
+
   /**
    * Fast universal Master/Media HLS Playlist prober for both Android APK and Web Browser.
    * Extracts real available video qualities, bitrates, estimated MB sizes, and real #EXT-X-MEDIA:TYPE=AUDIO tracks.
@@ -289,6 +291,13 @@ export class ClientHlsDownloader {
     try {
       const rawMasterUrl = unwrapProxyUrl(m3u8Url);
       if (!rawMasterUrl) return null;
+
+      const cacheKey = `${rawMasterUrl}::${requestedDurationSec}`;
+      const memHit = this.probeMasterCache.get(cacheKey) || this.probeMasterCache.get(`${rawMasterUrl}::0`);
+      if (memHit && Date.now() - memHit.ts < 20 * 60 * 1000) {
+        return memHit.data;
+      }
+
       const inferredReferer = extractRefererFromProxyUrl(m3u8Url) || SmartStreamService.resolveEmbedReferer(rawMasterUrl);
 
       if (NativeBridgeService.isRunningInKotlinApp()) {
@@ -298,6 +307,7 @@ export class ClientHlsDownloader {
           requestedDurationSec
         );
         if (nativeParsed && nativeParsed.downloadQualities.length > 0) {
+          this.probeMasterCache.set(cacheKey, { ts: Date.now(), data: nativeParsed });
           return nativeParsed;
         }
       }
@@ -553,13 +563,15 @@ export class ClientHlsDownloader {
       qualities.sort((a, b) => parseInt(b) - parseInt(a));
       downloadQualities.sort((a, b) => parseInt(b.id) - parseInt(a.id));
 
-      return {
+      const resultObj = {
         qualities,
         qualityLinks,
         downloadQualities,
         audioTracks,
         duration: finalDuration,
       };
+      this.probeMasterCache.set(cacheKey, { ts: Date.now(), data: resultObj });
+      return resultObj;
     } catch {
       return null;
     }
@@ -1024,9 +1036,9 @@ export class ClientHlsDownloader {
         jobs.push({ isAudio: true, segIndex: i, url: audioSegments[i] });
       }
 
-      // Continuous sliding-window worker pool (18 parallel workers on Native Disk, 12 on Web)
-      // Saturates user's maximum mobile/Hotspot/Wi-Fi bandwidth without batch stalls
-      const CONCURRENCY = useNativeDisk ? 18 : 12;
+      // Continuous sliding-window worker pool (32 parallel workers on Native Disk, 20 on Web)
+      // Saturates 100% of user's maximum mobile/5G/Hotspot/Wi-Fi bandwidth without batch stalls
+      const CONCURRENCY = useNativeDisk ? 32 : 20;
       let nextJobIdx = 0;
 
       const worker = async () => {

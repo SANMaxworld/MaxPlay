@@ -61,6 +61,7 @@ type ActivePlayerModal =
 
 export const FullScreenMusicPlayer: React.FC = () => {
   const {
+    allRawTracks,
     currentTrack,
     queue,
     currentIndex,
@@ -128,16 +129,22 @@ export const FullScreenMusicPlayer: React.FC = () => {
     setTimeout(() => setToastText(null), 2400);
   };
 
-  // Sync Edit Song Info fields whenever editingSongTrack opens
+  // Sync Edit Song Info fields whenever editingSongTrack opens (always resolving latest edited fields from allRawTracks)
   useEffect(() => {
     if (editingSongTrack) {
-      setEditTitle(editingSongTrack.title || '');
-      setEditArtist(editingSongTrack.artist || '');
-      setEditAlbum(editingSongTrack.album || '');
-      setEditArtworkUrl(editingSongTrack.artworkUrl || '');
-      setEditLyrics(editingSongTrack.lyrics || '');
+      const latest =
+        allRawTracks.find(
+          (t) =>
+            t.id === editingSongTrack.id ||
+            (t.mediaId && editingSongTrack.mediaId && t.mediaId === editingSongTrack.mediaId)
+        ) || editingSongTrack;
+      setEditTitle(latest.title || '');
+      setEditArtist(latest.artist || '');
+      setEditAlbum(latest.album || '');
+      setEditArtworkUrl(latest.artworkUrl || '');
+      setEditLyrics(latest.lyrics || '');
     }
-  }, [editingSongTrack]);
+  }, [editingSongTrack?.id]);
 
   useEffect(() => {
     if (currentTrack) {
@@ -165,25 +172,75 @@ export const FullScreenMusicPlayer: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [editingSongTrack, activeModal, isFullScreenPlayerOpen, setEditingSongTrack, setIsFullScreenPlayerOpen]);
 
-  const handleCoverFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const compressCoverFileToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const fallbackRead = () => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
+      };
+      try {
+        const objUrl = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const maxDim = 480;
+            let w = img.naturalWidth || img.width || maxDim;
+            let h = img.naturalHeight || img.height || maxDim;
+            if (w > maxDim || h > maxDim) {
+              if (w >= h) {
+                h = Math.max(1, Math.round((h * maxDim) / w));
+                w = maxDim;
+              } else {
+                w = Math.max(1, Math.round((w * maxDim) / h));
+                h = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, w, h);
+              const compressed = canvas.toDataURL('image/jpeg', 0.82);
+              URL.revokeObjectURL(objUrl);
+              if (compressed && compressed.startsWith('data:image/')) {
+                resolve(compressed);
+                return;
+              }
+            }
+          } catch {}
+          URL.revokeObjectURL(objUrl);
+          fallbackRead();
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(objUrl);
+          fallbackRead();
+        };
+        img.src = objUrl;
+      } catch {
+        fallbackRead();
+      }
+    });
+  };
+
+  const handleCoverFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setEditArtworkUrl(reader.result);
-        const targetId = editingSongTrack?.id || currentTrack?.id;
-        if (targetId) {
-          setImgFailed((prev) => ({ ...prev, [targetId]: false }));
-          if (!editingSongTrack && currentTrack) {
-            updateSongMetadata(currentTrack.id, { artworkUrl: reader.result });
-            showToast('Album cover updated!');
-          }
+    const dataUrl = await compressCoverFileToDataUrl(file);
+    if (dataUrl) {
+      setEditArtworkUrl(dataUrl);
+      const targetId = editingSongTrack?.id || currentTrack?.id;
+      if (targetId) {
+        setImgFailed((prev) => ({ ...prev, [targetId]: false }));
+        if (!editingSongTrack && currentTrack) {
+          updateSongMetadata(currentTrack.id, { artworkUrl: dataUrl });
+          showToast('Album cover updated!');
         }
       }
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
+    }
   };
 
   const handleLyricsFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -200,14 +257,29 @@ export const FullScreenMusicPlayer: React.FC = () => {
     e.target.value = '';
   };
 
+  const focusInputAtEnd = (inputEl: HTMLInputElement | null) => {
+    if (!inputEl) return;
+    inputEl.focus();
+    try {
+      const len = inputEl.value.length;
+      inputEl.setSelectionRange(len, len);
+    } catch {}
+  };
+
   const handleSaveEditSongInfo = () => {
     if (!editingSongTrack) return;
+    const finalTitle = editTitle.trim() || editingSongTrack.title;
+    const finalArtist = editArtist.trim() || editingSongTrack.artist;
+    const finalAlbum = editAlbum.trim() || editingSongTrack.album;
+    const finalArtwork = editArtworkUrl || editingSongTrack.artworkUrl;
+    const finalLyrics = editLyrics.trim();
+
     updateSongMetadata(editingSongTrack.id, {
-      title: editTitle.trim() || editingSongTrack.title,
-      artist: editArtist.trim() || editingSongTrack.artist,
-      album: editAlbum.trim() || editingSongTrack.album,
-      artworkUrl: editArtworkUrl || editingSongTrack.artworkUrl,
-      lyrics: editLyrics.trim(),
+      title: finalTitle,
+      artist: finalArtist,
+      album: finalAlbum,
+      artworkUrl: finalArtwork,
+      lyrics: finalLyrics,
     });
     setImgFailed((prev) => ({ ...prev, [editingSongTrack.id]: false }));
     setEditingSongTrack(null);
@@ -314,7 +386,10 @@ export const FullScreenMusicPlayer: React.FC = () => {
           {/* Section 2: Song / Artist / Album Editable Rows with Right Pencil-in-Square Icon */}
           <div className="divide-y divide-white/[0.08] border-t border-b border-white/[0.08]">
             {/* Row 1: Song */}
-            <div className="flex items-center justify-between gap-3 py-3.5">
+            <div
+              onClick={() => focusInputAtEnd(titleInputRef.current)}
+              className="flex items-center justify-between gap-3 py-3.5 cursor-text"
+            >
               <span className="w-16 text-[15px] font-semibold text-zinc-300 shrink-0">
                 Song
               </span>
@@ -324,12 +399,15 @@ export const FullScreenMusicPlayer: React.FC = () => {
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
                 placeholder="Enter song name"
-                className="flex-1 bg-transparent text-[15px] text-zinc-200 placeholder-zinc-500 focus:text-white focus:outline-none truncate"
+                className="flex-1 min-w-0 bg-transparent text-[15px] text-zinc-100 placeholder-zinc-500 focus:text-white focus:outline-none"
               />
               <button
                 type="button"
                 aria-label="Edit Song Name"
-                onClick={() => titleInputRef.current?.focus()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  focusInputAtEnd(titleInputRef.current);
+                }}
                 className="p-1.5 text-zinc-400 hover:text-white cursor-pointer shrink-0"
               >
                 <Edit3 className="w-4 h-4" />
@@ -337,7 +415,10 @@ export const FullScreenMusicPlayer: React.FC = () => {
             </div>
 
             {/* Row 2: Artist */}
-            <div className="flex items-center justify-between gap-3 py-3.5">
+            <div
+              onClick={() => focusInputAtEnd(artistInputRef.current)}
+              className="flex items-center justify-between gap-3 py-3.5 cursor-text"
+            >
               <span className="w-16 text-[15px] font-semibold text-zinc-300 shrink-0">
                 Artist
               </span>
@@ -347,12 +428,15 @@ export const FullScreenMusicPlayer: React.FC = () => {
                 value={editArtist}
                 onChange={(e) => setEditArtist(e.target.value)}
                 placeholder="Enter artist name"
-                className="flex-1 bg-transparent text-[15px] text-zinc-200 placeholder-zinc-500 focus:text-white focus:outline-none truncate"
+                className="flex-1 min-w-0 bg-transparent text-[15px] text-zinc-100 placeholder-zinc-500 focus:text-white focus:outline-none"
               />
               <button
                 type="button"
                 aria-label="Edit Artist Name"
-                onClick={() => artistInputRef.current?.focus()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  focusInputAtEnd(artistInputRef.current);
+                }}
                 className="p-1.5 text-zinc-400 hover:text-white cursor-pointer shrink-0"
               >
                 <Edit3 className="w-4 h-4" />
@@ -360,7 +444,10 @@ export const FullScreenMusicPlayer: React.FC = () => {
             </div>
 
             {/* Row 3: Album */}
-            <div className="flex items-center justify-between gap-3 py-3.5">
+            <div
+              onClick={() => focusInputAtEnd(albumInputRef.current)}
+              className="flex items-center justify-between gap-3 py-3.5 cursor-text"
+            >
               <span className="w-16 text-[15px] font-semibold text-zinc-300 shrink-0">
                 Album
               </span>
@@ -370,12 +457,15 @@ export const FullScreenMusicPlayer: React.FC = () => {
                 value={editAlbum}
                 onChange={(e) => setEditAlbum(e.target.value)}
                 placeholder="Enter album name"
-                className="flex-1 bg-transparent text-[15px] text-zinc-200 placeholder-zinc-500 focus:text-white focus:outline-none truncate"
+                className="flex-1 min-w-0 bg-transparent text-[15px] text-zinc-100 placeholder-zinc-500 focus:text-white focus:outline-none"
               />
               <button
                 type="button"
                 aria-label="Edit Album Name"
-                onClick={() => albumInputRef.current?.focus()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  focusInputAtEnd(albumInputRef.current);
+                }}
                 className="p-1.5 text-zinc-400 hover:text-white cursor-pointer shrink-0"
               >
                 <Edit3 className="w-4 h-4" />
@@ -416,6 +506,15 @@ export const FullScreenMusicPlayer: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* Save Button at Bottom for Easy 1-Tap Save on All Phones */}
+          <button
+            type="button"
+            onClick={handleSaveEditSongInfo}
+            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-[#8E2DE2] to-[#4A00E0] text-white font-extrabold text-sm shadow-lg shadow-[#8E2DE2]/25 active:scale-[0.99] transition cursor-pointer"
+          >
+            Save Changes
+          </button>
         </div>
       </div>
     );

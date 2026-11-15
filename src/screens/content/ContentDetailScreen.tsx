@@ -1631,7 +1631,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     setDiscoveredQualities(selectedServer === 'server2' ? s2DiscoveredQualities : s1DiscoveredQualities);
   }, [selectedServer, s1DiscoveredAudioTracks, s2DiscoveredAudioTracks, s1DiscoveredQualities, s2DiscoveredQualities]);
 
-  // Pre-warm the active server stream immediately and defer backup server pre-warming by 4s so initial video startup has 0 contention
+  // Pre-warm the active server stream immediately, plus distinct quality links, backup server, and the NEXT episode so episode taps & quality switches happen in 0ms!
   useEffect(() => {
     const activeUrl = selectedServer === 'server2' ? (secondaryServerUrl || primaryServerUrl) : (primaryServerUrl || secondaryServerUrl);
     const backupUrl = selectedServer === 'server2' ? primaryServerUrl : secondaryServerUrl;
@@ -1640,17 +1640,63 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       SmartStreamService.prefetchStream(activeUrl);
     }
 
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    // 1. Pre-warm any distinct quality links on the current episode/movie after 2.2s
+    const distinctQualityUrls = Array.from(
+      new Set(
+        Object.values(playerQualityLinks || {})
+          .map((u) => SmartStreamService.sanitizeStreamUrl(u))
+          .filter((u) => u && u !== activeUrl)
+      )
+    );
+    if (distinctQualityUrls.length > 0) {
+      timers.push(
+        setTimeout(() => {
+          distinctQualityUrls.slice(0, 3).forEach((qUrl) => SmartStreamService.prefetchStream(qUrl));
+        }, 2200)
+      );
+    }
+
+    // 2. Pre-warm the NEXT episode (and episode after next) after 2.6s so tapping another episode starts in 0ms!
+    if (isSeries && !isMovie && activeSeasonEpisodes.length > selectedEpisodeIndex + 1) {
+      timers.push(
+        setTimeout(() => {
+          const nextEps = activeSeasonEpisodes.slice(selectedEpisodeIndex + 1, selectedEpisodeIndex + 3);
+          nextEps.forEach((ep: any) => {
+            if (!ep) return;
+            const epS1 = SmartStreamService.sanitizeStreamUrl(
+              ep.videoUrl ||
+                (ep.qualityLinks && Object.values(ep.qualityLinks)[0]) ||
+                (Array.isArray(ep.videoLinks) && ep.videoLinks[0]?.videoUrl) ||
+                ''
+            );
+            const epS2 = SmartStreamService.sanitizeStreamUrl(
+              ep.secondaryServerUrl ||
+                ep.secondaryVideoUrl ||
+                (ep.secondaryQualityLinks && Object.values(ep.secondaryQualityLinks)[0]) ||
+                ''
+            );
+            if (epS1) SmartStreamService.prefetchStream(epS1);
+            if (epS2 && epS2 !== epS1) SmartStreamService.prefetchStream(epS2);
+          });
+        }, 2600)
+      );
+    }
+
+    // 3. Pre-warm backup server after 3.4s
     if (backupUrl && backupUrl !== activeUrl) {
-      timer = setTimeout(() => {
-        SmartStreamService.prefetchStream(backupUrl);
-      }, 4000);
+      timers.push(
+        setTimeout(() => {
+          SmartStreamService.prefetchStream(backupUrl);
+        }, 3400)
+      );
     }
 
     return () => {
-      if (timer) clearTimeout(timer);
+      timers.forEach(clearTimeout);
     };
-  }, [primaryServerUrl, secondaryServerUrl, selectedServer]);
+  }, [primaryServerUrl, secondaryServerUrl, selectedServer, selectedEpisodeIndex, selectedSeasonIndex]);
 
   const isQualityKeyString = (val?: string): boolean => {
     if (!val || typeof val !== 'string') return false;

@@ -37,11 +37,11 @@ object MaxPlayOfflineVault {
     private val downloadHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dispatcher(okhttp3.Dispatcher().apply {
-                maxRequests = 64
-                maxRequestsPerHost = 32
+                maxRequests = 128
+                maxRequestsPerHost = 64
             })
-            .connectionPool(okhttp3.ConnectionPool(32, 5, TimeUnit.MINUTES))
-            .connectTimeout(20, TimeUnit.SECONDS)
+            .connectionPool(okhttp3.ConnectionPool(64, 5, TimeUnit.MINUTES))
+            .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
@@ -137,9 +137,9 @@ object MaxPlayOfflineVault {
                 }
 
                 val tmpFile = File(itemDir, "${prefix}${segmentIndex}.tmp")
-                body.byteStream().use { input ->
-                    FileOutputStream(tmpFile).use { output ->
-                        val buffer = ByteArray(32 * 1024)
+                java.io.BufferedInputStream(body.byteStream(), 128 * 1024).use { input ->
+                    java.io.BufferedOutputStream(FileOutputStream(tmpFile), 128 * 1024).use { output ->
+                        val buffer = ByteArray(128 * 1024)
                         var read: Int
                         while (input.read(buffer).also { read = it } != -1) {
                             output.write(buffer, 0, read)
@@ -906,11 +906,7 @@ object MaxPlayOfflineVault {
                     }
 
                     val sizeMb = String.format(java.util.Locale.US, "%.2f", sizeBytes / (1024.0 * 1024.0)).toDouble()
-                    val playbackUrl = if (localPort > 0) {
-                        "http://127.0.0.1:$localPort/device-audio/$id"
-                    } else {
-                        "https://maxplay.local/device-audio/$id"
-                    }
+                    val playbackUrl = "https://maxplay.local/device-audio/$id"
                     val artworkUrl = "https://maxplay.local/device-audio-art/$albumId?songId=$id"
 
                     val obj = JSONObject().apply {
@@ -951,6 +947,8 @@ object MaxPlayOfflineVault {
      * Serves embedded or MediaStore album artwork (`https://maxplay.local/device-audio-art/{albumId}?songId={id}`)
      * with disk caching.
      */
+    private val missingAudioArtCache = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     fun interceptDeviceAudioArtRequest(
         context: Context,
         url: String
@@ -975,7 +973,18 @@ object MaxPlayOfflineVault {
 
             val artDir = File(context.cacheDir, "audio_art")
             if (!artDir.exists()) artDir.mkdirs()
-            val cacheKey = if (albumId > 0L) "alb_$albumId" else "sng_$songId"
+            val cacheKey = if (albumId > 0L) "alb_${albumId}_sng_${songId}" else "sng_$songId"
+            if (missingAudioArtCache.contains(cacheKey)) {
+                return WebResourceResponse(
+                    "text/plain",
+                    "UTF-8",
+                    404,
+                    "Not Found",
+                    corsHeaders,
+                    ByteArrayInputStream(ByteArray(0))
+                )
+            }
+
             val cachedArt = File(artDir, "$cacheKey.jpg")
             if (cachedArt.exists() && cachedArt.length() > 256L) {
                 return WebResourceResponse(
@@ -1034,7 +1043,16 @@ object MaxPlayOfflineVault {
                     ByteArrayInputStream(finalBytes)
                 )
             }
-            null
+
+            missingAudioArtCache.add(cacheKey)
+            WebResourceResponse(
+                "text/plain",
+                "UTF-8",
+                404,
+                "Not Found",
+                corsHeaders,
+                ByteArrayInputStream(ByteArray(0))
+            )
         } catch (_: Exception) {
             null
         }

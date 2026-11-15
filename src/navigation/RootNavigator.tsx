@@ -367,6 +367,17 @@ export const RootNavigator: React.FC = () => {
         return 'HANDLED';
       }
 
+      // 1.5 If Music Edit Song Info, Equaliser, or FullScreenMusicPlayer is open, pop it cleanly
+      if (
+        typeof (window as any).__handleMusicModalBack === 'function' &&
+        (window as any).__handleMusicModalBack()
+      ) {
+        try {
+          window.history.pushState({ tab: activeTab, isDetailOpen: isCurrentDetailOpen }, '', cleanUrl);
+        } catch {}
+        return 'HANDLED';
+      }
+
       // 2. If on Downloads tab and OfflineDetailScreen or Transfer modal is open, pop it back to Downloads tab
       if (
         activeTab === 'downloads' &&

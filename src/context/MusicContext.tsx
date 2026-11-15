@@ -79,9 +79,10 @@ const DEFAULT_MUSIC_SETTINGS: MusicSettingsState = {
   audioFocusHandling: true,
 };
 
-// IndexedDB helper for persisting user-imported local audio files in Web/PWA & Android
+// IndexedDB helper for persisting user-imported local audio files AND custom song metadata/covers
 const IDB_NAME = 'maxplay_local_music_vault_v1';
 const IDB_STORE = 'audio_files';
+const IDB_META_STORE = 'custom_meta';
 
 interface StoredAudioRecord {
   id: string;
@@ -107,16 +108,74 @@ function openMusicIdb(): Promise<IDBDatabase> {
       reject(new Error('IndexedDB unavailable'));
       return;
     }
-    const req = indexedDB.open(IDB_NAME, 1);
+    const req = indexedDB.open(IDB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(IDB_STORE)) {
         db.createObjectStore(IDB_STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(IDB_META_STORE)) {
+        db.createObjectStore(IDB_META_STORE, { keyPath: 'id' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+async function loadCustomMetaFromIdb(): Promise<Record<string, CustomSongMetadata>> {
+  try {
+    const db = await openMusicIdb();
+    if (!db.objectStoreNames.contains(IDB_META_STORE)) return {};
+    return await new Promise<Record<string, CustomSongMetadata>>((resolve) => {
+      const tx = db.transaction(IDB_META_STORE, 'readonly');
+      const store = tx.objectStore(IDB_META_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const map: Record<string, CustomSongMetadata> = {};
+        for (const item of req.result || []) {
+          if (item && item.id && item.meta) {
+            map[item.id] = item.meta;
+          }
+        }
+        resolve(map);
+      };
+      req.onerror = () => resolve({});
+    });
+  } catch {
+    return {};
+  }
+}
+
+async function saveCustomMetaMapToIdb(metaMap: Record<string, CustomSongMetadata>): Promise<void> {
+  try {
+    const db = await openMusicIdb();
+    if (!db.objectStoreNames.contains(IDB_META_STORE)) return;
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(IDB_META_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_META_STORE);
+      for (const [id, meta] of Object.entries(metaMap)) {
+        store.put({ id, meta });
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {}
+}
+
+function normalizeFastAudioPlaybackUrl(url: string): string {
+  if (!url) return url;
+  if (
+    NativeBridgeService.isRunningInKotlinApp() &&
+    url.includes('127.0.0.1') &&
+    url.includes('/device-audio/')
+  ) {
+    const after = url.split('/device-audio/')[1];
+    if (after) {
+      return `https://maxplay.local/device-audio/${after}`;
+    }
+  }
+  return url;
 }
 
 async function loadImportedAudioFromIdb(): Promise<MusicTrack[]> {
@@ -445,7 +504,17 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     try {
       localStorage.setItem(MUSIC_STORAGE_KEYS.CUSTOM_META, JSON.stringify(customTracksMeta));
     } catch {}
+    saveCustomMetaMapToIdb(customTracksMeta);
   }, [customTracksMeta]);
+
+  // Hydrate custom song metadata from IndexedDB on mount (survives even if localStorage hit 5MB quota on phone)
+  useEffect(() => {
+    loadCustomMetaFromIdb().then((idbMeta) => {
+      if (idbMeta && Object.keys(idbMeta).length > 0) {
+        setCustomTracksMeta((prev) => ({ ...idbMeta, ...prev }));
+      }
+    });
+  }, []);
 
   useEffect(() => {
     try {
@@ -526,7 +595,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           mimeType: item.mimeType || 'audio/mpeg',
           dateAdded: Number(item.dateAdded) || Date.now(),
           dateModified: Number(item.dateModified) || Date.now(),
-          playbackUrl: item.playbackUrl,
+          playbackUrl: normalizeFastAudioPlaybackUrl(item.playbackUrl),
           artworkUrl: item.artworkUrl,
         }));
         setNativeTracks(mapped);
@@ -634,9 +703,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const mergedMap = new Map<string, MusicTrack>();
     for (const t of [...nativeTracks, ...importedTracks]) {
       const stats = playStats[t.id];
-      const custom = customTracksMeta[t.id];
+      const custom =
+        customTracksMeta[t.id] ||
+        (t.mediaId ? customTracksMeta[`dev_aud_${t.mediaId}`] || customTracksMeta[String(t.mediaId)] : undefined) ||
+        (t.fileName ? customTracksMeta[`fn_${t.fileName}`] : undefined);
       mergedMap.set(t.id, {
         ...t,
+        playbackUrl: normalizeFastAudioPlaybackUrl(t.playbackUrl),
         title: custom?.title?.trim() || t.title,
         artist: custom?.artist?.trim() || t.artist,
         album: custom?.album?.trim() || t.album,
@@ -758,29 +831,44 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const audio = audioRef.current;
       if (!track || !audio) return;
 
+      const fastUrl = normalizeFastAudioPlaybackUrl(track.playbackUrl);
+      audio.muted = false;
+      audio.volume = 1.0;
+      if (audio.src !== fastUrl) {
+        audio.src = fastUrl;
+      }
+      audio.playbackRate = playbackSpeed;
+      try {
+        audio.currentTime = 0;
+      } catch {}
+
+      if (autoStart) {
+        setIsPlaying(true);
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.then === 'function') {
+          playPromise
+            .then(() => {
+              setIsPlaying(true);
+              setTimeout(() => recordTrackPlayed(track.id), 60);
+            })
+            .catch(() => {
+              // Retry once after 30ms if WebView decoder was switching sources
+              setTimeout(() => {
+                audio
+                  .play()
+                  .then(() => {
+                    setIsPlaying(true);
+                    recordTrackPlayed(track.id);
+                  })
+                  .catch(() => setIsPlaying(false));
+              }, 30);
+            });
+        }
+      }
+
       setCurrentIndex(idx);
       setCurrentTime(0);
       setDuration(track.durationSec || 0);
-
-      audio.muted = false;
-      audio.volume = 1.0;
-      if (audio.src !== track.playbackUrl) {
-        audio.src = track.playbackUrl;
-      }
-      audio.playbackRate = playbackSpeed;
-      audio.currentTime = 0;
-
-      if (autoStart) {
-        audio
-          .play()
-          .then(() => {
-            setIsPlaying(true);
-            recordTrackPlayed(track.id);
-          })
-          .catch(() => {
-            setIsPlaying(false);
-          });
-      }
     },
     [playbackSpeed, recordTrackPlayed]
   );
@@ -1302,15 +1390,63 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   }, []);
 
-  const updateSongMetadata = useCallback((trackId: string, meta: CustomSongMetadata) => {
-    setCustomTracksMeta((prev) => ({
-      ...prev,
-      [trackId]: {
-        ...(prev[trackId] || {}),
-        ...meta,
-      },
-    }));
-  }, []);
+  const updateSongMetadata = useCallback(
+    (trackId: string, meta: CustomSongMetadata) => {
+      const matchedTrack = [...nativeTracks, ...importedTracks].find(
+        (t) => t.id === trackId || (t.mediaId && `dev_aud_${t.mediaId}` === trackId)
+      );
+      setCustomTracksMeta((prev) => {
+        const existing =
+          prev[trackId] ||
+          (matchedTrack?.mediaId ? prev[`dev_aud_${matchedTrack.mediaId}`] : undefined) ||
+          (matchedTrack?.fileName ? prev[`fn_${matchedTrack.fileName}`] : undefined) ||
+          {};
+        const merged: CustomSongMetadata = {
+          ...existing,
+          ...meta,
+        };
+        const next: Record<string, CustomSongMetadata> = {
+          ...prev,
+          [trackId]: merged,
+        };
+        if (matchedTrack?.mediaId) {
+          next[`dev_aud_${matchedTrack.mediaId}`] = merged;
+          next[String(matchedTrack.mediaId)] = merged;
+        }
+        if (matchedTrack?.fileName) {
+          next[`fn_${matchedTrack.fileName}`] = merged;
+        }
+        saveCustomMetaMapToIdb(next);
+        return next;
+      });
+    },
+    [nativeTracks, importedTracks]
+  );
+
+  // Expose hardware back button handler for Music modals (Edit song info -> Equalizer -> FullScreenMusicPlayer)
+  useEffect(() => {
+    const handleMusicBack = (): boolean => {
+      if (editingSongTrack) {
+        setEditingSongTrack(null);
+        return true;
+      }
+      if (isEqualizerOpen) {
+        setIsEqualizerOpen(false);
+        return true;
+      }
+      if (isFullScreenPlayerOpen) {
+        setIsFullScreenPlayerOpen(false);
+        return true;
+      }
+      return false;
+    };
+    (window as any).__handleMusicModalBack = handleMusicBack;
+    return () => {
+      if ((window as any).__handleMusicModalBack === handleMusicBack) {
+        delete (window as any).__handleMusicModalBack;
+      }
+    };
+  }, [editingSongTrack, isEqualizerOpen, isFullScreenPlayerOpen]);
 
   const clearRecentHistory = useCallback(() => {
     setPlayStats((prev) => {

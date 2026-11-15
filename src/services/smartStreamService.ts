@@ -254,19 +254,27 @@ export class SmartStreamService {
     return `${CACHE_PREFIX}v2_${h1.toString(36)}_${h2.toString(36)}_${tail}`;
   }
 
+  private static memoryStreamCache = new Map<string, ClientCachedStream>();
+
   /**
-   * Retrieves client-side cached stream URL if still valid.
+   * Retrieves client-side cached stream URL if still valid (0ms in-memory Map first, then sessionStorage/localStorage).
    */
   private static getClientCache(sourceUrl: string): ClientCachedStream | null {
     try {
       const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
       if (!cleanUrl) return null;
       const key = this.getCacheKey(cleanUrl);
+      const now = Date.now();
+
+      const memHit = this.memoryStreamCache.get(key);
+      if (memHit && memHit.m3u8Url && memHit.expiresAt > now + 5 * 60 * 1000) {
+        return memHit;
+      }
+
       const raw = sessionStorage.getItem(key) || localStorage.getItem(key);
       if (!raw) return null;
 
       const data: ClientCachedStream = JSON.parse(raw);
-      const now = Date.now();
 
       const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
 
@@ -302,6 +310,7 @@ export class SmartStreamService {
 
       // Ensure at least 5 minutes buffer before expiry
       if (data && data.m3u8Url && data.expiresAt > now + 5 * 60 * 1000) {
+        this.memoryStreamCache.set(key, data);
         return data;
       }
       // Stale or expired
@@ -361,6 +370,7 @@ export class SmartStreamService {
         cachedAt: Date.now(),
         meta: mergedMeta,
       };
+      this.memoryStreamCache.set(key, data);
       sessionStorage.setItem(key, JSON.stringify(data));
       localStorage.setItem(key, JSON.stringify(data));
     } catch (e) {
@@ -491,6 +501,7 @@ export class SmartStreamService {
       const cleanUrl = this.sanitizeStreamUrl(sourceUrl);
       if (!cleanUrl) return;
       const key = this.getCacheKey(cleanUrl);
+      this.memoryStreamCache.delete(key);
       sessionStorage.removeItem(key);
       localStorage.removeItem(key);
     } catch {
@@ -1650,6 +1661,7 @@ export class SmartStreamService {
   public static clearAllStreamCache(): number {
     let removed = 0;
     try {
+      this.memoryStreamCache.clear();
       for (let i = sessionStorage.length - 1; i >= 0; i--) {
         const k = sessionStorage.key(i);
         if (k && k.startsWith(CACHE_PREFIX)) {
