@@ -425,3 +425,75 @@ export function resolvePlaylistFirstSongArtwork(
   return firstTrack?.artworkUrl || undefined;
 }
 
+/**
+ * Cycles the 1-button 3-way playback mode:
+ * 1st mode -> Repeat All (repeatMode = 'all', isShuffle = false)
+ * 2nd mode -> Repeat One Song (repeatMode = 'one', isShuffle = false)
+ * 3rd mode -> Shuffle / Random Song (repeatMode = 'off', isShuffle = true)
+ */
+export function cycleThreeWayPlayMode(
+  repeatMode: RepeatMode,
+  isShuffle: boolean
+): {
+  repeatMode: RepeatMode;
+  isShuffle: boolean;
+  modeKey: 'repeat_all' | 'repeat_one' | 'shuffle';
+  label: string;
+} {
+  if (isShuffle) {
+    return {
+      repeatMode: 'all',
+      isShuffle: false,
+      modeKey: 'repeat_all',
+      label: 'Repeat all songs',
+    };
+  }
+  if (repeatMode === 'all') {
+    return {
+      repeatMode: 'one',
+      isShuffle: false,
+      modeKey: 'repeat_one',
+      label: 'Repeat current song',
+    };
+  }
+  if (repeatMode === 'one') {
+    return {
+      repeatMode: 'off',
+      isShuffle: true,
+      modeKey: 'shuffle',
+      label: 'Shuffle playback',
+    };
+  }
+  // If repeatMode was 'off' and isShuffle was false, start at 1st mode (Repeat All)
+  return {
+    repeatMode: 'all',
+    isShuffle: false,
+    modeKey: 'repeat_all',
+    label: 'Repeat all songs',
+  };
+}
+
+const RAINBOW_ACCENT_GRADIENTS = [
+  'from-[#FF3CAC] via-[#784BA0] to-[#2B86C5]',
+  'from-[#FA8BFF] via-[#2BD2FF] to-[#2BFF88]',
+  'from-[#FF6A88] via-[#A855F7] to-[#3B82F6]',
+  'from-[#7928CA] via-[#FF0080] to-[#FF8C00]',
+  'from-[#00DBDE] via-[#FC00FF] to-[#FFAA00]',
+  'from-[#60A5FA] via-[#A855F7] to-[#F472B6]',
+  'from-[#F857A6] via-[#FF5858] to-[#FFC837]',
+  'from-[#4158D0] via-[#C850C0] to-[#FFCC70]',
+];
+
+/**
+ * Returns a deterministic vibrant rainbow / multi-color accent gradient for any track without custom cover art.
+ */
+export function getRainbowGradientForTrack(seedStr?: string): string {
+  const s = (seedStr || 'maxplay').trim();
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return RAINBOW_ACCENT_GRADIENTS[hash % RAINBOW_ACCENT_GRADIENTS.length];
+}
+
+

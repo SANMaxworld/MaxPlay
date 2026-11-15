@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from 'react';
-import { Music2, Pause, Play, SkipForward } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Music2, Pause, Play, SkipForward, X } from 'lucide-react';
 import { useMusic } from '../../context/MusicContext';
+import { getRainbowGradientForTrack } from '../../utils/musicUtils';
 
 interface MiniMusicPlayerProps {
   hasBottomNav?: boolean;
+  activeTab?: string;
 }
 
 const PILL_GRADIENTS = [
@@ -13,7 +15,10 @@ const PILL_GRADIENTS = [
   'from-[#6B3B5E]/95 via-[#824672]/95 to-[#522B48]/95 border-pink-300/25',
 ];
 
-export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav = true }) => {
+export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({
+  hasBottomNav = true,
+  activeTab = 'home',
+}) => {
   const {
     currentTrack,
     isPlaying,
@@ -21,12 +26,27 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
     duration,
     isFullScreenPlayerOpen,
     isEqualizerOpen,
+    editingSongTrack,
     setIsFullScreenPlayerOpen,
     togglePlayPause,
     playNextTrack,
   } = useMusic();
 
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({});
+  const [temporarilyHidden, setTemporarilyHidden] = useState(false);
+
+  // Re-show capsule when track changes or user enters the Music tab
+  useEffect(() => {
+    setTemporarilyHidden(false);
+  }, [currentTrack?.id]);
+
+  // Temporarily hide capsule when switching to non-music tabs if user opens any sub-view,
+  // and always re-enable on the main 'music' tab
+  useEffect(() => {
+    if (activeTab === 'music') {
+      setTemporarilyHidden(false);
+    }
+  }, [activeTab]);
 
   const pillGradientClass = useMemo(() => {
     if (!currentTrack) return PILL_GRADIENTS[0];
@@ -37,11 +57,24 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
     return PILL_GRADIENTS[hash % PILL_GRADIENTS.length];
   }, [currentTrack]);
 
-  if (!currentTrack || isFullScreenPlayerOpen || isEqualizerOpen) return null;
+  // Hide when no track, when full-screen player / equaliser / edit info is open,
+  // or when ANY non-music Detail Screen is open (!hasBottomNav && activeTab !== 'music')
+  // so it NEVER blocks the Movie/Series Detail Screen Download button or detail tabs!
+  if (
+    !currentTrack ||
+    isFullScreenPlayerOpen ||
+    isEqualizerOpen ||
+    Boolean(editingSongTrack) ||
+    temporarilyHidden ||
+    (!hasBottomNav && activeTab !== 'music')
+  ) {
+    return null;
+  }
 
   const progressPct =
     duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
   const showArt = Boolean(currentTrack.artworkUrl && !imgFailed[currentTrack.id]);
+  const rainbowFallback = getRainbowGradientForTrack(currentTrack.id);
 
   // SVG circle progress math (radius = 15, circumference = 94.25)
   const radius = 15;
@@ -57,7 +90,7 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
     >
       <div
         onClick={() => setIsFullScreenPlayerOpen(true)}
-        className={`relative flex items-center justify-between h-[52px] pl-14 pr-3.5 rounded-full bg-gradient-to-r ${pillGradientClass} backdrop-blur-xl border shadow-[0_10px_30px_rgba(0,0,0,0.65)] cursor-pointer active:scale-[0.99] transition-transform`}
+        className={`relative flex items-center justify-between h-[52px] pl-14 pr-2.5 rounded-full bg-gradient-to-r ${pillGradientClass} backdrop-blur-xl border shadow-[0_10px_30px_rgba(0,0,0,0.65)] cursor-pointer active:scale-[0.99] transition-transform`}
       >
         {/* Left Protruding Vinyl Record Disc with Center Artwork */}
         <div
@@ -69,8 +102,10 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
           <div className="absolute inset-1 rounded-full border border-white/10 pointer-events-none" />
           <div className="absolute inset-2 rounded-full border border-white/5 pointer-events-none" />
 
-          {/* Center Label / Album Cover */}
-          <div className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#6D28D9] to-[#3B0764] flex items-center justify-center border border-white/20">
+          {/* Center Label / Album Cover (uses vibrant rainbow gradient fallback when no cover art) */}
+          <div
+            className={`w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br ${rainbowFallback} flex items-center justify-center border border-white/20`}
+          >
             {showArt ? (
               <img
                 src={currentTrack.artworkUrl}
@@ -88,7 +123,7 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
         </div>
 
         {/* Song Title & Artist */}
-        <div className="min-w-0 flex-1 pl-2 pr-3 text-left">
+        <div className="min-w-0 flex-1 pl-2 pr-2 text-left">
           <h4 className="text-[14px] font-extrabold text-white truncate leading-tight">
             {currentTrack.title}
           </h4>
@@ -97,9 +132,9 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
           </p>
         </div>
 
-        {/* Play/Pause with Circular Progress Ring + Next Track */}
+        {/* Play/Pause with Circular Progress Ring + Next Track + Quick Hide Button */}
         <div
-          className="flex items-center gap-2 shrink-0"
+          className="flex items-center gap-1.5 shrink-0"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -144,6 +179,18 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({ hasBottomNav =
           >
             <SkipForward className="w-4 h-4 fill-current" />
           </button>
+
+          {activeTab !== 'music' && (
+            <button
+              type="button"
+              aria-label="Hide Music Capsule Temporarily"
+              onClick={() => setTemporarilyHidden(true)}
+              className="w-7 h-7 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 active:scale-95 transition cursor-pointer"
+              title="Hide capsule temporarily"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
     </div>

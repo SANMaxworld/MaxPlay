@@ -1199,6 +1199,72 @@ class MaxPlayNativeBridge(
     }
 
     @JavascriptInterface
+    fun updateMusicNotificationFull(
+        title: String,
+        artist: String,
+        album: String,
+        isPlaying: Boolean,
+        artworkUrl: String,
+        durationMs: Long,
+        positionMs: Long,
+        isFavorite: Boolean,
+        playMode: String
+    ): Boolean {
+        return try {
+            activity.updateMusicNotificationState(
+                title = title,
+                artist = artist,
+                album = album,
+                isPlaying = isPlaying,
+                artworkUrl = artworkUrl,
+                durationMs = durationMs,
+                positionMs = positionMs,
+                isFavorite = isFavorite,
+                playMode = playMode
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun shareAudioFile(audioUrlOrId: String, title: String, artist: String): Boolean {
+        return try {
+            activity.shareDeviceAudioFile(audioUrlOrId, title, artist)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun applyNativeAudioEffects(
+        enabled: Boolean,
+        bandsJson: String,
+        bassLevel: Int,
+        immersiveLevel: Int,
+        volumeBoostPct: Int
+    ): Boolean {
+        return try {
+            val arr = try {
+                org.json.JSONArray(bandsJson)
+            } catch (_: Exception) {
+                org.json.JSONArray()
+            }
+            val bands = DoubleArray(5) { idx -> arr.optDouble(idx, 0.0) }
+            activity.applyNativeMusicAudioEffects(
+                enabled = enabled,
+                bandsDb = bands,
+                bassLevel = bassLevel,
+                immersiveLevel = immersiveLevel,
+                volumeBoostPct = volumeBoostPct
+            )
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
     fun cancelMusicNotification(): Boolean {
         return try {
             activity.cancelMusicNotificationState()

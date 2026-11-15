@@ -25,6 +25,41 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
         const val VIRTUAL_ASSET_HOST = "appassets.androidplatform.net"
         const val VIRTUAL_ASSET_ORIGIN = "https://appassets.androidplatform.net"
 
+        // Dedicated high-throughput HTTP/2 + HTTP/1.1 CDN segment client with 512KB TCP receive buffers
+        // so Server 1 & Server 2 1080p video segments never contend with scraper calls or drop to KB/s.
+        private val highSpeedSocketFactory = object : javax.net.SocketFactory() {
+            private val delegate = javax.net.SocketFactory.getDefault()
+            private fun configure(s: java.net.Socket): java.net.Socket {
+                try {
+                    s.tcpNoDelay = true
+                    s.receiveBufferSize = 512 * 1024
+                    s.keepAlive = true
+                } catch (_: Exception) {}
+                return s
+            }
+            override fun createSocket(): java.net.Socket = configure(delegate.createSocket())
+            override fun createSocket(host: String?, port: Int): java.net.Socket = configure(delegate.createSocket(host, port))
+            override fun createSocket(host: String?, port: Int, localHost: java.net.InetAddress?, localPort: Int): java.net.Socket =
+                configure(delegate.createSocket(host, port, localHost, localPort))
+            override fun createSocket(host: java.net.InetAddress?, port: Int): java.net.Socket = configure(delegate.createSocket(host, port))
+            override fun createSocket(address: java.net.InetAddress?, port: Int, localAddress: java.net.InetAddress?, localPort: Int): java.net.Socket =
+                configure(delegate.createSocket(address, port, localAddress, localPort))
+        }
+
+        private val streamCdnHttpClient: okhttp3.OkHttpClient by lazy {
+            InbuiltStreamScraper.okHttpClient.newBuilder()
+                .socketFactory(highSpeedSocketFactory)
+                .dispatcher(okhttp3.Dispatcher().apply {
+                    maxRequests = 128
+                    maxRequestsPerHost = 64
+                })
+                .connectionPool(okhttp3.ConnectionPool(64, 5, java.util.concurrent.TimeUnit.MINUTES))
+                .connectTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(35, java.util.concurrent.TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
+
         // Stores custom Referer/Origin headers discovered per stream host domain & root domain
         val hostRefererMap = java.util.concurrent.ConcurrentHashMap<String, String>()
 
@@ -389,7 +424,7 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 okReqBuilder.header("Range", rangeHdr)
             }
 
-            val response = InbuiltStreamScraper.okHttpClient.newCall(okReqBuilder.build()).execute()
+            val response = streamCdnHttpClient.newCall(okReqBuilder.build()).execute()
             val statusCode = response.code
             val finalResolvedUrl = response.request.url.toString()
             registerStreamReferer(finalResolvedUrl, customReferer)
@@ -411,7 +446,12 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             response.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
             response.header("Accept-Ranges")?.let { responseHeaders["Accept-Ranges"] = it }
 
-            val bodyStream = response.body?.byteStream() ?: ByteArrayInputStream(ByteArray(0))
+            val rawStream = response.body?.byteStream()
+            val bodyStream = if (rawStream != null) {
+                java.io.BufferedInputStream(rawStream, 256 * 1024)
+            } else {
+                ByteArrayInputStream(ByteArray(0))
+            }
             val encoding = if (isLikelyPlaylist) "UTF-8" else null
 
             WebResourceResponse(

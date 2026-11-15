@@ -43,6 +43,7 @@ import {
 } from '../../types/music';
 import {
   formatMusicDuration,
+  getRainbowGradientForTrack,
   resolvePlaylistFirstSongArtwork,
   searchLocalMusicLibrary,
 } from '../../utils/musicUtils';
@@ -76,6 +77,7 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     artists,
     folders,
     playlists,
+    favoriteIds,
     discovery,
     isScanningMusic,
     sortBy,
@@ -85,6 +87,7 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     isPlaying,
     setIsFullScreenPlayerOpen,
     setIsEqualizerOpen,
+    setEditingSongTrack,
     scanDeviceMusic,
     importLocalAudioFiles,
     playTrack,
@@ -92,6 +95,7 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     togglePlayPause,
     playNextInQueue,
     addToQueueEnd,
+    shareTrackFile,
     toggleFavorite,
     createPlaylist,
     renamePlaylist,
@@ -139,11 +143,7 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
   const [showAddSongsToPlaylistId, setShowAddSongsToPlaylistId] = useState<string | null>(null);
   const [showPlaylistInnerMenu, setShowPlaylistInnerMenu] = useState(false);
 
-  // Edit Song Info Modal
-  const [editingSongTrack, setEditingSongTrack] = useState<MusicTrack | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editArtist, setEditArtist] = useState('');
-  const [editAlbum, setEditAlbum] = useState('');
+  // Cover target track ID for quick cover change
   const [coverTargetTrackId, setCoverTargetTrackId] = useState<string | null>(null);
 
   // Toast feedback
@@ -186,10 +186,23 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     return () => window.removeEventListener('MAXPLAY_POP_STACK_MUSIC', handlePopMusicStack);
   }, [activeSubPage, activeSongMenuTrack, showSortSheet, isBatchSelectMode]);
 
-  const likedSongs = useMemo(
-    () => visibleTracks.filter((t) => Boolean(t.isFavorite)),
-    [visibleTracks]
-  );
+  // Order likedSongs by favoriteIds order so likedSongs[0] is always the most recently favourited song
+  const likedSongs = useMemo(() => {
+    const trackMap = new Map<string, MusicTrack>();
+    visibleTracks.forEach((t) => {
+      if (t.isFavorite) trackMap.set(t.id, t);
+    });
+    const ordered: MusicTrack[] = [];
+    for (const id of favoriteIds) {
+      const found = trackMap.get(id);
+      if (found) {
+        ordered.push(found);
+        trackMap.delete(id);
+      }
+    }
+    trackMap.forEach((t) => ordered.push(t));
+    return ordered;
+  }, [visibleTracks, favoriteIds]);
 
   // Selected Playlist object
   const selectedPlaylist = useMemo(() => {
@@ -313,15 +326,9 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     </div>
   );
 
-  // Render song square cover art (or halftone gradient fallback matching reference screenshot)
-  const renderSongThumbnail = (track: MusicTrack, indexHint = 0) => {
-    const gradients = [
-      'from-[#60A5FA] via-[#818CF8] to-[#F472B6]',
-      'from-[#A855F7] via-[#7C3AED] to-[#EC4899]',
-      'from-[#34D399] via-[#10B981] to-[#059669]',
-      'from-[#F59E0B] via-[#D97706] to-[#EA580C]',
-    ];
-    const grad = gradients[indexHint % gradients.length];
+  // Render song square cover art (or rainbow accent gradient fallback)
+  const renderSongThumbnail = (track: MusicTrack, _indexHint = 0) => {
+    const grad = getRainbowGradientForTrack(track.id);
 
     return (
       <div className="relative h-12 w-12 rounded-xl overflow-hidden bg-[#181820] shrink-0 border border-white/10 shadow-sm">
@@ -346,7 +353,7 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     );
   };
 
-  // Render standard song row (either with thumbnail on Homepage, or 2-digit number on Favourites/Recent/Playlist inner)
+  // Render standard song row (tapping any song plays it AND opens Music Details Screen first!)
   const renderSongRow = (
     track: MusicTrack,
     idx: number,
@@ -369,11 +376,12 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
             toggleTrackBatchSelection(track.id);
             return;
           }
-          if (isCurrent) {
-            setIsFullScreenPlayerOpen(true);
-          } else {
+          if (!isCurrent) {
             playTrack(track, listContext);
+          } else if (!isPlaying) {
+            togglePlayPause();
           }
+          setIsFullScreenPlayerOpen(true);
         }}
         className={`group flex items-center justify-between gap-3 py-2.5 px-1 rounded-xl transition cursor-pointer ${
           isCurrent ? 'bg-purple-500/[0.07]' : 'hover:bg-white/[0.04]'
@@ -1294,6 +1302,10 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     visibleTracks.find((t) => Boolean(t.artworkUrl))?.artworkUrl ||
     DEFAULT_MAXPLAY_MUSIC_POSTER;
 
+  const latestFavouriteCover =
+    likedSongs.find((t) => Boolean(t.artworkUrl))?.artworkUrl ||
+    (likedSongs.length > 0 ? DEFAULT_MAXPLAY_MUSIC_POSTER : null);
+
   return (
     <div className="relative h-full w-full bg-[#0A0A0A] text-white select-none overflow-hidden">
       {/* Hidden File Input for Importing Local Audio Files */}
@@ -1403,7 +1415,7 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
 
           {/* 3 FEATURE BOXES ROW: Favourites | Playlists | Recent */}
           <div className="mt-4 grid grid-cols-3 gap-2.5">
-            {/* Box 1: Favourites (Purple Gradient + MaxPlay Watermark + White Star Icon) */}
+            {/* Box 1: Favourites (Purple Gradient + Latest Favourited Song Poster Fade + White Star Icon) */}
             <button
               type="button"
               onClick={() => {
@@ -1412,9 +1424,18 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
               }}
               className="relative h-20 rounded-2xl overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#5B21B6] p-3 flex flex-col justify-between text-left shadow-lg shadow-purple-950/40 active:scale-95 transition cursor-pointer group"
             >
+              {latestFavouriteCover && (
+                <>
+                  <div
+                    className="absolute inset-0 bg-cover bg-center opacity-35 mix-blend-overlay pointer-events-none transition-transform duration-500 group-hover:scale-105"
+                    style={{ backgroundImage: `url(${latestFavouriteCover})` }}
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-[#4C1D95]/90 via-[#6D28D9]/45 to-transparent pointer-events-none" />
+                </>
+              )}
               {/* Subtle Play Watermark */}
               <Play className="absolute -right-2 -bottom-2 h-16 w-16 text-white/15 rotate-[-12deg] pointer-events-none" />
-              <Star className="h-6 w-6 text-white fill-white drop-shadow" />
+              <Star className="h-6 w-6 text-white fill-white drop-shadow relative z-10" />
               <span className="text-xs sm:text-sm font-extrabold text-white tracking-tight relative z-10">
                 Favourites
               </span>
@@ -1954,16 +1975,27 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
               <button
                 type="button"
                 onClick={() => {
-                  setEditingSongTrack(activeSongMenuTrack);
-                  setEditTitle(activeSongMenuTrack.title);
-                  setEditArtist(activeSongMenuTrack.artist);
-                  setEditAlbum(activeSongMenuTrack.album);
+                  const target = activeSongMenuTrack;
                   setActiveSongMenuTrack(null);
+                  setEditingSongTrack(target);
                 }}
                 className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-white/10 cursor-pointer"
               >
                 <Edit3 className="h-4 w-4 text-emerald-400" />
                 <span>Edit song info</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = activeSongMenuTrack;
+                  setActiveSongMenuTrack(null);
+                  await shareTrackFile(target);
+                }}
+                className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-white/10 cursor-pointer"
+              >
+                <Share2 className="h-4 w-4 text-pink-400" />
+                <span>Share</span>
               </button>
 
               <button
@@ -2245,74 +2277,6 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
                   </button>
                 );
               })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ===================================================================== */}
-      {/* EDIT SONG INFO MODAL                                                  */}
-      {/* ===================================================================== */}
-      {editingSongTrack && (
-        <div
-          onClick={() => setEditingSongTrack(null)}
-          className="fixed inset-0 z-[170] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-3xl bg-[#16161F] border border-white/15 p-5 shadow-2xl space-y-3"
-          >
-            <h3 className="text-base font-extrabold text-white">Edit Song Info</h3>
-            <div>
-              <label className="text-[11px] font-bold text-[#A1A1AA]">Song Title</label>
-              <input
-                type="text"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                className="mt-1 w-full rounded-xl bg-black/50 border border-white/15 px-3 py-2 text-xs text-white focus:border-[#A855F7] focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] font-bold text-[#A1A1AA]">Artist</label>
-              <input
-                type="text"
-                value={editArtist}
-                onChange={(e) => setEditArtist(e.target.value)}
-                className="mt-1 w-full rounded-xl bg-black/50 border border-white/15 px-3 py-2 text-xs text-white focus:border-[#A855F7] focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] font-bold text-[#A1A1AA]">Album</label>
-              <input
-                type="text"
-                value={editAlbum}
-                onChange={(e) => setEditAlbum(e.target.value)}
-                className="mt-1 w-full rounded-xl bg-black/50 border border-white/15 px-3 py-2 text-xs text-white focus:border-[#A855F7] focus:outline-none"
-              />
-            </div>
-            <div className="pt-2 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setEditingSongTrack(null)}
-                className="rounded-xl bg-white/10 px-4 py-2 text-xs font-semibold text-zinc-300 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  updateSongMetadata(editingSongTrack.id, {
-                    title: editTitle.trim() || editingSongTrack.title,
-                    artist: editArtist.trim() || editingSongTrack.artist,
-                    album: editAlbum.trim() || editingSongTrack.album,
-                  });
-                  setEditingSongTrack(null);
-                  triggerToast('Song info updated');
-                }}
-                className="rounded-xl bg-[#9333EA] px-4 py-2 text-xs font-bold text-white cursor-pointer"
-              >
-                Save
-              </button>
             </div>
           </div>
         </div>

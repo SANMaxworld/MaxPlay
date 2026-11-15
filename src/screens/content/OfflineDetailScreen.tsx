@@ -24,6 +24,51 @@ interface OfflineDetailScreenProps {
   onSelectContent?: (content: ContentItem) => void;
 }
 
+const OFFLINE_VIDEO_PROGRESS_KEY = 'maxplay_offline_video_progress_v1';
+
+function getOfflineVideoKey(file: DownloadedFile): string {
+  return String(file.storageKey || file.id || file.videoUrl || file.title || 'unknown');
+}
+
+function loadOfflineVideoSavedTime(file: DownloadedFile): number {
+  try {
+    const raw = localStorage.getItem(OFFLINE_VIDEO_PROGRESS_KEY);
+    if (!raw) return 0;
+    const map = JSON.parse(raw) as Record<string, { time: number; duration?: number; updatedAt: number }>;
+    const key = getOfflineVideoKey(file);
+    const entry = map[key];
+    if (!entry || typeof entry.time !== 'number' || entry.time < 2) return 0;
+    if (entry.duration && entry.duration > 15 && entry.duration - entry.time < 6) {
+      return 0;
+    }
+    return entry.time;
+  } catch {
+    return 0;
+  }
+}
+
+function saveOfflineVideoProgress(file: DownloadedFile, timeSec: number, durationSec?: number): void {
+  if (!Number.isFinite(timeSec) || timeSec < 1) return;
+  try {
+    const raw = localStorage.getItem(OFFLINE_VIDEO_PROGRESS_KEY);
+    const map: Record<string, { time: number; duration?: number; updatedAt: number }> = raw
+      ? JSON.parse(raw)
+      : {};
+    const key = getOfflineVideoKey(file);
+    // If user finished watching (> 97%), reset saved position to 0
+    if (durationSec && durationSec > 20 && timeSec / durationSec >= 0.97) {
+      delete map[key];
+    } else {
+      map[key] = {
+        time: Math.floor(timeSec),
+        duration: durationSec && Number.isFinite(durationSec) ? Math.floor(durationSec) : map[key]?.duration,
+        updatedAt: Date.now(),
+      };
+    }
+    localStorage.setItem(OFFLINE_VIDEO_PROGRESS_KEY, JSON.stringify(map));
+  } catch {}
+}
+
 export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
   initialFile,
   initialBlobUrl,
@@ -42,6 +87,7 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
   const [recSeed, setRecSeed] = useState(1);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const savedInitialTime = useMemo(() => loadOfflineVideoSavedTime(currentFile), [currentFile]);
 
   const isLocalDeviceVideo =
     currentFile.category === 'local' ||
@@ -274,6 +320,13 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
             availableLanguages={currentFile.language ? [currentFile.language] : ['Default']}
             activeLanguage={currentFile.language || 'Default'}
             activeQuality={currentFile.quality || 'auto'}
+            initialTime={savedInitialTime}
+            onProgress={(time, _isFinished, totalDuration) => {
+              saveOfflineVideoProgress(currentFile, time, totalDuration);
+            }}
+            onPause={(time, totalDuration) => {
+              saveOfflineVideoProgress(currentFile, time, totalDuration);
+            }}
             onBack={onBack}
             autoPlay={true}
             onNext={hasNextEpisode ? handleNextEpisode : undefined}

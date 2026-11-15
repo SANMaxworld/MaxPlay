@@ -20,10 +20,12 @@ import {
   MusicTrack,
   RepeatMode,
   SleepTimerMode,
+  VolumeBoostLevel,
 } from '../types/music';
 import {
   computeLibraryDiscovery,
   computeNextQueueIndex,
+  cycleThreeWayPlayMode,
   EQUALIZER_FREQUENCIES,
   filterVisibleLibrarySongs,
   getEqualizerPresetBands,
@@ -48,6 +50,7 @@ const MUSIC_STORAGE_KEYS = {
   LAST_QUEUE_STATE: 'maxplay_music_last_queue_v1',
   EQUALIZER: 'maxplay_music_equalizer_v1',
   CUSTOM_META: 'maxplay_music_custom_meta_v1',
+  VOLUME_BOOST: 'maxplay_music_vol_boost_v1',
 };
 
 const DEFAULT_EQUALIZER_STATE: MusicEqualizerState = {
@@ -201,6 +204,7 @@ interface MusicContextValue {
   artists: MusicArtist[];
   folders: MusicFolder[];
   playlists: MusicPlaylist[];
+  favoriteIds: string[];
   discovery: {
     mostPlayed: MusicTrack[];
     recentlyAdded: MusicTrack[];
@@ -227,10 +231,15 @@ interface MusicContextValue {
   playbackSpeed: number;
   repeatMode: RepeatMode;
   isShuffle: boolean;
+  volumeBoostPct: VolumeBoostLevel;
+  setVolumeBoostPct: (pct: VolumeBoostLevel) => void;
+  cycleVolumeBoost: () => void;
   isFullScreenPlayerOpen: boolean;
   setIsFullScreenPlayerOpen: (open: boolean) => void;
   isEqualizerOpen: boolean;
   setIsEqualizerOpen: (open: boolean) => void;
+  editingSongTrack: MusicTrack | null;
+  setEditingSongTrack: (track: MusicTrack | null) => void;
   equalizer: MusicEqualizerState;
   setEqualizerEnabled: (enabled: boolean) => void;
   setEqualizerPreset: (preset: EqualizerPreset) => void;
@@ -254,8 +263,10 @@ interface MusicContextValue {
   setPlaybackSpeed: (speed: number) => void;
   setRepeatMode: (mode: RepeatMode) => void;
   cycleRepeatMode: () => void;
+  cyclePlayModeThreeWay: () => void;
   toggleShuffle: () => void;
   setSleepTimer: (mode: SleepTimerMode) => void;
+  shareTrackFile: (track: MusicTrack) => Promise<boolean>;
 
   // Queue Management
   playNextInQueue: (track: MusicTrack) => void;
@@ -371,13 +382,24 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [playbackSpeed, setPlaybackSpeedState] = useState<number>(1.0);
-  const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>('all');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
+  const [volumeBoostPct, setVolumeBoostPctState] = useState<VolumeBoostLevel>(() => {
+    try {
+      const saved = Number(localStorage.getItem(MUSIC_STORAGE_KEYS.VOLUME_BOOST));
+      if (saved === 200 || saved === 300) return saved;
+      return 100;
+    } catch {
+      return 100;
+    }
+  });
   const [isFullScreenPlayerOpen, setIsFullScreenPlayerOpen] = useState<boolean>(false);
   const [isEqualizerOpen, setIsEqualizerOpen] = useState<boolean>(false);
+  const [editingSongTrack, setEditingSongTrack] = useState<MusicTrack | null>(null);
   const [sleepTimerMode, setSleepTimerMode] = useState<SleepTimerMode>('off');
   const [sleepTimerRemainingSec, setSleepTimerRemainingSec] = useState<number | null>(null);
   const [activeQueueSourceLabel, setActiveQueueSourceLabel] = useState<string>('Library');
+  const lastTimeUpdateMsRef = useRef<number>(0);
 
   const [equalizer, setEqualizer] = useState<MusicEqualizerState>(() => {
     try {
@@ -397,15 +419,22 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
-  // Web Audio API Equaliser Nodes Ref
+  // Web Audio API Equaliser Nodes Ref (used only in non-Android-APK Web mode)
   const eqAudioGraphRef = useRef<{
     ctx: AudioContext;
     bands: BiquadFilterNode[];
     bassFilter: BiquadFilterNode;
     immersiveFilter: BiquadFilterNode;
+    gainNode: GainNode;
   } | null>(null);
 
   // Persist user preferences
+  useEffect(() => {
+    try {
+      localStorage.setItem(MUSIC_STORAGE_KEYS.VOLUME_BOOST, String(volumeBoostPct));
+    } catch {}
+  }, [volumeBoostPct]);
+
   useEffect(() => {
     try {
       localStorage.setItem(MUSIC_STORAGE_KEYS.EQUALIZER, JSON.stringify(equalizer));
@@ -612,6 +641,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         artist: custom?.artist?.trim() || t.artist,
         album: custom?.album?.trim() || t.album,
         artworkUrl: custom?.artworkUrl || t.artworkUrl,
+        lyrics: custom?.lyrics !== undefined ? custom.lyrics : t.lyrics,
         isFavorite: favSet.has(t.id),
         playCount: stats?.playCount || 0,
         lastPlayedAt: stats?.lastPlayedAt || 0,
@@ -656,10 +686,17 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (typeof window === 'undefined') return;
     const audio = new Audio();
     audio.preload = 'auto';
+    audio.muted = false;
+    audio.volume = 1.0;
     audioRef.current = audio;
 
+    // Throttle timeupdate state updates to ~250ms so scrolling MusicHomeScreen stays at a locked 60fps
     const onTimeUpdate = () => {
-      setCurrentTime(audio.currentTime || 0);
+      const now = performance.now();
+      if (now - lastTimeUpdateMsRef.current >= 250 || (audio.currentTime || 0) < 0.3) {
+        lastTimeUpdateMsRef.current = now;
+        setCurrentTime(audio.currentTime || 0);
+      }
     };
     const onLoadedMetadata = () => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
@@ -725,6 +762,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentTime(0);
       setDuration(track.durationSec || 0);
 
+      audio.muted = false;
+      audio.volume = 1.0;
       if (audio.src !== track.playbackUrl) {
         audio.src = track.playbackUrl;
       }
@@ -890,8 +929,38 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setRepeatMode((prev) => (prev === 'off' ? 'all' : prev === 'all' ? 'one' : 'off'));
   }, []);
 
+  // 1-Button 3-Mode Cycle: Repeat All -> Repeat One -> Shuffle (Random) -> Repeat All
+  const cyclePlayModeThreeWay = useCallback(() => {
+    const next = cycleThreeWayPlayMode(repeatMode, isShuffle);
+    setRepeatMode(next.repeatMode);
+    setIsShuffle(next.isShuffle);
+  }, [repeatMode, isShuffle]);
+
   const toggleShuffle = useCallback(() => {
     setIsShuffle((prev) => !prev);
+  }, []);
+
+  const setVolumeBoostPct = useCallback((pct: VolumeBoostLevel) => {
+    const valid: VolumeBoostLevel = pct === 200 || pct === 300 ? pct : 100;
+    setVolumeBoostPctState(valid);
+  }, []);
+
+  const cycleVolumeBoost = useCallback(() => {
+    setVolumeBoostPctState((prev) => (prev === 100 ? 200 : prev === 200 ? 300 : 100));
+  }, []);
+
+  // Share the actual audio file (via Android Intent.ACTION_SEND EXTRA_STREAM or Web Share API files)
+  const shareTrackFile = useCallback(async (track: MusicTrack): Promise<boolean> => {
+    if (!track) return false;
+    return await NativeBridgeService.shareAudioFileNative({
+      id: track.id,
+      mediaId: track.mediaId,
+      playbackUrl: track.playbackUrl,
+      title: track.title,
+      artist: track.artist,
+      fileName: track.fileName,
+      mimeType: track.mimeType,
+    });
   }, []);
 
   // Sync Web MediaSession API + Native Android Notification Shade & Lock-Screen Media Widget
@@ -900,6 +969,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       NativeBridgeService.cancelMusicNotificationNative();
       return;
     }
+
+    const currentPlayModeLabel = isShuffle
+      ? 'shuffle'
+      : repeatMode === 'one'
+      ? 'repeat_one'
+      : 'repeat_all';
 
     if (settings.notificationControls || settings.lockScreenControls) {
       NativeBridgeService.updateMusicNotificationNative({
@@ -910,6 +985,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         artworkUrl: currentTrack.artworkUrl,
         durationSec: duration || currentTrack.durationSec || 0,
         positionSec: currentTime || 0,
+        isFavorite: Boolean(currentTrack.isFavorite),
+        playMode: currentPlayModeLabel,
       });
     }
 
@@ -943,6 +1020,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     currentTrack,
     isPlaying,
     duration,
+    repeatMode,
+    isShuffle,
     settings.notificationControls,
     settings.lockScreenControls,
     togglePlayPause,
@@ -963,6 +1042,16 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         playNextTrack();
       } else if (act === 'prev') {
         playPreviousTrack();
+      } else if (act === 'repeat_cycle') {
+        cyclePlayModeThreeWay();
+      } else if (act === 'fav_toggle') {
+        if (currentTrack) {
+          setFavoriteIds((prev) =>
+            prev.includes(currentTrack.id)
+              ? prev.filter((id) => id !== currentTrack.id)
+              : [currentTrack.id, ...prev]
+          );
+        }
       } else if (act === 'seek' && typeof detail.seekTime === 'number' && detail.seekTime >= 0) {
         seekTo(detail.seekTime);
       }
@@ -971,11 +1060,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       window.removeEventListener('MAXPLAY_NATIVE_MEDIA_ACTION', handleNativeMediaAction);
     };
-  }, [togglePlayPause, playNextTrack, playPreviousTrack, seekTo]);
+  }, [togglePlayPause, playNextTrack, playPreviousTrack, cyclePlayModeThreeWay, currentTrack, seekTo]);
 
-  // Apply 5-Band Equaliser + Bass + Immersive Audio via Web Audio API when enabled
+  // Apply 5-Band Equaliser + Bass + Immersive Audio + Volume Boost:
+  // - Inside Native Android APK: use Android hardware Equalizer, BassBoost & LoudnessEnhancer (NEVER call createMediaElementSource which silences WebView <audio>!)
+  // - Inside Web Browser: use Web Audio API BiquadFilterNode + GainNode
   const ensureEqualizerGraph = useCallback(() => {
     if (typeof window === 'undefined' || !audioRef.current) return null;
+    // CRITICAL: Inside the Android APK, NEVER attach createMediaElementSource to <audio> because
+    // Android WebView silences MediaElementAudioSourceNode on custom virtual-host streams (maxplay.local).
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      return null;
+    }
     if (eqAudioGraphRef.current) {
       if (eqAudioGraphRef.current.ctx.state === 'suspended') {
         eqAudioGraphRef.current.ctx.resume().catch(() => {});
@@ -1007,6 +1103,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       immersiveFilter.frequency.value = 6500;
       immersiveFilter.gain.value = 0;
 
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = 1.0;
+
       let prevNode: AudioNode = source;
       for (const b of bands) {
         prevNode.connect(b);
@@ -1014,9 +1113,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       prevNode.connect(bassFilter);
       bassFilter.connect(immersiveFilter);
-      immersiveFilter.connect(ctx.destination);
+      immersiveFilter.connect(gainNode);
+      gainNode.connect(ctx.destination);
 
-      eqAudioGraphRef.current = { ctx, bands, bassFilter, immersiveFilter };
+      eqAudioGraphRef.current = { ctx, bands, bassFilter, immersiveFilter, gainNode };
       return eqAudioGraphRef.current;
     } catch {
       return null;
@@ -1024,76 +1124,82 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   useEffect(() => {
+    // Always keep HTML5 <audio> unmuted and at full base volume so sound never cuts out
+    if (audioRef.current) {
+      audioRef.current.muted = false;
+      audioRef.current.volume = 1.0;
+    }
+
+    // 1. Native Android hardware Equalizer + BassBoost + LoudnessEnhancer (for 100%/200%/300% boost)
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      NativeBridgeService.applyNativeAudioEffects({
+        enabled: equalizer.enabled,
+        bands: equalizer.bands,
+        bassLevel: equalizer.bassLevel,
+        immersiveLevel: equalizer.immersiveLevel,
+        volumeBoostPct,
+      });
+      return;
+    }
+
+    // 2. Web Audio API graph in standard browser
+    if (equalizer.enabled || volumeBoostPct > 100) {
+      ensureEqualizerGraph();
+    }
     const graph = eqAudioGraphRef.current;
     if (!graph) return;
+    if (graph.ctx.state === 'suspended') {
+      graph.ctx.resume().catch(() => {});
+    }
     const active = equalizer.enabled;
     graph.bands.forEach((filter, idx) => {
       filter.gain.value = active ? equalizer.bands[idx] || 0 : 0;
     });
     graph.bassFilter.gain.value = active ? (equalizer.bassLevel / 100) * 10 : 0;
     graph.immersiveFilter.gain.value = active ? (equalizer.immersiveLevel / 100) * 8 : 0;
-  }, [equalizer]);
+    graph.gainNode.gain.value = Math.max(1, (volumeBoostPct || 100) / 100);
+  }, [equalizer, volumeBoostPct, isPlaying, ensureEqualizerGraph]);
 
-  const setEqualizerEnabled = useCallback(
-    (enabled: boolean) => {
-      ensureEqualizerGraph();
-      setEqualizer((prev) => ({ ...prev, enabled }));
-    },
-    [ensureEqualizerGraph]
-  );
+  const setEqualizerEnabled = useCallback((enabled: boolean) => {
+    setEqualizer((prev) => ({ ...prev, enabled }));
+  }, []);
 
-  const setEqualizerPreset = useCallback(
-    (preset: EqualizerPreset) => {
-      ensureEqualizerGraph();
-      setEqualizer((prev) => ({
+  const setEqualizerPreset = useCallback((preset: EqualizerPreset) => {
+    setEqualizer((prev) => ({
+      ...prev,
+      preset,
+      bands: getEqualizerPresetBands(preset, prev.bands),
+    }));
+  }, []);
+
+  const setEqualizerBand = useCallback((bandIndex: number, dbValue: number) => {
+    const clamped = Math.max(-12, Math.min(12, Math.round(dbValue)));
+    setEqualizer((prev) => {
+      const nextBands = [...prev.bands] as [number, number, number, number, number];
+      if (bandIndex >= 0 && bandIndex < 5) {
+        nextBands[bandIndex] = clamped;
+      }
+      return {
         ...prev,
-        preset,
-        bands: getEqualizerPresetBands(preset, prev.bands),
-      }));
-    },
-    [ensureEqualizerGraph]
-  );
+        preset: 'Custom',
+        bands: nextBands,
+      };
+    });
+  }, []);
 
-  const setEqualizerBand = useCallback(
-    (bandIndex: number, dbValue: number) => {
-      ensureEqualizerGraph();
-      const clamped = Math.max(-12, Math.min(12, Math.round(dbValue)));
-      setEqualizer((prev) => {
-        const nextBands = [...prev.bands] as [number, number, number, number, number];
-        if (bandIndex >= 0 && bandIndex < 5) {
-          nextBands[bandIndex] = clamped;
-        }
-        return {
-          ...prev,
-          preset: 'Custom',
-          bands: nextBands,
-        };
-      });
-    },
-    [ensureEqualizerGraph]
-  );
+  const setEqualizerBass = useCallback((level: number) => {
+    setEqualizer((prev) => ({
+      ...prev,
+      bassLevel: Math.max(0, Math.min(100, Math.round(level))),
+    }));
+  }, []);
 
-  const setEqualizerBass = useCallback(
-    (level: number) => {
-      ensureEqualizerGraph();
-      setEqualizer((prev) => ({
-        ...prev,
-        bassLevel: Math.max(0, Math.min(100, Math.round(level))),
-      }));
-    },
-    [ensureEqualizerGraph]
-  );
-
-  const setEqualizerImmersive = useCallback(
-    (level: number) => {
-      ensureEqualizerGraph();
-      setEqualizer((prev) => ({
-        ...prev,
-        immersiveLevel: Math.max(0, Math.min(100, Math.round(level))),
-      }));
-    },
-    [ensureEqualizerGraph]
-  );
+  const setEqualizerImmersive = useCallback((level: number) => {
+    setEqualizer((prev) => ({
+      ...prev,
+      immersiveLevel: Math.max(0, Math.min(100, Math.round(level))),
+    }));
+  }, []);
 
   // Queue operations
   const playNextInQueue = useCallback(
@@ -1333,6 +1439,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     artists,
     folders,
     playlists,
+    favoriteIds,
     discovery,
     isScanningMusic,
     sortBy,
@@ -1351,10 +1458,15 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playbackSpeed,
     repeatMode,
     isShuffle,
+    volumeBoostPct,
+    setVolumeBoostPct,
+    cycleVolumeBoost,
     isFullScreenPlayerOpen,
     setIsFullScreenPlayerOpen,
     isEqualizerOpen,
     setIsEqualizerOpen,
+    editingSongTrack,
+    setEditingSongTrack,
     equalizer,
     setEqualizerEnabled,
     setEqualizerPreset,
@@ -1376,8 +1488,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPlaybackSpeed,
     setRepeatMode,
     cycleRepeatMode,
+    cyclePlayModeThreeWay,
     toggleShuffle,
     setSleepTimer,
+    shareTrackFile,
     playNextInQueue,
     addToQueueEnd,
     removeFromQueueIndex,

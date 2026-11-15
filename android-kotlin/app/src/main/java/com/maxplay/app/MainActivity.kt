@@ -1781,6 +1781,9 @@ class MainActivity : AppCompatActivity() {
                     override fun onSeekTo(pos: Long) {
                         dispatchMusicActionToWebView("seek", pos / 1000.0)
                     }
+                    override fun onCustomAction(action: String, extras: android.os.Bundle?) {
+                        dispatchMusicActionToWebView(action, 0.0)
+                    }
                 })
                 session.isActive = true
                 musicMediaSession = session
@@ -1799,8 +1802,163 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private var nativeEqualizer: android.media.audiofx.Equalizer? = null
+    private var nativeBassBoost: android.media.audiofx.BassBoost? = null
+    private var nativeLoudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
+
+    /**
+     * Applies hardware-accelerated Android Equalizer, BassBoost, and LoudnessEnhancer (100% / 200% / 300% Volume Boost)
+     * directly on Android's output mix without ever silencing or CORS-tainting the WebView <audio> element.
+     */
+    fun applyNativeMusicAudioEffects(
+        enabled: Boolean,
+        bandsDb: DoubleArray,
+        bassLevel: Int,
+        immersiveLevel: Int,
+        volumeBoostPct: Int
+    ): Boolean {
+        return try {
+            runOnUiThread {
+                try {
+                    if (nativeEqualizer == null) {
+                        try {
+                            nativeEqualizer = android.media.audiofx.Equalizer(0, 0)
+                        } catch (_: Exception) {}
+                    }
+                    if (nativeBassBoost == null) {
+                        try {
+                            nativeBassBoost = android.media.audiofx.BassBoost(0, 0)
+                        } catch (_: Exception) {}
+                    }
+                    if (nativeLoudnessEnhancer == null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                        try {
+                            nativeLoudnessEnhancer = android.media.audiofx.LoudnessEnhancer(0)
+                        } catch (_: Exception) {}
+                    }
+
+                    nativeEqualizer?.let { eq ->
+                        eq.enabled = enabled
+                        if (enabled) {
+                            val numBands = eq.numberOfBands.toInt()
+                            val range = eq.bandLevelRange
+                            val minLevel = range.getOrNull(0)?.toInt() ?: -1200
+                            val maxLevel = range.getOrNull(1)?.toInt() ?: 1200
+                            for (b in 0 until minOf(numBands, bandsDb.size)) {
+                                // Convert dB (-12..+12) to millibels (-1200..+1200)
+                                val targetMb = (bandsDb[b] * 100.0).toInt().coerceIn(minLevel, maxLevel).toShort()
+                                try {
+                                    eq.setBandLevel(b.toShort(), targetMb)
+                                } catch (_: Exception) {}
+                            }
+                        }
+                    }
+
+                    nativeBassBoost?.let { bb ->
+                        val activeBass = enabled && bassLevel > 0
+                        bb.enabled = activeBass
+                        if (activeBass && bb.strengthSupported) {
+                            val strength = (bassLevel.coerceIn(0, 100) * 10).toShort()
+                            try {
+                                bb.setStrength(strength)
+                            } catch (_: Exception) {}
+                        }
+                    }
+
+                    nativeLoudnessEnhancer?.let { le ->
+                        val extraGainMb = when {
+                            volumeBoostPct >= 300 -> 1800
+                            volumeBoostPct >= 200 -> 1000
+                            enabled && immersiveLevel > 0 -> (immersiveLevel.coerceIn(0, 100) * 6)
+                            else -> 0
+                        }
+                        le.enabled = extraGainMb > 0
+                        if (extraGainMb > 0) {
+                            try {
+                                le.setTargetGain(extraGainMb)
+                            } catch (_: Exception) {}
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Shares the actual local MP3/Audio song file via Android's native Share Sheet (WhatsApp, Telegram, Nearby Share, etc.)
+     */
+    fun shareDeviceAudioFile(audioUrlOrId: String, title: String, artist: String): Boolean {
+        return try {
+            runOnUiThread {
+                try {
+                    val clean = audioUrlOrId.trim()
+                    val mediaId: Long? = when {
+                        clean.contains("/device-audio/") -> {
+                            clean.substringAfter("/device-audio/")
+                                .substringBefore("?")
+                                .substringBefore("/")
+                                .trim()
+                                .toLongOrNull()
+                        }
+                        clean.startsWith("media_") -> {
+                            clean.removePrefix("media_").trim().toLongOrNull()
+                        }
+                        else -> clean.toLongOrNull()
+                    }
+
+                    if (mediaId != null && mediaId > 0L) {
+                        val contentUri = android.content.ContentUris.withAppendedId(
+                            android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                            mediaId
+                        )
+                        val mimeType = contentResolver.getType(contentUri) ?: "audio/mpeg"
+                        val displayTitle = if (artist.isNotBlank() && !artist.equals("Unknown Artist", ignoreCase = true)) {
+                            "$title - $artist"
+                        } else {
+                            title.ifBlank { "MaxPlay Song" }
+                        }
+                        val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = if (mimeType.startsWith("audio/")) mimeType else "audio/*"
+                            putExtra(android.content.Intent.EXTRA_STREAM, contentUri)
+                            putExtra(android.content.Intent.EXTRA_TITLE, displayTitle)
+                            putExtra(android.content.Intent.EXTRA_SUBJECT, displayTitle)
+                            clipData = android.content.ClipData.newRawUri(displayTitle, contentUri)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        val chooser = android.content.Intent.createChooser(sendIntent, "Share \"$title\" via")
+                        chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(chooser)
+                    } else {
+                        val fallbackIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+                            putExtra(android.content.Intent.EXTRA_TEXT, "Listening to $title by $artist on MaxPlay")
+                        }
+                        val chooser = android.content.Intent.createChooser(fallbackIntent, "Share \"$title\" via")
+                        chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(chooser)
+                    }
+                } catch (_: Exception) {}
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun resolveMusicArtworkBitmap(artworkUrl: String): android.graphics.Bitmap? {
         return try {
+            if (artworkUrl.startsWith("data:image/")) {
+                val base64Part = artworkUrl.substringAfter("base64,", "")
+                if (base64Part.isNotEmpty()) {
+                    val bytes = android.util.Base64.decode(base64Part, android.util.Base64.DEFAULT)
+                    if (bytes.isNotEmpty()) {
+                        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
+                }
+            }
             if (artworkUrl.contains("/device-audio-art/")) {
                 val after = artworkUrl.substringAfter("/device-audio-art/")
                 val albumId = after.substringBefore("?").substringBefore("/").toLongOrNull() ?: 0L
@@ -1843,7 +2001,9 @@ class MainActivity : AppCompatActivity() {
         isPlaying: Boolean,
         artworkUrl: String,
         durationMs: Long,
-        positionMs: Long
+        positionMs: Long,
+        isFavorite: Boolean = false,
+        playMode: String = "repeat_all"
     ) {
         InbuiltStreamScraper.backgroundExecutor.execute {
             val artBitmap = resolveMusicArtworkBitmap(artworkUrl)
@@ -1868,6 +2028,13 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
+                    val repeatLabel = when (playMode) {
+                        "repeat_one" -> "Repeat One"
+                        "shuffle" -> "Shuffle"
+                        else -> "Repeat All"
+                    }
+                    val favIconRes = if (isFavorite) R.drawable.ic_music_heart_filled else R.drawable.ic_music_heart
+
                     val session = musicMediaSession
                     if (session != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                         val stateBuilder = android.media.session.PlaybackState.Builder()
@@ -1878,6 +2045,20 @@ class MainActivity : AppCompatActivity() {
                                 android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT or
                                 android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS or
                                 android.media.session.PlaybackState.ACTION_SEEK_TO
+                            )
+                            .addCustomAction(
+                                android.media.session.PlaybackState.CustomAction.Builder(
+                                    "repeat_cycle",
+                                    repeatLabel,
+                                    R.drawable.ic_music_repeat
+                                ).build()
+                            )
+                            .addCustomAction(
+                                android.media.session.PlaybackState.CustomAction.Builder(
+                                    "fav_toggle",
+                                    if (isFavorite) "Favourited" else "Favourite",
+                                    favIconRes
+                                ).build()
                             )
                             .setState(
                                 if (isPlaying) android.media.session.PlaybackState.STATE_PLAYING else android.media.session.PlaybackState.STATE_PAUSED,
@@ -1937,6 +2118,12 @@ class MainActivity : AppCompatActivity() {
                         builder.setLargeIcon(artBitmap)
                     }
 
+                    // 5 Actions: [0] Repeat/Shuffle (Left) | [1] Previous | [2] Play/Pause | [3] Next | [4] Heart Favourite (Right)
+                    val repeatAction = android.app.Notification.Action.Builder(
+                        R.drawable.ic_music_repeat,
+                        repeatLabel,
+                        buildCmdPendingIntent(9200, "repeat_cycle")
+                    ).build()
                     val prevAction = android.app.Notification.Action.Builder(
                         android.R.drawable.ic_media_previous,
                         "Previous",
@@ -1952,14 +2139,22 @@ class MainActivity : AppCompatActivity() {
                         "Next",
                         buildCmdPendingIntent(9203, "next")
                     ).build()
+                    val favAction = android.app.Notification.Action.Builder(
+                        favIconRes,
+                        if (isFavorite) "Favourited" else "Favourite",
+                        buildCmdPendingIntent(9204, "fav_toggle")
+                    ).build()
 
+                    builder.addAction(repeatAction)
                     builder.addAction(prevAction)
                     builder.addAction(playPauseAction)
                     builder.addAction(nextAction)
+                    builder.addAction(favAction)
 
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        // Show Previous (1), Play/Pause (2), Next (3) in compact view, and all 5 in expanded & lock screen
                         val mediaStyle = android.app.Notification.MediaStyle()
-                            .setShowActionsInCompactView(0, 1, 2)
+                            .setShowActionsInCompactView(1, 2, 3)
                         if (session != null) {
                             mediaStyle.setMediaSession(session.sessionToken)
                         }
@@ -1988,6 +2183,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         try {
             cancelMusicNotificationState()
+            try { nativeEqualizer?.release() } catch (_: Exception) {}
+            try { nativeBassBoost?.release() } catch (_: Exception) {}
+            try { nativeLoudnessEnhancer?.release() } catch (_: Exception) {}
             if (musicControlReceiverRegistered) {
                 unregisterReceiver(musicControlReceiver)
                 musicControlReceiverRegistered = false

@@ -676,7 +676,7 @@ export const RootNavigator: React.FC = () => {
         </div>
 
         {/* Persistent Mini Music Player, Full-Screen Now Playing Music Player & Equaliser */}
-        <MiniMusicPlayer hasBottomNav={!isCurrentDetailOpen} />
+        <MiniMusicPlayer hasBottomNav={!isCurrentDetailOpen} activeTab={activeTab} />
         <FullScreenMusicPlayer />
         <MusicEqualizerModal />
 

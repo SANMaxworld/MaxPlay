@@ -9,6 +9,10 @@ export type MusicSortOption =
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
+export type PlayModeThreeWay = 'repeat_all' | 'repeat_one' | 'shuffle';
+
+export type VolumeBoostLevel = 100 | 200 | 300;
+
 export type SleepTimerMode = 'off' | '5' | '10' | '15' | '30' | '45' | '60' | 'end_of_song';
 
 export type MusicSubTab = 'home' | 'songs' | 'albums' | 'artists' | 'folders' | 'playlists';
@@ -32,6 +36,7 @@ export interface MusicTrack {
   dateModified: number;
   playbackUrl: string;
   artworkUrl?: string;
+  lyrics?: string;
   playCount?: number;
   lastPlayedAt?: number;
   isFavorite?: boolean;
@@ -118,5 +123,6 @@ export interface CustomSongMetadata {
   artist?: string;
   album?: string;
   artworkUrl?: string;
+  lyrics?: string;
 }
 

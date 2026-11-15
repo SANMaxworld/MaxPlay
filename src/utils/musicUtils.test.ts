@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
   computeLibraryDiscovery,
   computeNextQueueIndex,
+  cycleThreeWayPlayMode,
   filterVisibleLibrarySongs,
   formatMusicDuration,
   getEqualizerPresetBands,
+  getRainbowGradientForTrack,
   groupTracksByAlbum,
   groupTracksByArtist,
   groupTracksByFolder,
@@ -170,6 +172,36 @@ describe('musicUtils pure logic', () => {
     assert.equal(resolvePlaylistFirstSongArtwork(tracksWithPoster), 'https://maxplay.local/art/1.jpg');
     assert.equal(resolvePlaylistFirstSongArtwork([sampleTracks[0]]), undefined);
     assert.equal(resolvePlaylistFirstSongArtwork([]), undefined);
+  });
+
+  it('cycles 1-button 3-way play mode (repeat_all -> repeat_one -> shuffle -> repeat_all) and generates rainbow gradient', () => {
+    const step1 = cycleThreeWayPlayMode('all', false);
+    assert.deepEqual(step1, {
+      repeatMode: 'one',
+      isShuffle: false,
+      modeKey: 'repeat_one',
+      label: 'Repeat current song',
+    });
+
+    const step2 = cycleThreeWayPlayMode(step1.repeatMode, step1.isShuffle);
+    assert.deepEqual(step2, {
+      repeatMode: 'off',
+      isShuffle: true,
+      modeKey: 'shuffle',
+      label: 'Shuffle playback',
+    });
+
+    const step3 = cycleThreeWayPlayMode(step2.repeatMode, step2.isShuffle);
+    assert.deepEqual(step3, {
+      repeatMode: 'all',
+      isShuffle: false,
+      modeKey: 'repeat_all',
+      label: 'Repeat all songs',
+    });
+
+    const grad = getRainbowGradientForTrack('track_123');
+    assert.equal(typeof grad, 'string');
+    assert.equal(grad.includes('from-'), true);
   });
 });
 

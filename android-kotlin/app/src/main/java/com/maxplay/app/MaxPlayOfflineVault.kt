@@ -1670,6 +1670,50 @@ object MaxPlayOfflineVault {
                 "Cache-Control" to "no-store"
             )
 
+            if (!rangeHeader.isNullOrBlank() && rangeHeader.startsWith("bytes=") && totalLength > 0L) {
+                val rangeSpec = rangeHeader.removePrefix("bytes=").substringBefore(",").trim()
+                val parts = rangeSpec.split("-")
+                val startPart = parts.getOrNull(0)?.trim() ?: ""
+                val endPart = parts.getOrNull(1)?.trim() ?: ""
+
+                val clampedStart: Long
+                val clampedEnd: Long
+
+                if (startPart.isEmpty() && endPart.isNotEmpty()) {
+                    val suffixLen = endPart.toLongOrNull() ?: 0L
+                    clampedStart = (totalLength - suffixLen).coerceIn(0L, (totalLength - 1L).coerceAtLeast(0L))
+                    clampedEnd = (totalLength - 1L).coerceAtLeast(clampedStart)
+                } else {
+                    val parsedStart = startPart.toLongOrNull() ?: 0L
+                    val parsedEnd = endPart.takeIf { it.isNotEmpty() }?.toLongOrNull() ?: (totalLength - 1L)
+                    clampedStart = parsedStart.coerceIn(0L, (totalLength - 1L).coerceAtLeast(0L))
+                    clampedEnd = parsedEnd.coerceIn(clampedStart, (totalLength - 1L).coerceAtLeast(clampedStart))
+                }
+
+                val contentLength = (clampedEnd - clampedStart + 1L).coerceAtLeast(0L)
+                if (clampedStart > 0L) {
+                    try {
+                        android.system.Os.lseek(pfd.fileDescriptor, clampedStart, android.system.OsConstants.SEEK_SET)
+                    } catch (_: Exception) {
+                        try {
+                            fis.channel.position(clampedStart)
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                baseHeaders["Content-Range"] = "bytes $clampedStart-$clampedEnd/$totalLength"
+                baseHeaders["Content-Length"] = contentLength.toString()
+
+                return WebResourceResponse(
+                    mimeType,
+                    null,
+                    206,
+                    "Partial Content",
+                    baseHeaders,
+                    java.io.BufferedInputStream(fis, 128 * 1024)
+                )
+            }
+
             if (totalLength > 0L) {
                 baseHeaders["Content-Length"] = totalLength.toString()
             }
@@ -1679,7 +1723,7 @@ object MaxPlayOfflineVault {
                 200,
                 "OK",
                 baseHeaders,
-                fis
+                java.io.BufferedInputStream(fis, 128 * 1024)
             )
         } catch (_: Exception) {
             null

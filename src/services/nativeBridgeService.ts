@@ -113,6 +113,25 @@ interface MaxPlayKotlinBridge {
     durationMs: number,
     positionMs: number
   ) => boolean;
+  updateMusicNotificationFull?: (
+    title: string,
+    artist: string,
+    album: string,
+    isPlaying: boolean,
+    artworkUrl: string,
+    durationMs: number,
+    positionMs: number,
+    isFavorite: boolean,
+    playMode: string
+  ) => boolean;
+  shareAudioFile?: (audioUrlOrId: string, title: string, artist: string) => boolean;
+  applyNativeAudioEffects?: (
+    enabled: boolean,
+    bandsJson: string,
+    bassLevel: number,
+    immersiveLevel: number,
+    volumeBoostPct: number
+  ) => boolean;
   cancelMusicNotification?: () => boolean;
 }
 
@@ -1628,7 +1647,7 @@ export class NativeBridgeService {
 
   /**
    * Updates the Native Android System Notification Shade & Lock-Screen Media Player Widget
-   * with poster artwork, Play/Pause, Previous, Next controls, and seek bar.
+   * with poster artwork, Repeat/Shuffle (left), Previous, Play/Pause, Next, Favourite Heart (right), and seek bar.
    */
   public static updateMusicNotificationNative(params: {
     title: string;
@@ -1638,21 +1657,139 @@ export class NativeBridgeService {
     artworkUrl?: string;
     durationSec: number;
     positionSec: number;
+    isFavorite?: boolean;
+    playMode?: 'repeat_all' | 'repeat_one' | 'shuffle';
+  }): boolean {
+    try {
+      if (this.isRunningInKotlinApp()) {
+        if (typeof window.MaxPlayNative?.updateMusicNotificationFull === 'function') {
+          return Boolean(
+            window.MaxPlayNative.updateMusicNotificationFull(
+              params.title || 'MaxPlay Music',
+              params.artist || 'Unknown artist',
+              params.album || 'MaxPlay',
+              Boolean(params.isPlaying),
+              params.artworkUrl || '',
+              Math.max(0, Math.round((params.durationSec || 0) * 1000)),
+              Math.max(0, Math.round((params.positionSec || 0) * 1000)),
+              Boolean(params.isFavorite),
+              params.playMode || 'repeat_all'
+            )
+          );
+        }
+        if (typeof window.MaxPlayNative?.updateMusicNotification === 'function') {
+          return Boolean(
+            window.MaxPlayNative.updateMusicNotification(
+              params.title || 'MaxPlay Music',
+              params.artist || 'Unknown artist',
+              params.album || 'MaxPlay',
+              Boolean(params.isPlaying),
+              params.artworkUrl || '',
+              Math.max(0, Math.round((params.durationSec || 0) * 1000)),
+              Math.max(0, Math.round((params.positionSec || 0) * 1000))
+            )
+          );
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Shares the actual local MP3/Audio song file via Android's native Share Sheet (WhatsApp, Telegram, Nearby Share, etc.)
+   * or Web Share API with files support.
+   */
+  public static async shareAudioFileNative(params: {
+    id?: string;
+    mediaId?: string;
+    playbackUrl: string;
+    title: string;
+    artist: string;
+    fileName?: string;
+    mimeType?: string;
+  }): Promise<boolean> {
+    try {
+      const idOrUrl = params.mediaId || params.playbackUrl || params.id || '';
+      if (
+        this.isRunningInKotlinApp() &&
+        typeof window.MaxPlayNative?.shareAudioFile === 'function'
+      ) {
+        const shared = window.MaxPlayNative.shareAudioFile(
+          idOrUrl,
+          params.title || 'MaxPlay Song',
+          params.artist || ''
+        );
+        if (shared) return true;
+      }
+
+      // Web / PWA File Share support (e.g. sharing actual audio file to WhatsApp Web / Android Chrome)
+      if (
+        typeof navigator !== 'undefined' &&
+        typeof navigator.share === 'function' &&
+        params.playbackUrl
+      ) {
+        try {
+          const resp = await fetch(params.playbackUrl);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const safeName = (
+              params.fileName ||
+              `${params.title || 'MaxPlay_Song'}.mp3`
+            ).replace(/[\\/:*?"<>|]/g, '_');
+            const file = new File([blob], safeName, {
+              type: params.mimeType || blob.type || 'audio/mpeg',
+            });
+            if (
+              typeof (navigator as any).canShare !== 'function' ||
+              (navigator as any).canShare({ files: [file] })
+            ) {
+              await navigator.share({
+                title: params.title,
+                text: `${params.title} - ${params.artist}`,
+                files: [file],
+              });
+              return true;
+            }
+          }
+        } catch {}
+
+        await navigator.share({
+          title: params.title,
+          text: `Listening to "${params.title}" by ${params.artist} on MaxPlay`,
+        });
+        return true;
+      }
+
+      if (this.shareContentNative(params.title, `Listening to "${params.title}" by ${params.artist} on MaxPlay`, '')) {
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Applies hardware-accelerated Android Equalizer, BassBoost, and LoudnessEnhancer (100% / 200% / 300% Volume Boost)
+   * without touching or silencing WebView <audio>.
+   */
+  public static applyNativeAudioEffects(params: {
+    enabled: boolean;
+    bands: [number, number, number, number, number];
+    bassLevel: number;
+    immersiveLevel: number;
+    volumeBoostPct: number;
   }): boolean {
     try {
       if (
         this.isRunningInKotlinApp() &&
-        typeof window.MaxPlayNative?.updateMusicNotification === 'function'
+        typeof window.MaxPlayNative?.applyNativeAudioEffects === 'function'
       ) {
         return Boolean(
-          window.MaxPlayNative.updateMusicNotification(
-            params.title || 'MaxPlay Music',
-            params.artist || 'Unknown artist',
-            params.album || 'MaxPlay',
-            Boolean(params.isPlaying),
-            params.artworkUrl || '',
-            Math.max(0, Math.round((params.durationSec || 0) * 1000)),
-            Math.max(0, Math.round((params.positionSec || 0) * 1000))
+          window.MaxPlayNative.applyNativeAudioEffects(
+            Boolean(params.enabled),
+            JSON.stringify(params.bands || [0, 0, 0, 0, 0]),
+            Math.round(params.bassLevel || 0),
+            Math.round(params.immersiveLevel || 0),
+            Math.round(params.volumeBoostPct || 100)
           )
         );
       }
