@@ -5,6 +5,8 @@ import {
   isDirectProgressiveStreamUrl,
   buildDirectStreamProxyUrl,
   orderDownloadCandidateUrls,
+  sanitizeByseMasterM3u8,
+  inferProgressiveVideoMimeType,
 } from './streamHelpers';
 
 describe('streamHelpers', () => {
@@ -51,7 +53,6 @@ describe('streamHelpers', () => {
     const byse = 'https://byseraguci.com/d/jn4tzr4mpt0u';
     const stape = 'https://streamtape.com/v/6kjz8WP38qT9AKg/';
 
-    // Pre-selected URL passed as videoUrl when Server 3 chosen
     assert.deepEqual(
       orderDownloadCandidateUrls({
         videoUrl: stape,
@@ -62,7 +63,6 @@ describe('streamHelpers', () => {
       [stape, voe, byse]
     );
 
-    // Un-reordered URLs where user selected server3
     assert.deepEqual(
       orderDownloadCandidateUrls({
         videoUrl: voe,
@@ -73,7 +73,6 @@ describe('streamHelpers', () => {
       [stape, voe, byse]
     );
 
-    // Un-reordered URLs where user selected server2
     assert.deepEqual(
       orderDownloadCandidateUrls({
         videoUrl: voe,
@@ -84,7 +83,6 @@ describe('streamHelpers', () => {
       [byse, voe, stape]
     );
 
-    // Rotation on final retry attempt
     assert.deepEqual(
       orderDownloadCandidateUrls({
         videoUrl: voe,
@@ -96,7 +94,6 @@ describe('streamHelpers', () => {
       [byse, stape, voe]
     );
 
-    // Deduplication
     assert.deepEqual(
       orderDownloadCandidateUrls({
         videoUrl: byse,
@@ -107,4 +104,38 @@ describe('streamHelpers', () => {
       [byse]
     );
   });
+
+  it('sanitizes Byse master playlists with empty index-a1.m3u8 tracks when variant uses index-v1-a2.m3u8', () => {
+    const vefaMaster = [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",LANGUAGE="hi",NAME="हिन्दी",DEFAULT=YES,AUTOSELECT=YES,URI="https://cdn.example.com/index-a1.m3u8?token=1"',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",LANGUAGE="en",NAME="English",DEFAULT=NO,AUTOSELECT=YES,URI="https://cdn.example.com/index-a2.m3u8?token=1"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=6168663,RESOLUTION=1920x1080,AUDIO="audio"',
+      'https://cdn.example.com/index-v1-a2.m3u8?token=1',
+    ].join('\n');
+
+    const sanitized = sanitizeByseMasterM3u8(vefaMaster);
+    assert.equal(sanitized.includes('index-a1.m3u8'), false);
+    assert.equal(sanitized.includes('index-a2.m3u8'), true);
+    assert.equal(sanitized.includes('DEFAULT=YES,AUTOSELECT=YES,URI="https://cdn.example.com/index-a2.m3u8'), true);
+  });
+
+  it('infers video/mp4 for Streamtape .mkv.mp4 files while keeping video/x-matroska for true .mkv files', () => {
+    assert.equal(
+      inferProgressiveVideoMimeType(
+        'https://tapecontent.net/get_video?id=1',
+        'attachment; filename="Titanic.(1997).1080p.BluRay.x264.mkv.mp4"'
+      ),
+      'video/mp4'
+    );
+    assert.equal(
+      inferProgressiveVideoMimeType('https://cdn.example.com/Titanic.mkv.mp4?token=1'),
+      'video/mp4'
+    );
+    assert.equal(
+      inferProgressiveVideoMimeType('https://cdn.example.com/Movie.1080p.mkv?token=1'),
+      'video/x-matroska'
+    );
+  });
 });
+

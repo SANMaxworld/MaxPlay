@@ -2259,7 +2259,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       // Follow 302 redirect & probe real size via HEAD / 1-byte Range GET
       let cdnUrl = directUrl;
       let sizeBytes = 0;
-      let mimeType = (trimmed.toLowerCase().includes(".mkv") || pageTitle.toLowerCase().includes(".mkv"))
+      const lowerTrimmed = trimmed.toLowerCase().split("?")[0];
+      const lowerTitle = pageTitle.toLowerCase();
+      let mimeType = (
+        lowerTrimmed.endsWith(".mkv") ||
+        (lowerTitle.includes(".mkv") && !lowerTitle.includes(".mkv.mp4") && !lowerTitle.endsWith(".mp4"))
+      )
         ? "video/x-matroska"
         : "video/mp4";
 
@@ -2379,7 +2384,11 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           const reqOrigin = String(req.headers.origin || "");
           const isExternalCrossOrigin = Boolean(reqOrigin && !reqOrigin.includes(host) && host.includes("hf.space"));
           const serverOrigin = isExternalCrossOrigin ? `https://${host}` : "";
-          const proxiedUrl = `${serverOrigin}/api/stream-proxy?url=${encodeURIComponent(stResult.directUrl)}&referer=${encodeURIComponent("https://streamtape.com/")}`;
+          const primaryTargetUrl = stResult.cdnUrl || stResult.directUrl;
+          const fallbackParam = stResult.cdnUrl && stResult.cdnUrl !== stResult.directUrl
+            ? `&fallbackUrl=${encodeURIComponent(stResult.directUrl)}`
+            : "";
+          const proxiedUrl = `${serverOrigin}/api/stream-proxy?url=${encodeURIComponent(primaryTargetUrl)}${fallbackParam}&referer=${encodeURIComponent("https://streamtape.com/")}`;
 
           const permanentQualityLinks: Record<string, string> = { [qLabel]: trimmedUrl };
           const dlQualities = [
@@ -2389,7 +2398,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               sizeMb: stResult.sizeMb || 0,
               sizeBytes: stResult.sizeBytes || 0,
               url: trimmedUrl,
-              directUrl: stResult.cdnUrl || stResult.directUrl,
+              directUrl: primaryTargetUrl,
               mimeType: stResult.mimeType || "video/mp4"
             }
           ];
@@ -2398,8 +2407,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           streamExtractionCache.set(cacheKey, {
             m3u8Url: proxiedUrl,
             directUrl: stResult.directUrl,
-            rawM3u8Url: stResult.directUrl,
-            cdnUrl: stResult.cdnUrl || stResult.directUrl,
+            rawM3u8Url: primaryTargetUrl,
+            cdnUrl: primaryTargetUrl,
             isDirectVideo: true,
             mimeType: stResult.mimeType || "video/mp4",
             sizeBytes: stResult.sizeBytes || 0,
@@ -2419,8 +2428,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             ok: true,
             m3u8Url: proxiedUrl,
             directUrl: stResult.directUrl,
-            rawM3u8Url: stResult.directUrl,
-            cdnUrl: stResult.cdnUrl || stResult.directUrl,
+            rawM3u8Url: primaryTargetUrl,
+            cdnUrl: primaryTargetUrl,
             isDirectVideo: true,
             mimeType: stResult.mimeType || "video/mp4",
             sizeBytes: stResult.sizeBytes || 0,
@@ -2714,8 +2723,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       const fallbackEmbedUrl = getFallbackEmbed(trimmedUrl);
 
-      // 8s timeout for external fallback service so it never hangs the request if sleeping
-      const timeoutMs = isVercelEnv ? 8000 : 12000;
+      // Fast 3.5s timeout for external fallback service so dead VOE links quickly fail over to Server 2/3
+      const timeoutMs = isVercelEnv ? 3500 : 4000;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -3110,7 +3119,31 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
 
       const text = await upstream.text();
-      const lines = text.split("\n");
+      let rawLines = text.split("\n");
+
+      // Detect Byse/SprintCDN master playlists where index-a1.m3u8 is an empty 376-byte track
+      // and the video variant explicitly uses index-v1-a2.m3u8 (e.g. Vefa Sultan / Mehmed x70lrdcyz8h2).
+      const hasMultipleAudioMedia = rawLines.filter((l) => l.trim().startsWith("#EXT-X-MEDIA:TYPE=AUDIO")).length > 1;
+      const usesA2VideoVariant = rawLines.some((l) => /index-v\d+-a2\.m3u8/i.test(l));
+      if (hasMultipleAudioMedia && usesA2VideoVariant) {
+        rawLines = rawLines
+          .filter((l) => {
+            const trimmedL = l.trim();
+            if (trimmedL.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && /index-a1\.m3u8/i.test(trimmedL)) {
+              return false;
+            }
+            return true;
+          })
+          .map((l) => {
+            const trimmedL = l.trim();
+            if (trimmedL.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && /index-a2\.m3u8/i.test(trimmedL)) {
+              return trimmedL.replace(/DEFAULT=NO/i, "DEFAULT=YES");
+            }
+            return l;
+          });
+      }
+
+      const lines = rawLines;
       const rewrittenLines: string[] = [];
       const refParam = referer ? `&referer=${encodeURIComponent(referer)}` : "";
       let expectVariantStreamUrl = false;
@@ -3488,12 +3521,13 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         headers["Range"] = req.headers.range;
       }
 
+      const fallbackUrl = (req.query.fallbackUrl as string || "").trim();
       const isHeadReq = req.method === "HEAD";
-      const fetchWithHeaderTimeout = async (reqHeaders: Record<string, string>) => {
+      const fetchWithHeaderTimeout = async (urlToFetch: string, reqHeaders: Record<string, string>) => {
         const headerCtrl = new AbortController();
         const headerTimer = setTimeout(() => headerCtrl.abort(), 25000);
         try {
-          return await fetch(targetUrl, {
+          return await fetch(urlToFetch, {
             method: isHeadReq ? "HEAD" : "GET",
             headers: reqHeaders,
             redirect: "follow",
@@ -3504,12 +3538,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
       };
 
-      let upstream = await fetchWithHeaderTimeout(headers);
+      let upstream = await fetchWithHeaderTimeout(targetUrl, headers);
       if ((upstream.status === 401 || upstream.status === 403) && headers["Origin"]) {
         try { await upstream.body?.cancel(); } catch {}
         const noOriginHeaders = { ...headers };
         delete noOriginHeaders["Origin"];
-        upstream = await fetchWithHeaderTimeout(noOriginHeaders);
+        upstream = await fetchWithHeaderTimeout(targetUrl, noOriginHeaders);
       }
       if (upstream.status === 401 || upstream.status === 403) {
         try { await upstream.body?.cancel(); } catch {}
@@ -3518,7 +3552,11 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           "Accept": "*/*",
           ...(req.headers.range ? { "Range": req.headers.range } : {})
         };
-        upstream = await fetchWithHeaderTimeout(minimalHeaders);
+        upstream = await fetchWithHeaderTimeout(targetUrl, minimalHeaders);
+      }
+      if (upstream.status >= 400 && fallbackUrl && (fallbackUrl.startsWith("http://") || fallbackUrl.startsWith("https://"))) {
+        try { await upstream.body?.cancel(); } catch {}
+        upstream = await fetchWithHeaderTimeout(fallbackUrl, headers);
       }
 
       res.setHeader("Access-Control-Allow-Origin", "*");
@@ -3532,7 +3570,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const lowerUrl = `${targetUrl} ${upstream.url || ""}`.toLowerCase();
       let finalContentType = upstreamCt;
       if (!finalContentType || finalContentType.includes("application/octet-stream")) {
-        if (dispHeader.includes(".mkv") || lowerUrl.includes(".mkv")) {
+        const isTrueMkv =
+          (dispHeader.includes(".mkv") && !dispHeader.includes(".mkv.mp4")) ||
+          (lowerUrl.includes(".mkv") && !lowerUrl.includes(".mkv.mp4") && !lowerUrl.split("?")[0].endsWith(".mp4"));
+        if (isTrueMkv) {
           finalContentType = "video/x-matroska";
         } else if (dispHeader.includes(".webm") || lowerUrl.includes(".webm")) {
           finalContentType = "video/webm";

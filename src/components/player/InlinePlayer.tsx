@@ -159,6 +159,7 @@ interface InlinePlayerProps {
   onDiscoveredAudioTracks?: (tracks: string[]) => void;
   onDiscoveredQualities?: (qualities: string[]) => void;
   onRequestCrossServerLanguageSwitch?: (lang: string) => void;
+  onRequestServerFailover?: (failedServer: 'server1' | 'server2' | 'server3') => boolean;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -191,6 +192,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   onDiscoveredAudioTracks,
   onDiscoveredQualities,
   onRequestCrossServerLanguageSwitch,
+  onRequestServerFailover,
 }) => {
   const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -1171,10 +1173,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       .then(async (res) => {
         if (!isMounted) return;
         const isExtractable = SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls);
-        // If first extraction returned an embed fallback for a Voe/Filemoon/Byse stream, retry with forceRefresh: true
-        // so it extracts the real .m3u8 instead of triggering an iframe!
+        // If first extraction returned an embed fallback for a Voe/Filemoon/Byse stream:
+        // First check if we can immediately fail over to an active backup server (Server 2 / Server 3)
+        // so the user never waits on a dead provider!
         let finalRes = res;
         if (res.isEmbed && isExtractable) {
+          if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
+            return;
+          }
           try {
             SmartStreamService.clearClientCache(activeVideoUrl);
             const retryRes = await SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: true });
@@ -1188,6 +1194,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           setEmbedFallbackUrl(finalRes.streamUrl);
           setResolvedStreamUrl('');
         } else if (finalRes.isEmbed && isExtractable) {
+          if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
+            return;
+          }
           // Never force an iframe for extractable Voe/Filemoon/Byse sources — keep player in native HLS mode
           setEmbedFallbackUrl('');
           setIsLoading(false);
@@ -1203,6 +1212,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         console.warn('Smart stream extraction error:', err);
         // If targeted quality link failed to extract, try stepping down to a weaker quality link automatically!
         if (tryStepDownToWeakerQuality()) {
+          return;
+        }
+        if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
           return;
         }
         setIsResolvingStream(false);
@@ -1292,25 +1304,41 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         startPosition: targetStartTime > 0 ? targetStartTime : -1,
         enableWorker: true,
         lowLatencyMode: false,
-        startFragPrefetch: true,
+        startFragPrefetch: false,
         backBufferLength: 30,
-        maxBufferLength: 24,
-        maxMaxBufferLength: 48,
+        maxBufferLength: 16,
+        maxMaxBufferLength: 32,
         maxBufferSize: 60 * 1000 * 1000,
         maxBufferHole: 0.5,
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.1,
         nudgeMaxRetry: 8,
         abrEwmaDefaultEstimate: 2500000,
-        fragLoadingTimeOut: 40000,
+        fragLoadingTimeOut: 90000,
         fragLoadingMaxRetry: 8,
         fragLoadingRetryDelay: 400,
-        manifestLoadingTimeOut: 20000,
+        manifestLoadingTimeOut: 25000,
         manifestLoadingMaxRetry: 5,
         manifestLoadingRetryDelay: 350,
-        levelLoadingTimeOut: 20000,
+        levelLoadingTimeOut: 25000,
         levelLoadingMaxRetry: 5,
         levelLoadingRetryDelay: 350,
+        fragLoadPolicy: {
+          default: {
+            maxTimeToFirstByteMs: 20000,
+            maxLoadTimeMs: 90000,
+            timeoutRetry: {
+              maxNumRetry: 6,
+              retryDelayMs: 400,
+              maxRetryDelayMs: 4000,
+            },
+            errorRetry: {
+              maxNumRetry: 6,
+              retryDelayMs: 500,
+              maxRetryDelayMs: 5000,
+            },
+          },
+        },
       });
       hlsRef.current = hls;
       hls.loadSource(resolvedStreamUrl);
@@ -1501,6 +1529,20 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             }
             return null;
           });
+        }
+      });
+
+      hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+        if (data?.frag?.type === 'audio' && hls.audioTracks && hls.audioTracks.length > 1) {
+          const fragBytes = Number(data.frag.stats?.total || data.frag.stats?.loaded || 0);
+          // Detect corrupt 376-byte empty MPEG-TS audio segments (0 audio frames) on SprintCDN/Byse
+          if (fragBytes > 0 && fragBytes < 1500) {
+            const nextValidTrack = hls.audioTracks.findIndex((_, idx) => idx !== hls.audioTrack);
+            if (nextValidTrack !== -1) {
+              console.warn(`[SmartPlayer] Empty audio segment (${fragBytes}B) on track ${hls.audioTrack}; switching to valid audio track ${nextValidTrack}`);
+              hls.audioTrack = nextValidTrack;
+            }
+          }
         }
       });
 

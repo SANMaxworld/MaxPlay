@@ -489,7 +489,8 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 mimeType = "application/vnd.apple.mpegurl"
             } else if (isDirectProgressiveMedia) {
                 if (mimeType == "application/octet-stream" || mimeType.startsWith("text/") || mimeType.startsWith("image/")) {
-                    mimeType = if (pathOnly.endsWith(".mkv") || lowerUrl.contains(".mkv")) "video/x-matroska" else if (pathOnly.endsWith(".webm")) "video/webm" else "video/mp4"
+                    val isTrueMkv = pathOnly.endsWith(".mkv") || (lowerUrl.contains(".mkv") && !lowerUrl.contains(".mkv.mp4") && !pathOnly.endsWith(".mp4"))
+                    mimeType = if (isTrueMkv) "video/x-matroska" else if (pathOnly.endsWith(".webm")) "video/webm" else "video/mp4"
                 }
             } else if (lowerUrl.contains("/hls2/") || lowerUrl.contains("/hls/") || isKnownStreamCdnHost(host)) {
                 // Normalize disguised segment MIME types (.jpg, .png, .webp, .html, .txt) so hls.js / MSE never rejects segment buffers
@@ -499,8 +500,6 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             }
 
             val responseHeaders = buildCorsHeaders(mimeType).toMutableMap()
-            response.header("Content-Length")?.let { responseHeaders["Content-Length"] = it }
-            response.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
             val acceptRanges = response.header("Accept-Ranges")
             if (!acceptRanges.isNullOrBlank()) {
                 responseHeaders["Accept-Ranges"] = acceptRanges
@@ -508,17 +507,42 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 responseHeaders["Accept-Ranges"] = "bytes"
             }
 
-            val rawStream = response.body?.byteStream()
-            val bodyStream = if (rawStream != null) {
-                object : java.io.BufferedInputStream(rawStream, 256 * 1024) {
-                    override fun close() {
-                        try { super.close() } catch (_: Exception) {}
-                        try { response.close() } catch (_: Exception) {}
+            val bodyStream = if (isLikelyPlaylist && statusCode == 200) {
+                val rawText = try { response.body?.string() ?: "" } finally { try { response.close() } catch (_: Exception) {} }
+                var lines = rawText.split("\n")
+                val audioMediaCount = lines.count { it.trim().startsWith("#EXT-X-MEDIA:TYPE=AUDIO") }
+                val usesA2Variant = lines.any { Regex("index-v\\d+-a2\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(it) }
+                if (audioMediaCount > 1 && usesA2Variant) {
+                    lines = lines.filterNot { line ->
+                        val t = line.trim()
+                        t.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && t.contains("index-a1.m3u8", ignoreCase = true)
+                    }.map { line ->
+                        val t = line.trim()
+                        if (t.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && t.contains("index-a2.m3u8", ignoreCase = true)) {
+                            t.replace("DEFAULT=NO", "DEFAULT=YES", ignoreCase = true)
+                        } else {
+                            line
+                        }
                     }
                 }
+                val sanitizedBytes = lines.joinToString("\n").toByteArray(Charsets.UTF_8)
+                responseHeaders["Content-Length"] = sanitizedBytes.size.toString()
+                ByteArrayInputStream(sanitizedBytes)
             } else {
-                try { response.close() } catch (_: Exception) {}
-                ByteArrayInputStream(ByteArray(0))
+                response.header("Content-Length")?.let { responseHeaders["Content-Length"] = it }
+                response.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
+                val rawStream = response.body?.byteStream()
+                if (rawStream != null) {
+                    object : java.io.BufferedInputStream(rawStream, 256 * 1024) {
+                        override fun close() {
+                            try { super.close() } catch (_: Exception) {}
+                            try { response.close() } catch (_: Exception) {}
+                        }
+                    }
+                } else {
+                    try { response.close() } catch (_: Exception) {}
+                    ByteArrayInputStream(ByteArray(0))
+                }
             }
             val encoding = if (isLikelyPlaylist) "UTF-8" else null
 
@@ -562,7 +586,7 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
         return when {
             lowerUrl.contains(".m3u8") -> "application/vnd.apple.mpegurl"
             lowerUrl.contains(".ts") -> "video/mp2t"
-            lowerUrl.contains(".mkv") -> "video/x-matroska"
+            lowerUrl.contains(".mkv") && !lowerUrl.contains(".mkv.mp4") && !lowerUrl.substringBefore("?").endsWith(".mp4") -> "video/x-matroska"
             lowerUrl.contains(".webm") -> "video/webm"
             lowerUrl.contains(".m4s") || lowerUrl.contains(".mp4") || lowerUrl.contains("/get_video") || lowerUrl.contains("tapecontent") -> "video/mp4"
             else -> "application/octet-stream"

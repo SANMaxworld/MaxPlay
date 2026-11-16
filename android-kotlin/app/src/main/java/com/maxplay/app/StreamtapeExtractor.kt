@@ -254,7 +254,7 @@ class StreamtapeExtractor(
                 addAudio("English")
             }
 
-            val mimeType = if (rawMeta.contains(".mkv")) "video/x-matroska" else "video/mp4"
+            val mimeType = if (rawMeta.contains(".mkv") && !rawMeta.contains(".mkv.mp4") && !rawMeta.endsWith(".mp4")) "video/x-matroska" else "video/mp4"
             return Triple(quality, audioTracks, mimeType)
         }
     }
@@ -768,11 +768,12 @@ class StreamtapeExtractor(
             put("mimeType", stream.mimeType)
         })
 
+        val bestPlayUrl = stream.cdnUrl.ifBlank { stream.directUrl }
         return JSONObject().apply {
             put("ok", true)
-            put("m3u8Url", stream.directUrl)
+            put("m3u8Url", bestPlayUrl)
             put("directUrl", stream.directUrl)
-            put("cdnUrl", stream.cdnUrl)
+            put("cdnUrl", bestPlayUrl)
             put("sizeBytes", stream.sizeBytes)
             put("sizeMb", sizeMb)
             put("mimeType", stream.mimeType)

@@ -155,8 +155,8 @@ class InbuiltStreamScraper(
                 maxRequestsPerHost = 32
             })
             .connectionPool(okhttp3.ConnectionPool(32, 5, TimeUnit.MINUTES))
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .followRedirects(true)
             .followSslRedirects(true)

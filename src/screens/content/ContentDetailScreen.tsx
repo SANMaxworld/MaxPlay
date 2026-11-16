@@ -1704,6 +1704,15 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         playerQualityLinks = smartS3.cleanQualityLinks;
         playerVideoUrl = smartS3.chosenUrl || tertiaryServerUrl;
         playerVideoSources = tertiaryVideoSources || {};
+      } else if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
+        const smartS2 = SmartStreamService.selectSourceUrlForQuality(
+          secondaryServerUrl,
+          secondaryServerQualityLinks,
+          activeQuality
+        );
+        playerQualityLinks = smartS2.cleanQualityLinks;
+        playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
+        playerVideoSources = secondaryVideoSources || {};
       }
     } else if (selectedServer === 'server2') {
       if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
@@ -1715,6 +1724,15 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         playerQualityLinks = smartS2.cleanQualityLinks;
         playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
         playerVideoSources = secondaryVideoSources || {};
+      } else if (tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0) {
+        const smartS3 = SmartStreamService.selectSourceUrlForQuality(
+          tertiaryServerUrl,
+          tertiaryServerQualityLinks,
+          activeQuality
+        );
+        playerQualityLinks = smartS3.cleanQualityLinks;
+        playerVideoUrl = smartS3.chosenUrl || tertiaryServerUrl;
+        playerVideoSources = tertiaryVideoSources || {};
       }
     } else if (selectedServer === 'server1') {
       if (playerQualityLinks && typeof playerQualityLinks === 'object' && Object.keys(playerQualityLinks).length > 0) {

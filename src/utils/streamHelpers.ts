@@ -148,3 +148,53 @@ export function orderDownloadCandidateUrls(input: DownloadCandidateInput): strin
 
   return [...deduped.slice(rot), ...deduped.slice(0, rot)];
 }
+
+/**
+ * Sanitizes Byse/SprintCDN master HLS manifests where `index-a1.m3u8` is an empty 376-byte
+ * audio stream (0 audio frames) and the video variant explicitly uses `index-v1-a2.m3u8`.
+ */
+export function sanitizeByseMasterM3u8(manifestText: string): string {
+  if (!manifestText || typeof manifestText !== 'string') return '';
+  let rawLines = manifestText.split('\n');
+  const hasMultipleAudioMedia =
+    rawLines.filter((l) => l.trim().startsWith('#EXT-X-MEDIA:TYPE=AUDIO')).length > 1;
+  const usesA2VideoVariant = rawLines.some((l) => /index-v\d+-a2\.m3u8/i.test(l));
+
+  if (hasMultipleAudioMedia && usesA2VideoVariant) {
+    rawLines = rawLines
+      .filter((l) => {
+        const trimmedL = l.trim();
+        if (trimmedL.startsWith('#EXT-X-MEDIA:TYPE=AUDIO') && /index-a1\.m3u8/i.test(trimmedL)) {
+          return false;
+        }
+        return true;
+      })
+      .map((l) => {
+        const trimmedL = l.trim();
+        if (trimmedL.startsWith('#EXT-X-MEDIA:TYPE=AUDIO') && /index-a2\.m3u8/i.test(trimmedL)) {
+          return trimmedL.replace(/DEFAULT=NO/i, 'DEFAULT=YES');
+        }
+        return l;
+      });
+  }
+  return rawLines.join('\n');
+}
+
+/**
+ * Infers the correct progressive container MIME type while preventing `.mkv.mp4` files
+ * (such as Streamtape transcodes) from being misclassified as `video/x-matroska`.
+ */
+export function inferProgressiveVideoMimeType(urlOrFilename: string, contentDisposition?: string): string {
+  const lowerUrl = (urlOrFilename || '').toLowerCase();
+  const disp = (contentDisposition || '').toLowerCase();
+  const pathPart = lowerUrl.split('?')[0];
+
+  const isTrueMkv =
+    (disp.includes('.mkv') && !disp.includes('.mkv.mp4')) ||
+    (lowerUrl.includes('.mkv') && !lowerUrl.includes('.mkv.mp4') && !pathPart.endsWith('.mp4'));
+
+  if (isTrueMkv) return 'video/x-matroska';
+  if (disp.includes('.webm') || pathPart.endsWith('.webm')) return 'video/webm';
+  return 'video/mp4';
+}
+
