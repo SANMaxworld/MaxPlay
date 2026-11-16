@@ -88,3 +88,23 @@ test("evaluateStreamtapeJsExpr accurately evaluates Streamtape JS obfuscation wi
   const lastEvaluated = SmartStreamService.evaluateStreamtapeJsExpr(matches[matches.length - 1]);
   assert.equal(lastEvaluated, "//streamtape.com/get_video?id=6kjz8WP38qT9AKg&token=TRUE_LIVE_TOKEN");
 });
+
+test("sanitizeStreamUrl preserves /api/stream-proxy even when running inside Android Kotlin APK so IP-bound Streamtape tokens never fail with 403", () => {
+  const proxiedStreamtape =
+    "/api/stream-proxy?url=https%3A%2F%2Ftapecontent.net%2Fget_video%3Fid%3D6kjz8WP38qT9AKg%26ip%3DSERVER_IP%26token%3DREAL&referer=https%3A%2F%2Fstreamtape.com%2F";
+  assert.equal(SmartStreamService.sanitizeStreamUrl(proxiedStreamtape), proxiedStreamtape);
+
+  const g = globalThis as any;
+  const prevWin = g.window;
+  try {
+    g.window = { MaxPlayNative: { isNativeApp: () => true } };
+    assert.equal(SmartStreamService.sanitizeStreamUrl(proxiedStreamtape), proxiedStreamtape);
+    assert.equal(
+      SmartStreamService.sanitizeStreamUrl(`https://app.example.com${proxiedStreamtape}`),
+      proxiedStreamtape
+    );
+  } finally {
+    g.window = prevWin;
+  }
+});
+

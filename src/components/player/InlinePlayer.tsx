@@ -1547,9 +1547,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       });
 
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
-        if (video.readyState >= 2 && (isPlaying || !video.paused || video.currentTime > 0.05)) {
+        if (video.readyState >= 2) {
           setHasRenderedFirstFrame(true);
           setIsLoading(false);
+          if (video.paused && (autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current)) {
+            wasPlayingBeforeSwitchRef.current = false;
+            setHasStarted(true);
+            video.play().catch(() => {});
+          }
         }
       });
 
@@ -1637,6 +1642,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                 networkStruggleCountRef.current += 1;
                 hls.startLoad();
               } else {
+                if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
+                  return;
+                }
                 setIsLoading(false);
                 setPlaybackError('Video stream connection temporarily lost. Please tap Retry.');
               }
@@ -1741,6 +1749,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       };
 
       video.addEventListener('loadedmetadata', performNativeSeek);
+      video.addEventListener('loadeddata', onCanPlay);
       video.addEventListener('canplay', onCanPlay);
       video.addEventListener('canplaythrough', onCanPlayThrough);
       video.addEventListener('stalled', onStalled);
@@ -1750,6 +1759,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         cancelled = true;
         if (stallTimer) clearTimeout(stallTimer);
         video.removeEventListener('loadedmetadata', performNativeSeek);
+        video.removeEventListener('loadeddata', onCanPlay);
         video.removeEventListener('canplay', onCanPlay);
         video.removeEventListener('canplaythrough', onCanPlayThrough);
         video.removeEventListener('stalled', onStalled);
@@ -2449,14 +2459,23 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                       setResolvedStreamUrl(fresh.streamUrl);
                     }
                   } else if (fresh && fresh.isEmbed && fresh.streamUrl) {
+                    if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
+                      return;
+                    }
                     setEmbedFallbackUrl(fresh.streamUrl);
                     setResolvedStreamUrl('');
                   } else {
+                    if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
+                      return;
+                    }
                     setPlaybackError('Stream link expired. Please tap Retry.');
                   }
                 })
                 .catch((refreshErr) => {
                   console.warn('[InlinePlayer] Stream auto-refresh failed:', refreshErr);
+                  if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
+                    return;
+                  }
                   setPlaybackError('Failed to refresh expired stream. Please tap Retry.');
                 })
                 .finally(() => {

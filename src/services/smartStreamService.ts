@@ -215,14 +215,14 @@ export class SmartStreamService {
     if (!trimmed) return "";
 
     // Unwrap legacy external proxy URLs (e.g. nawazkhan001-mw-hub-master.hf.space or /proxy/ts?url=...)
-    // Only unwrap /proxy/m3u8?url= or /api/stream-proxy?url= inside the native Kotlin app where WebView intercepts headers directly;
-    // in web browsers, /proxy/m3u8?url= and /api/stream-proxy?url= MUST remain wrapped so Referer & Range requests work!
+    // Only unwrap /proxy/m3u8?url= inside the native Kotlin app where WebView intercepts HLS headers directly.
+    // NEVER unwrap /api/stream-proxy?url= (even in Kotlin APK) because Streamtape IP-bound MP4 tokens are extracted
+    // by the server IP and require server-side Range + Referer forwarding via /api/stream-proxy!
     const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
     for (let depth = 0; depth < 3; depth++) {
       if (
         trimmed.includes("nawazkhan001-mw-hub-master.hf.space") ||
         trimmed.includes("/proxy/ts?url=") ||
-        (isKotlinApp && trimmed.includes("/api/stream-proxy?url=")) ||
         (isKotlinApp && trimmed.includes("/proxy/m3u8?url="))
       ) {
         const m = trimmed.match(/[?&]url=([^&#]+)/i);
@@ -254,7 +254,6 @@ export class SmartStreamService {
     }
 
     if (
-      !isKotlinApp &&
       trimmed.includes("/api/stream-proxy?url=") &&
       !trimmed.startsWith("/")
     ) {
@@ -321,24 +320,22 @@ export class SmartStreamService {
 
       const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
 
-      // In Kotlin native app, always use direct rawM3u8Url instead of server-proxied (/proxy/m3u8 or /api/stream-proxy) URLs
+      // In Kotlin native app, use direct rawM3u8Url for HLS (/proxy/m3u8), but keep /api/stream-proxy wrapped for Streamtape MP4
       if (
         isKotlinApp &&
         data?.m3u8Url &&
-        (data.m3u8Url.includes("/proxy/m3u8") || data.m3u8Url.includes("/api/stream-proxy"))
+        data.m3u8Url.includes("/proxy/m3u8")
       ) {
         if (
           data.meta?.rawM3u8Url &&
-          !data.meta.rawM3u8Url.includes("/proxy/m3u8") &&
-          !data.meta.rawM3u8Url.includes("/api/stream-proxy")
+          !data.meta.rawM3u8Url.includes("/proxy/m3u8")
         ) {
           data.m3u8Url = data.meta.rawM3u8Url;
         } else {
           const unwrapped = this.sanitizeStreamUrl(data.m3u8Url);
           if (
             unwrapped &&
-            !unwrapped.includes("/proxy/m3u8") &&
-            !unwrapped.includes("/api/stream-proxy")
+            !unwrapped.includes("/proxy/m3u8")
           ) {
             data.m3u8Url = unwrapped;
           } else {
@@ -348,8 +345,19 @@ export class SmartStreamService {
         }
       }
 
-      // In Web Browser, ensure SprintCDN / Byse / Filemoon streams are wrapped in /proxy/m3u8
-      // and Streamtape / Tapecontent direct MP4 streams are wrapped in /api/stream-proxy
+      // Ensure Streamtape / Tapecontent direct MP4 streams are ALWAYS wrapped in /api/stream-proxy (both Web and Kotlin APK)
+      if (data?.m3u8Url && !data.m3u8Url.includes("/api/stream-proxy")) {
+        const lowerM3u8 = data.m3u8Url.toLowerCase();
+        if (
+          lowerM3u8.includes("streamtape.com/get_video") ||
+          lowerM3u8.includes("tapecontent.net")
+        ) {
+          const ref = data.meta?.referer || "https://streamtape.com/";
+          data.m3u8Url = `/api/stream-proxy?url=${encodeURIComponent(data.m3u8Url)}&referer=${encodeURIComponent(ref)}`;
+        }
+      }
+
+      // In Web Browser, ensure SprintCDN / Byse / Filemoon HLS streams are wrapped in /proxy/m3u8
       if (!isKotlinApp && data?.m3u8Url && !data.m3u8Url.includes("/proxy/m3u8") && !data.m3u8Url.includes("/api/stream-proxy")) {
         const lowerM3u8 = data.m3u8Url.toLowerCase();
         if (
@@ -361,12 +369,6 @@ export class SmartStreamService {
         ) {
           const ref = data.meta?.referer || this.resolveEmbedReferer(cleanUrl) || "https://byseraguci.com/";
           data.m3u8Url = `/proxy/m3u8?url=${encodeURIComponent(data.m3u8Url)}&referer=${encodeURIComponent(ref)}`;
-        } else if (
-          lowerM3u8.includes("streamtape.com/get_video") ||
-          lowerM3u8.includes("tapecontent.net")
-        ) {
-          const ref = data.meta?.referer || "https://streamtape.com/";
-          data.m3u8Url = `/api/stream-proxy?url=${encodeURIComponent(data.m3u8Url)}&referer=${encodeURIComponent(ref)}`;
         }
       }
 
@@ -1342,12 +1344,16 @@ export class SmartStreamService {
       lowerUrl.includes("shavetape.") ||
       lowerUrl.includes("streamta.pe");
 
-    // 1.1 Priority Tier (Android APK): Inbuilt Native Kotlin Scraper & Multi-Core Byse / Streamtape Engine (Zero CORS, Off-UI Thread)
-    if (isKotlinApp) {
+    // 1.1 Priority Tier (Android APK): Only run Native Kotlin Scraper on non-Streamtape & non-Byse links
+    // (with a strict 3.5s cap so dead VOE Server 1 links fail over to Server 2 in < 3.5s, and Streamtape/Byse never block on the 16.5s WebView sniffer!)
+    if (isKotlinApp && !isStreamtape && !isByseOrFilemoon) {
       try {
-        const nativeRes = await NativeBridgeService.extractStreamNative(trimmed);
+        const nativeRes = await Promise.race([
+          NativeBridgeService.extractStreamNative(trimmed),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
+        ]);
         if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
-          const ttlMs = isStreamtape ? 25 * 60 * 1000 : 170 * 60 * 1000;
+          const ttlMs = 170 * 60 * 1000;
           const expiresAt = Date.now() + ttlMs;
           const refHeader = nativeRes.headers?.Referer || nativeRes.headers?.referer || this.resolveEmbedReferer(trimmed);
           this.registerStreamHostReferer(nativeRes.m3u8Url, refHeader);
@@ -1376,81 +1382,10 @@ export class SmartStreamService {
       }
     }
 
-    // 1.2 Fallback Client-Side Direct Extraction in Kotlin APK (Streamtape / Byse / Filemoon / VOE)
-    if (isKotlinApp) {
-      if (isStreamtape) {
-        try {
-          const clientSt = await this.extractStreamtapeClientSide(trimmed);
-          if (clientSt.ok && clientSt.m3u8Url) {
-            const ttlMs = 25 * 60 * 1000;
-            const expiresAt = Date.now() + ttlMs;
-            const chosenUrl = clientSt.m3u8Url;
-            const meta: CachedStreamMetadata = {
-              ...(clientSt.meta || {}),
-              rawM3u8Url: clientSt.m3u8Url,
-            };
-            this.setClientCache(trimmed, chosenUrl, expiresAt, meta);
-            this.setClientCache(chosenUrl, chosenUrl, expiresAt, meta);
-            return {
-              streamUrl: chosenUrl,
-              isExtracted: true,
-              cached: false,
-              isEmbed: false,
-              expiresAt,
-            };
-          }
-        } catch {}
-      } else if (isByseOrFilemoon) {
-        try {
-          const clientByse = await this.extractByseClientSide(trimmed);
-          if (clientByse.ok && clientByse.m3u8Url) {
-            const ttlMs = 170 * 60 * 1000;
-            const expiresAt = Date.now() + ttlMs;
-            const chosenUrl = clientByse.m3u8Url;
-            const meta: CachedStreamMetadata = {
-              ...(clientByse.meta || {}),
-              rawM3u8Url: clientByse.m3u8Url,
-            };
-            this.setClientCache(trimmed, chosenUrl, expiresAt, meta);
-            this.setClientCache(chosenUrl, chosenUrl, expiresAt, meta);
-            return {
-              streamUrl: chosenUrl,
-              isExtracted: true,
-              cached: false,
-              isEmbed: false,
-              expiresAt,
-            };
-          }
-        } catch {}
-      } else {
-        try {
-          const clientVoe = await this.extractVoeClientSide(trimmed);
-          if (clientVoe.ok && clientVoe.m3u8Url) {
-            const ttlMs = 170 * 60 * 1000;
-            const expiresAt = Date.now() + ttlMs;
-            const chosenUrl = clientVoe.m3u8Url;
-            const meta: CachedStreamMetadata = {
-              ...(clientVoe.meta || {}),
-              rawM3u8Url: clientVoe.m3u8Url,
-            };
-            this.setClientCache(trimmed, chosenUrl, expiresAt, meta);
-            this.setClientCache(chosenUrl, chosenUrl, expiresAt, meta);
-            return {
-              streamUrl: chosenUrl,
-              isExtracted: true,
-              cached: false,
-              isEmbed: false,
-              expiresAt,
-            };
-          }
-        } catch {}
-      }
-    }
-
-    // 2. Call backend proxy endpoint
+    // 2. Call backend proxy endpoint (/api/extract-stream has 0ms in-memory PoW/playback cache for Byse & IP-matched /api/stream-proxy for Streamtape)
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), isByseOrFilemoon || isStreamtape ? 15000 : 8000);
 
       const response = await fetch("/api/extract-stream", {
         method: "POST",
@@ -1468,19 +1403,29 @@ export class SmartStreamService {
 
       if (response.ok) {
         const result = await response.json();
-        const chosenM3u8 = isKotlinApp
+        const isDirectMp4Stream = Boolean(
+          isStreamtape ||
+          result.isDirectVideo ||
+          result.provider === "STREAMTAPE" ||
+          (result.m3u8Url && String(result.m3u8Url).includes("/api/stream-proxy"))
+        );
+        // CRITICAL: For Streamtape / direct MP4 streams, ALWAYS use result.m3u8Url (/api/stream-proxy?url=...)
+        // even inside the Kotlin Android APK so the playback IP matches the server extraction IP and Referer is attached!
+        const chosenM3u8 = isDirectMp4Stream
+          ? result.m3u8Url
+          : isKotlinApp
           ? (result.rawM3u8Url || result.m3u8Url)
           : result.m3u8Url;
 
         if (result.ok && chosenM3u8) {
-          if (isKotlinApp && result.headers?.Referer && !isStreamtape) {
+          if (isKotlinApp && result.headers?.Referer && !isDirectMp4Stream) {
             NativeBridgeService.fetchTextCorsFree(chosenM3u8, result.headers).catch(() => {});
           }
           if (result.expiresAt) {
             const refHeader = result.headers?.Referer || result.headers?.referer || this.resolveEmbedReferer(trimmed);
             const meta: CachedStreamMetadata = {
               qualities: result.qualities,
-              qualityLinks: isKotlinApp ? (result.rawQualityLinks || result.qualityLinks) : result.qualityLinks,
+              qualityLinks: isKotlinApp && !isDirectMp4Stream ? (result.rawQualityLinks || result.qualityLinks) : result.qualityLinks,
               rawM3u8Url: result.rawM3u8Url || chosenM3u8,
               proxiedM3u8Url: result.m3u8Url,
               downloadQualities: result.downloadQualities,
@@ -1491,7 +1436,7 @@ export class SmartStreamService {
             };
             this.setClientCache(trimmed, chosenM3u8, result.expiresAt, meta);
             this.setClientCache(chosenM3u8, chosenM3u8, result.expiresAt, meta);
-            if (result.rawM3u8Url) {
+            if (result.rawM3u8Url && !isDirectMp4Stream) {
               this.setClientCache(result.rawM3u8Url, chosenM3u8, result.expiresAt, meta);
             }
           }
@@ -1504,14 +1449,14 @@ export class SmartStreamService {
           };
         }
 
-        // If backend failed on Streamtape in web browser, try client-side Streamtape extractor
+        // If backend failed on Streamtape, try client-side Streamtape extractor wrapped in /api/stream-proxy
         if (isStreamtape) {
           const clientSt = await this.extractStreamtapeClientSide(trimmed);
           if (clientSt.ok && clientSt.m3u8Url) {
             const ttlMs = 25 * 60 * 1000;
             const expiresAt = Date.now() + ttlMs;
             const refUrl = clientSt.meta?.referer || "https://streamtape.com/";
-            const chosenUrl = isKotlinApp
+            const chosenUrl = clientSt.m3u8Url.includes("/api/stream-proxy")
               ? clientSt.m3u8Url
               : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`;
             const meta: CachedStreamMetadata = {
@@ -1531,7 +1476,7 @@ export class SmartStreamService {
           }
         }
 
-        // If backend failed on Byse/Filemoon in web browser, try client-side Byse extractor before returning embed fallback
+        // If backend failed on Byse/Filemoon, try client-side Byse extractor before returning embed fallback
         if (isByseOrFilemoon) {
           const clientByse = await this.extractByseClientSide(trimmed);
           if (clientByse.ok && clientByse.m3u8Url) {
@@ -1573,14 +1518,14 @@ export class SmartStreamService {
       console.warn("[SmartStreamService] Backend proxy call failed or timed out:", proxyErr);
     }
 
-    // 3.4 If backend proxy timed out on Streamtape, try client-side Streamtape extractor
+    // 3.4 If backend proxy timed out on Streamtape, try client-side Streamtape extractor wrapped in /api/stream-proxy
     if (isStreamtape) {
       const clientSt = await this.extractStreamtapeClientSide(trimmed);
       if (clientSt.ok && clientSt.m3u8Url) {
         const ttlMs = 25 * 60 * 1000;
         const expiresAt = Date.now() + ttlMs;
         const refUrl = clientSt.meta?.referer || "https://streamtape.com/";
-        const chosenUrl = isKotlinApp
+        const chosenUrl = clientSt.m3u8Url.includes("/api/stream-proxy")
           ? clientSt.m3u8Url
           : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`;
         const meta: CachedStreamMetadata = {

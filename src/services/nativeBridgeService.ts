@@ -823,8 +823,21 @@ export class NativeBridgeService {
           }
         }
 
-        // Step 2: If Stage 1 needs Headless WebView Sniffer for dynamic JS execution
-        if ((!scrapeData || !scrapeData.ok || !scrapeData.m3u8Url) && window.MaxPlayNative?.sniffStreamAsync) {
+        const lowerSrc = (sourceUrl || '').toLowerCase();
+        const isStreamtapeOrMp4 =
+          lowerSrc.includes('streamtape.') ||
+          lowerSrc.includes('strtape.') ||
+          lowerSrc.includes('shavetape.') ||
+          lowerSrc.includes('streamta.pe') ||
+          lowerSrc.includes('tapecontent.net') ||
+          lowerSrc.includes('/get_video');
+
+        // Step 2: If Stage 1 needs Headless WebView Sniffer for dynamic JS execution (skip for Streamtape MP4 hosts)
+        if (
+          !isStreamtapeOrMp4 &&
+          (!scrapeData || !scrapeData.ok || !scrapeData.m3u8Url) &&
+          window.MaxPlayNative?.sniffStreamAsync
+        ) {
           scrapeData = await new Promise<any>((resolve) => {
             const cbId = 'sniff_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
             const timer = setTimeout(() => {
@@ -832,7 +845,7 @@ export class NativeBridgeService {
                 delete window.__maxplaySnifferCallbacks[cbId];
               }
               resolve(null);
-            }, 16500);
+            }, 6500);
 
             window.__maxplaySnifferCallbacks![cbId] = (resultJson: string) => {
               clearTimeout(timer);
@@ -843,7 +856,7 @@ export class NativeBridgeService {
               }
             };
 
-            window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 16000);
+            window.MaxPlayNative!.sniffStreamAsync!(sourceUrl, cbId, 6000);
           });
         }
 
@@ -866,17 +879,28 @@ export class NativeBridgeService {
           duration: requestedDurationSec || 1440,
         };
 
+        const lowerMaster = masterUrl.toLowerCase();
+        const isDirectMp4Master =
+          Boolean(scrapeData.isDirectVideo) ||
+          isStreamtapeOrMp4 ||
+          lowerMaster.includes('/get_video') ||
+          lowerMaster.includes('tapecontent.net') ||
+          lowerMaster.split('?')[0].endsWith('.mp4') ||
+          lowerMaster.split('?')[0].endsWith('.mkv');
+
         const parseCapMs = requestedDurationSec > 0 ? 1200 : 250;
-        const meta = await Promise.race([
-          this.parseHlsManifestOnDevice(
-            masterUrl,
-            customHeaders,
-            requestedDurationSec,
-            scrapeData.byseMeta,
-            requestedDurationSec <= 0
-          ),
-          new Promise<typeof fallbackMeta>((resolve) => setTimeout(() => resolve(fallbackMeta), parseCapMs)),
-        ]);
+        const meta = isDirectMp4Master
+          ? fallbackMeta
+          : await Promise.race([
+              this.parseHlsManifestOnDevice(
+                masterUrl,
+                customHeaders,
+                requestedDurationSec,
+                scrapeData.byseMeta,
+                requestedDurationSec <= 0
+              ),
+              new Promise<typeof fallbackMeta>((resolve) => setTimeout(() => resolve(fallbackMeta), parseCapMs)),
+            ]);
 
         return {
           ok: true,

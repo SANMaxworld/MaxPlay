@@ -1475,6 +1475,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
   }, 8 * 60 * 1000);
 
   const bysePlaybackCache = new Map<string, { result: any; expiresAt: number }>();
+  const bysePlaybackInFlight = new Map<string, Promise<any>>();
 
   async function extractFilemoonByseStream(sourceUrl: string): Promise<{
     ok: boolean;
@@ -1498,69 +1499,74 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         ? pathParts[1]
         : pathParts[pathParts.length - 1];
 
-      // STAGE 1: Byse / F16Px API + Pre-Warmed ECDSA P-256 Attestation + Fast PoW Captcha + AES-256-GCM Decryption
       if (code && code.length >= 6) {
         const cachedPb = bysePlaybackCache.get(code);
         if (cachedPb && cachedPb.expiresAt > Date.now()) {
           return cachedPb.result;
         }
+        const existingInFlight = bysePlaybackInFlight.get(sourceUrl.trim());
+        if (existingInFlight) {
+          return existingInFlight;
+        }
+      }
 
+      const runTask = async (): Promise<{
+        ok: boolean;
+        m3u8Url?: string;
+        headers?: Record<string, string>;
+        byseMeta?: {
+          height: number;
+          bitrateKbps: number;
+          sizeBytes?: number;
+          label: string;
+          audioTracks: string[];
+        };
+        error?: string;
+      }> => {
+      // STAGE 1: Byse / F16Px API + Pre-Warmed ECDSA P-256 Attestation + Fast PoW Captcha + AES-256-GCM Decryption
+      if (code && code.length >= 6) {
         try {
           let discoveredEmbedOrigin = "";
           let videoTitle = "";
           let defaultLangCode = "";
 
-          const [detailsRes, settingsRes] = await Promise.all([
+          // Fire embed/details & settings in background WHILE immediately starting captcha+attestation on primary origin!
+          const metaPromise = Promise.all([
             fetch(`${origin}/api/videos/${code}/embed/details`, {
               headers: {
                 "User-Agent": ua,
                 "Accept": "application/json",
                 "Referer": `${origin}/e/${code}`
               },
-              signal: AbortSignal.timeout(4500)
-            }).catch(() => null),
+              signal: AbortSignal.timeout(4000)
+            }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
             fetch(`${origin}/api/videos/${code}/settings`, {
               headers: {
                 "User-Agent": ua,
                 "Accept": "application/json",
                 "Referer": `${origin}/e/${code}`
               },
-              signal: AbortSignal.timeout(4000)
-            }).catch(() => null)
-          ]);
-
-          if (detailsRes && detailsRes.ok) {
-            const details = await detailsRes.json().catch(() => ({}));
-            videoTitle = details?.title || "";
-            if (details?.embed_frame_url) {
-              try {
-                const embedParsed = new URL(details.embed_frame_url);
-                discoveredEmbedOrigin = `${embedParsed.protocol}//${embedParsed.host}`;
-              } catch {}
+              signal: AbortSignal.timeout(3500)
+            }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+          ]).then(([details, settings]) => {
+            if (details) {
+              videoTitle = details?.title || "";
+              if (details?.embed_frame_url) {
+                try {
+                  const embedParsed = new URL(details.embed_frame_url);
+                  discoveredEmbedOrigin = `${embedParsed.protocol}//${embedParsed.host}`;
+                } catch {}
+              }
             }
-          }
+            if (settings) {
+              defaultLangCode = settings?.default_language || "";
+            }
+          });
 
-          if (settingsRes && settingsRes.ok) {
-            const settings = await settingsRes.json().catch(() => ({}));
-            defaultLangCode = settings?.default_language || "";
-          }
-
-          // Prioritize origin (e.g. https://byseraguci.com) and https://f16px.com BEFORE discoveredEmbedOrigin (e.g. n1mwq.org which may be down/blocked)
-          const candidateOrigins = Array.from(
-            new Set(
-              [
-                origin,
-                "https://byseraguci.com",
-                "https://f16px.com",
-                ...(discoveredEmbedOrigin ? [discoveredEmbedOrigin] : [])
-              ].filter(Boolean)
-            )
-          );
-
-          for (const candidateOrigin of candidateOrigins) {
+          const tryByseCandidateOrigin = async (candidateOrigin: string): Promise<any | null> => {
             const candidateFrameUrl = `${candidateOrigin}/e/${code}`;
             const fingerprint = await getOrAttestByseFingerprint(candidateOrigin, candidateFrameUrl, ua);
-            if (!fingerprint) continue;
+            if (!fingerprint) return null;
 
             const embedHeaders: Record<string, string> = {
               "User-Agent": ua,
@@ -1573,13 +1579,11 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             };
 
             let pbData: any = null;
-
-            // Fast-path: Request PoW Captcha directly to skip the wasted 428 round-trip
             const capChRes = await fetch(`${candidateOrigin}/api/videos/${code}/embed/captcha`, {
               method: "POST",
               headers: embedHeaders,
               body: JSON.stringify({ fingerprint }),
-              signal: AbortSignal.timeout(5000)
+              signal: AbortSignal.timeout(4500)
             }).catch(() => null);
 
             if (capChRes && capChRes.ok) {
@@ -1597,7 +1601,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                   solution: solutionStr,
                   fingerprint
                 }),
-                signal: AbortSignal.timeout(5000)
+                signal: AbortSignal.timeout(4500)
               }).catch(() => null);
 
               if (capVerRes && capVerRes.ok) {
@@ -1610,24 +1614,48 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                     "X-Captcha-Token": captchaToken
                   },
                   body: JSON.stringify({ fingerprint }),
-                  signal: AbortSignal.timeout(5000)
+                  signal: AbortSignal.timeout(4500)
                 }).catch(() => null);
                 if (pbRes && pbRes.ok) {
                   pbData = await pbRes.json().catch(() => ({}));
                 }
               }
             } else {
-              // Fallback if mirror does not use /embed/captcha
               const pbRes = await fetch(`${candidateOrigin}/api/videos/${code}/embed/playback`, {
                 method: "POST",
                 headers: embedHeaders,
                 body: JSON.stringify({ fingerprint }),
-                signal: AbortSignal.timeout(5000)
+                signal: AbortSignal.timeout(4500)
               }).catch(() => null);
               if (pbRes && pbRes.ok) {
                 pbData = await pbRes.json().catch(() => ({}));
               }
             }
+            return pbData;
+          };
+
+          const immediateOrigins = Array.from(
+            new Set([origin, "https://byseraguci.com", "https://f16px.com"].filter(Boolean))
+          );
+
+          const attemptOrigins = [...immediateOrigins];
+          let idxOrigin = 0;
+          let triedDiscovered = false;
+
+          while (idxOrigin < attemptOrigins.length) {
+            const candidateOrigin = attemptOrigins[idxOrigin++];
+            const pbData = await tryByseCandidateOrigin(candidateOrigin);
+            if (!pbData?.playback) {
+              if (idxOrigin === attemptOrigins.length && !triedDiscovered) {
+                triedDiscovered = true;
+                await Promise.race([metaPromise, new Promise((r) => setTimeout(r, 400))]);
+                if (discoveredEmbedOrigin && !attemptOrigins.includes(discoveredEmbedOrigin)) {
+                  attemptOrigins.push(discoveredEmbedOrigin);
+                }
+              }
+              continue;
+            }
+            await Promise.race([metaPromise, new Promise((r) => setTimeout(r, 150))]);
 
             if (pbData?.playback) {
               const pb = pbData.playback;
@@ -1793,6 +1821,14 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
 
       return { ok: false, error: "Could not extract Filemoon/Byse stream" };
+      };
+
+      const trimmedSrc = sourceUrl.trim();
+      const taskPromise = runTask().finally(() => {
+        bysePlaybackInFlight.delete(trimmedSrc);
+      });
+      bysePlaybackInFlight.set(trimmedSrc, taskPromise);
+      return await taskPromise;
     } catch (err: any) {
       return { ok: false, error: err?.message || "Filemoon/Byse extraction error" };
     }
@@ -1952,7 +1988,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
       })();
 
-      for (let hop = 0; hop < 5; hop++) {
+      for (let hop = 0; hop < 2; hop++) {
         const resp = await fetch(currentUrl, {
           headers: {
             "User-Agent": ua,
@@ -1961,7 +1997,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             "Referer": refererUrl
           },
           redirect: "follow",
-          signal: AbortSignal.timeout(7000)
+          signal: AbortSignal.timeout(2500)
         });
         const finalHopUrl = resp.url || currentUrl;
         const html = await resp.text();
@@ -2511,16 +2547,27 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           const ttlMs = 170 * 60 * 1000;
           const expiresAt = now + ttlMs;
           const customRef = fmResult.headers?.["Referer"] || "https://byseraguci.com/";
-          const streamMeta = await parseHlsManifestMetadata(
-            fmResult.m3u8Url,
-            requestedDuration,
-            customRef,
-            skipSubPlaylistProbe,
-            forcedQuality || undefined,
-            trimmedUrl
-          );
+          const streamMeta =
+            skipSubPlaylistProbe && fmResult.byseMeta
+              ? {
+                  qualities: [] as string[],
+                  qualityLinks: {} as Record<string, string>,
+                  downloadQualities: [] as any[],
+                  audioTracks: Array.isArray(fmResult.byseMeta.audioTracks)
+                    ? [...fmResult.byseMeta.audioTracks]
+                    : ([] as string[]),
+                  duration: requestedDuration > 0 ? requestedDuration : 0,
+                }
+              : await parseHlsManifestMetadata(
+                  fmResult.m3u8Url,
+                  requestedDuration,
+                  customRef,
+                  skipSubPlaylistProbe,
+                  forcedQuality || undefined,
+                  trimmedUrl
+                );
 
-          // Enrich streamMeta with decrypted Byse API metadata if CDN playlist probe timed out or lacked audio tags
+          // Enrich streamMeta with decrypted Byse API metadata if CDN playlist probe was skipped, timed out, or lacked audio tags
           if (fmResult.byseMeta) {
             if (Array.isArray(fmResult.byseMeta.audioTracks) && fmResult.byseMeta.audioTracks.length > 0) {
               for (const lang of fmResult.byseMeta.audioTracks) {
@@ -2723,8 +2770,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       const fallbackEmbedUrl = getFallbackEmbed(trimmedUrl);
 
-      // Fast 3.5s timeout for external fallback service so dead VOE links quickly fail over to Server 2/3
-      const timeoutMs = isVercelEnv ? 3500 : 4000;
+      // Fast 2.2s timeout for external fallback service so dead VOE links quickly fail over to Server 2/3
+      const timeoutMs = isVercelEnv ? 2200 : 2500;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

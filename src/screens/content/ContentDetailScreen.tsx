@@ -686,12 +686,20 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [s2DiscoveredQualities, setS2DiscoveredQualities] = useState<string[]>([]);
   const [s3DiscoveredQualities, setS3DiscoveredQualities] = useState<string[]>([]);
   const lastUserSelectedLangRef = useRef<string>('');
+  const failedServersRef = useRef<Set<string>>(new Set());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
   // Remembered Server Selection helper (persists per-title and globally)
   const handleSelectServer = (srv: 'server1' | 'server2' | 'server3') => {
     saveProgressNow(playbackPosition, false, true);
+    if (content?.id) {
+      failedServersRef.current.forEach((k) => {
+        if (k.startsWith(`${content.id}::`) && k.endsWith(`::${srv}`)) {
+          failedServersRef.current.delete(k);
+        }
+      });
+    }
     setSelectedServer(srv);
     try {
       if (content?.id) {
@@ -2122,8 +2130,22 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     };
 
     if (s1ProbeTargetUrl) applyCachedMeta(s1ProbeTargetUrl, 'server1');
-    if (s2ProbeTargetUrl) applyCachedMeta(s2ProbeTargetUrl, 'server2');
-    if (s3ProbeTargetUrl) applyCachedMeta(s3ProbeTargetUrl, 'server3');
+    if (s2ProbeTargetUrl) {
+      applyCachedMeta(s2ProbeTargetUrl, 'server2');
+      if (selectedServer !== 'server2' && !SmartStreamService.getCachedStreamMeta(s2ProbeTargetUrl)) {
+        SmartStreamService.resolveStream(s2ProbeTargetUrl, { forceRefresh: false })
+          .then(() => applyCachedMeta(s2ProbeTargetUrl, 'server2'))
+          .catch(() => {});
+      }
+    }
+    if (s3ProbeTargetUrl) {
+      applyCachedMeta(s3ProbeTargetUrl, 'server3');
+      if (selectedServer !== 'server3' && !SmartStreamService.getCachedStreamMeta(s3ProbeTargetUrl)) {
+        SmartStreamService.resolveStream(s3ProbeTargetUrl, { forceRefresh: false })
+          .then(() => applyCachedMeta(s3ProbeTargetUrl, 'server3'))
+          .catch(() => {});
+      }
+    }
   }, [s1ProbeTargetUrl, s2ProbeTargetUrl, s3ProbeTargetUrl, selectedServer]);
 
   // Compute cross-server qualities with [S1] / [S2] / [S3] badges so configured servers' qualities appear in the unified Quality drawer & selector
@@ -3109,6 +3131,36 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               activeQuality={activeQuality}
               selectedServer={selectedServer}
               crossServerQualities={crossServerQualities}
+              onRequestServerFailover={(failedSrv) => {
+                if (!content?.id) return false;
+                failedServersRef.current.add(`${content.id}::${currentPartKey}::${failedSrv}`);
+                const hasS1 = Boolean(s1ProbeTargetUrl);
+                const hasS2 = Boolean(s2ProbeTargetUrl);
+                const hasS3 = Boolean(s3ProbeTargetUrl);
+                const candidates: Array<{ srv: 'server1' | 'server2' | 'server3'; available: boolean; label: string }> =
+                  failedSrv === 'server1'
+                    ? [
+                        { srv: 'server2', available: hasS2, label: 'Server 2' },
+                        { srv: 'server3', available: hasS3, label: 'Server 3' },
+                      ]
+                    : failedSrv === 'server2'
+                    ? [
+                        { srv: 'server3', available: hasS3, label: 'Server 3' },
+                        { srv: 'server1', available: hasS1, label: 'Server 1' },
+                      ]
+                    : [
+                        { srv: 'server2', available: hasS2, label: 'Server 2' },
+                        { srv: 'server1', available: hasS1, label: 'Server 1' },
+                      ];
+                const next = candidates.find(
+                  (c) => c.available && !failedServersRef.current.has(`${content.id}::${currentPartKey}::${c.srv}`)
+                );
+                if (!next) return false;
+                handleSelectServer(next.srv);
+                setToastMessage(`Switched to ${next.label} for faster playback`);
+                setTimeout(() => setToastMessage(null), 2600);
+                return true;
+              }}
               onLanguageChange={handleUnifiedLanguageSelect}
               onRequestCrossServerLanguageSwitch={(missingLang) => {
                 const hasS1 = Boolean(primaryServerUrl || Object.keys(primaryServerQualityLinks || {}).length > 0);

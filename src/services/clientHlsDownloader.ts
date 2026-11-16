@@ -863,10 +863,17 @@ export class ClientHlsDownloader {
       if (isDirectMp4) {
         if (useNativeDisk) {
           let finalBytes = 0;
+          // If streamUrl is routed via /api/stream-proxy (e.g. Server 3 Streamtape IP-bound token),
+          // pass the full origin + /api/stream-proxy URL to native OkHttp so the download IP matches the extracted token IP!
+          const nativeDownloadTargetUrl =
+            streamUrl.startsWith('/api/stream-proxy') && typeof window !== 'undefined' && window.location?.origin
+              ? `${window.location.origin}${streamUrl}`
+              : cleanUrl;
+
           if (NativeBridgeService.supportsDirectFileVault()) {
             const directRes = await NativeBridgeService.downloadDirectFileToDiskNative(
               storageKey,
-              cleanUrl,
+              nativeDownloadTargetUrl,
               effectiveReferer,
               (dlBytes, totalBytes, speedBps) => {
                 const totalEst = totalBytes > 0 ? totalBytes : Math.max(dlBytes * 1.15, 50 * 1024 * 1024);
@@ -888,7 +895,7 @@ export class ClientHlsDownloader {
             const segRes = await NativeBridgeService.downloadSegmentToDiskNative(
               storageKey,
               0,
-              cleanUrl,
+              nativeDownloadTargetUrl,
               effectiveReferer
             );
             if (!segRes.ok) {
