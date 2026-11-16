@@ -154,7 +154,7 @@ interface InlinePlayerProps {
   onGlobalSeek?: (targetTime: number) => void;
   skipMarkers?: any;
   isSmartHls?: boolean;
-  selectedServer?: 'server1' | 'server2';
+  selectedServer?: 'server1' | 'server2' | 'server3';
   crossServerQualities?: string[];
   onDiscoveredAudioTracks?: (tracks: string[]) => void;
   onDiscoveredQualities?: (qualities: string[]) => void;
@@ -197,7 +197,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const prevStreamKeyRef = useRef<string | undefined>(streamKey);
-  const prevServerRef = useRef<'server1' | 'server2'>(selectedServer);
+  const prevServerRef = useRef<'server1' | 'server2' | 'server3'>(selectedServer);
   
   // Gesture and volume states (synced with real Android hardware inside APK)
   const [brightness, setBrightness] = useState<number>(() => {
@@ -629,7 +629,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   // Keep currentLanguage in sync with activeLanguage prop and immediately switch live HLS audio track when changed from Details Screen!
   useEffect(() => {
     let targetLang = currentLanguage;
-    const cleanActiveLang = (activeLanguage || '').replace(/\s*\[(S1|S2)\]/i, '').trim();
+    const cleanActiveLang = (activeLanguage || '').replace(/\s*\[(S1|S2|S3)\]/i, '').trim();
     if (cleanActiveLang) {
       const matched =
         availableLanguages.find((l) => l.toLowerCase() === cleanActiveLang.toLowerCase()) ||
@@ -790,7 +790,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
     const hls = hlsRef.current;
     const hasInPlaceHlsLevels = Boolean(
-      hls && isHlsStreamRef.current && hls.levels && hls.levels.length > 1 && !/\[(S1|S2)\]/i.test(activeQuality)
+      hls && isHlsStreamRef.current && hls.levels && hls.levels.length > 1 && !/\[(S1|S2|S3)\]/i.test(activeQuality)
     );
 
     if (isExternalQualitySwitch && hasStarted) {
@@ -811,12 +811,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
     if (hls && isHlsStreamRef.current && hls.levels && hls.levels.length > 0) {
       if (activeQuality.toLowerCase() === 'auto') {
+        hls.currentLevel = -1;
         hls.loadLevel = -1;
         hls.nextLevel = -1;
       } else {
         const levelIdx = findMatchingHlsLevelIndex(hls.levels, activeQuality);
-        if (levelIdx !== -1 && hls.loadLevel !== levelIdx) {
-          // Use loadLevel + nextLevel so hls.js switches at the next fragment boundary with 0ms buffer flush stall!
+        if (levelIdx !== -1 && (hls.currentLevel !== levelIdx || hls.loadLevel !== levelIdx)) {
+          hls.currentLevel = levelIdx;
           hls.loadLevel = levelIdx;
           hls.nextLevel = levelIdx;
         }
@@ -882,7 +883,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     if (combinedSet.size > 0 || (crossServerQualities && crossServerQualities.length > 0)) {
       const sortedCurrent = Array.from(combinedSet).sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
       const crossList = (crossServerQualities || []).filter(
-        (cq) => cq && /\[(S1|S2)\]/i.test(cq)
+        (cq) => cq && /\[(S1|S2|S3)\]/i.test(cq)
       );
       return ['auto', ...sortedCurrent, ...crossList];
     }
@@ -1162,16 +1163,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       return;
     }
 
-    // 0ms Instant Cache Hit: If SmartStreamService already has this URL pre-warmed in memory/session cache,
-    // resolve synchronously without waiting for an async microtask tick!
-    const instantCachedUrl = SmartStreamService.getCachedStreamUrl(activeVideoUrl);
-    if (instantCachedUrl && !instantCachedUrl.includes('/e/')) {
-      setResolvedStreamUrl(instantCachedUrl);
-      setEmbedFallbackUrl('');
-      setIsResolvingStream(false);
-      return;
-    }
-
     let isMounted = true;
     setIsResolvingStream(true);
     setIsLoading(true);
@@ -1303,9 +1294,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         lowLatencyMode: false,
         startFragPrefetch: true,
         backBufferLength: 30,
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        maxBufferSize: 120 * 1000 * 1000,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        maxBufferSize: 60 * 1000 * 1000,
         maxBufferHole: 0.5,
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.1,
@@ -1644,14 +1635,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           isInitialSeekDoneRef.current = true;
           isSwitchingSourceRef.current = false;
           targetSeekTimeRef.current = 0;
+          savedSwitchTimeRef.current = 0;
+          wasPlayingBeforeSwitchRef.current = false;
         }, 400);
       };
 
       const onCanPlay = () => {
         setIsLoading(false);
+        const shouldResume = autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current;
         performNativeSeek();
 
-        if (autoPlay || hasStarted || isPlaying) {
+        if (shouldResume) {
           video.play().catch(e => {
             console.warn('Native autoplay blocked:', e);
           });
@@ -1980,13 +1974,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       wasPlayingBeforeSwitchRef.current = true;
     }
 
-    const cleanQual = qual.replace(/\s*\[(S1|S2)\]/i, '').trim() || 'auto';
+    const cleanQual = qual.replace(/\s*\[(S1|S2|S3)\]/i, '').trim() || 'auto';
     const hasInPlaceHlsLevels = Boolean(
       hlsRef.current &&
       isHlsStreamRef.current &&
       hlsRef.current.levels &&
       hlsRef.current.levels.length > 1 &&
-      !/\[(S1|S2)\]/i.test(qual)
+      !/\[(S1|S2|S3)\]/i.test(qual)
     );
     if (!hasInPlaceHlsLevels) {
       setHasRenderedFirstFrame(false);
@@ -2000,9 +1994,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     } catch {}
     if (onQualityChange) onQualityChange(qual);
 
-    // If HLS stream has internal multi-quality levels, switch level seamlessly via loadLevel + nextLevel without flushing buffer!
+    // If HLS stream has internal multi-quality levels, switch level seamlessly via currentLevel + loadLevel + nextLevel
     if (hlsRef.current && isHlsStreamRef.current && hlsRef.current.levels && hlsRef.current.levels.length > 0) {
       if (cleanQual.toLowerCase() === 'auto') {
+        hlsRef.current.currentLevel = -1;
         hlsRef.current.loadLevel = -1;
         hlsRef.current.nextLevel = -1;
         if (videoRef.current && videoRef.current.readyState >= 2 && !videoRef.current.paused) {
@@ -2012,6 +2007,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       } else {
         const levelIdx = findMatchingHlsLevelIndex(hlsRef.current.levels, cleanQual);
         if (levelIdx !== -1) {
+          hlsRef.current.currentLevel = levelIdx;
           hlsRef.current.loadLevel = levelIdx;
           hlsRef.current.nextLevel = levelIdx;
         }
@@ -2314,6 +2310,59 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               }
             }
 
+            // Auto-refresh expired IP-bound / temporary direct stream links (e.g. Server 3 Streamtape 403/410)
+            if (
+              !isDecodeError &&
+              err &&
+              (err.code === 2 || err.code === 4) &&
+              activeVideoUrl &&
+              SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls) &&
+              !streamRetryAttemptedRef.current
+            ) {
+              streamRetryAttemptedRef.current = true;
+              const resumeAt = Math.max(
+                videoEl?.currentTime || 0,
+                currentTime || 0,
+                targetSeekTimeRef.current || 0,
+                savedSwitchTimeRef.current || 0
+              );
+              if (resumeAt > 0.5) {
+                savedSwitchTimeRef.current = resumeAt;
+                targetSeekTimeRef.current = resumeAt;
+                isInitialSeekDoneRef.current = false;
+              }
+              wasPlayingBeforeSwitchRef.current = true;
+              setPlaybackError(null);
+              setIsLoading(true);
+              setIsResolvingStream(true);
+              SmartStreamService.clearClientCache(activeVideoUrl);
+              SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: true })
+                .then((fresh) => {
+                  if (fresh && fresh.streamUrl && !fresh.isEmbed) {
+                    setEmbedFallbackUrl('');
+                    if (fresh.streamUrl === resolvedStreamUrl && videoRef.current) {
+                      videoRef.current.load();
+                    } else {
+                      setResolvedStreamUrl(fresh.streamUrl);
+                    }
+                  } else if (fresh && fresh.isEmbed && fresh.streamUrl) {
+                    setEmbedFallbackUrl(fresh.streamUrl);
+                    setResolvedStreamUrl('');
+                  } else {
+                    setPlaybackError('Stream link expired. Please tap Retry.');
+                  }
+                })
+                .catch((refreshErr) => {
+                  console.warn('[InlinePlayer] Stream auto-refresh failed:', refreshErr);
+                  setPlaybackError('Failed to refresh expired stream. Please tap Retry.');
+                })
+                .finally(() => {
+                  setIsResolvingStream(false);
+                  setIsLoading(false);
+                });
+              return;
+            }
+
             setIsLoading(false);
             let msg = "Unknown Error";
             if (err) {
@@ -2367,7 +2416,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               </span>
             ) : isResolvingStream ? (
               <span className="text-xs font-medium text-white/80 tracking-wide bg-black/75 px-3 py-1 rounded-full border border-white/10">
-                Securing stream link...
+                {selectedServer === 'server3' ? 'Connecting to Server 3...' : 'Securing stream link...'}
               </span>
             ) : null}
           </div>

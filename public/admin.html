@@ -1770,12 +1770,12 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
                   <div style="display:flex; align-items:center; gap:8px;">
                     <i class="fa-solid fa-play-circle" style="color:var(--accent-purple); font-size:16px;"></i>
-                    <h3 style="font-size:15px; font-weight:800; margin:0; color:#fff;">Movie Smart HLS Stream Links (Multi-Quality Server 1 & Server 2)</h3>
+                    <h3 style="font-size:15px; font-weight:800; margin:0; color:#fff;">Movie Smart HLS & Direct Stream Links (Server 1, Server 2 & Server 3)</h3>
                   </div>
                   <span style="font-size:11px; color:var(--text-tertiary);">Optional 1080p / 720p / 480p / 360p per server • Click × to remove unused boxes</span>
                 </div>
                 <p style="font-size:12px; color:var(--text-secondary); margin-bottom:14px;">
-                  Paste single or multi-quality links for Server 1 and Server 2. Users on slow networks automatically get lower-quality links for instant playback, while audio tracks remain identical.
+                  Paste single or multi-quality links for Server 1, Server 2 (Filemoon/Byse), and Server 3 (Streamtape). Users on slow networks automatically get lower-quality links for instant playback.
                 </p>
 
                 <!-- SERVER 1 MULTI-QUALITY BOX -->
@@ -1864,6 +1864,50 @@
                   </div>
                   <div id="movie-s2-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;"></div>
                   <div id="movie-secondary-hls-extract-result" style="display:none; margin-top:8px;"></div>
+                </div>
+
+                <!-- SERVER 3 MULTI-QUALITY BOX (STREAMTAPE) -->
+                <div class="form-group" style="margin-bottom:16px; background:rgba(244,63,94,0.06); border:1px solid rgba(244,63,94,0.32); border-radius:12px; padding:14px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                    <label class="form-label" style="font-size:11px; font-weight:800; color:#FB7185; margin:0; display:flex; align-items:center; gap:6px;">
+                      <i class="fa-solid fa-tape"></i> Server 3 (Streamtape) — Multi-Quality Stream Links
+                      <span style="font-size:9px; background:rgba(244,63,94,0.18); color:#FB7185; padding:2px 6px; border-radius:4px; font-weight:700;">1080p / 720p / 480p / 360p</span>
+                    </label>
+                    <div style="display:flex; gap:8px;">
+                      <button type="button" id="btn-test-movie-tertiary-hls" class="btn-secondary" onclick="syncMovieSmartServerInputs(); testAndExtractMovieTertiaryStream()" style="white-space:nowrap; padding:0 14px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px; border-color:rgba(244,63,94,0.45); color:#FB7185;">
+                        <i class="fa-solid fa-bolt"></i> Verify S3
+                      </button>
+                      <button type="button" id="btn-clear-movie-tertiary-hls" class="btn-secondary" onclick="clearMovieServer3()" title="Clear Server 3" style="white-space:nowrap; padding:0 10px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                        <i class="fa-solid fa-trash-can"></i> Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  <input type="hidden" id="movie-tertiary-hls-url" value="">
+                  <div id="movie-s3-qualities-grid" style="display:flex; flex-direction:column; gap:8px;">
+                    <div class="server-q-row" data-server="3" data-quality="1080p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#A78BFA; background:rgba(168,85,247,0.15); border:1px solid rgba(168,85,247,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟣 1080p</span>
+                      <input type="text" id="movie-s3-q-1080p" class="input-control movie-s3-q-input" data-quality="1080p" placeholder="Server 3 (Streamtape) — 1080p Link..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s3')" title="Remove 1080p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="3" data-quality="720p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#60A5FA; background:rgba(96,165,250,0.15); border:1px solid rgba(96,165,250,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🔵 720p</span>
+                      <input type="text" id="movie-s3-q-720p" class="input-control movie-s3-q-input" data-quality="720p" placeholder="Server 3 (Streamtape) — 720p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s3')" title="Remove 720p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="3" data-quality="480p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#34D399; background:rgba(52,211,153,0.15); border:1px solid rgba(52,211,153,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟢 480p</span>
+                      <input type="text" id="movie-s3-q-480p" class="input-control movie-s3-q-input" data-quality="480p" placeholder="Server 3 (Streamtape) — 480p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s3')" title="Remove 480p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="server-q-row" data-server="3" data-quality="360p" style="display:flex; align-items:center; gap:8px;">
+                      <span style="min-width:68px; font-size:11px; font-weight:800; color:#FBBF24; background:rgba(251,191,36,0.15); border:1px solid rgba(251,191,36,0.35); padding:6px 8px; border-radius:8px; text-align:center;">🟡 360p</span>
+                      <input type="text" id="movie-s3-q-360p" class="input-control movie-s3-q-input" data-quality="360p" placeholder="Server 3 (Streamtape) — 360p Link (Optional)..." oninput="syncMovieSmartServerInputs()" style="flex:1; font-family:monospace; font-size:12px; height:36px;">
+                      <button type="button" onclick="hideServerQualityRow(this, 'movie-s3')" title="Remove 360p input" style="width:32px; height:36px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                  </div>
+                  <div id="movie-s3-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;"></div>
+                  <div id="movie-tertiary-hls-extract-result" style="display:none; margin-top:8px;"></div>
                 </div>
 
                 <!-- Movie Skip Markers in Smart HLS Mode -->
@@ -5825,8 +5869,10 @@
       const isItemSmartHls = !!(
         item.isSmartHls ||
         item.secondaryVideoUrl ||
-        (item.videoUrl && (item.videoUrl.includes('voe.sx') || item.videoUrl.includes('filemoon') || item.videoUrl.includes('byse') || item.videoUrl.includes('f16px') || item.videoUrl.includes('n1mwq') || item.videoUrl.includes('/proxy/m3u8') || item.videoUrl.includes('master.m3u8'))) ||
-        (item.videoSources?.Default?.['1080p'] && (item.videoSources.Default['1080p'].includes('voe.sx') || item.videoSources.Default['1080p'].includes('filemoon') || item.videoSources.Default['1080p'].includes('byse') || item.videoSources.Default['1080p'].includes('/proxy/m3u8') || item.videoSources.Default['1080p'].includes('master.m3u8')))
+        item.tertiaryVideoUrl ||
+        item.tertiaryServerUrl ||
+        (item.videoUrl && (item.videoUrl.includes('voe.sx') || item.videoUrl.includes('filemoon') || item.videoUrl.includes('byse') || item.videoUrl.includes('f16px') || item.videoUrl.includes('n1mwq') || item.videoUrl.includes('streamtape') || item.videoUrl.includes('/proxy/m3u8') || item.videoUrl.includes('master.m3u8'))) ||
+        (item.videoSources?.Default?.['1080p'] && (item.videoSources.Default['1080p'].includes('voe.sx') || item.videoSources.Default['1080p'].includes('filemoon') || item.videoSources.Default['1080p'].includes('byse') || item.videoSources.Default['1080p'].includes('streamtape') || item.videoSources.Default['1080p'].includes('/proxy/m3u8') || item.videoSources.Default['1080p'].includes('master.m3u8')))
       );
       window.toggleSmartHlsMode(isItemSmartHls);
 
@@ -5847,14 +5893,19 @@
 
         // Pre-fill movie smart HLS multi-quality urls if present
         const itemSecUrl = item.secondaryVideoUrl || item.secondaryUrl || '';
+        const itemTerUrl = item.tertiaryVideoUrl || item.tertiaryServerUrl || '';
         let itemPrimaryUrl = item.videoUrl || (item.qualityLinks?.['1080p'] || (item.videoSources?.Default?.['1080p'] || ''));
 
         if (itemSecUrl && itemPrimaryUrl === itemSecUrl) {
           itemPrimaryUrl = '';
         }
+        if (itemTerUrl && itemPrimaryUrl === itemTerUrl) {
+          itemPrimaryUrl = '';
+        }
 
         const s1Quals = { ...(item.qualityLinks || item.videoSources?.Default || {}) };
         const s2Quals = { ...(item.secondaryQualityLinks || {}) };
+        const s3Quals = { ...(item.tertiaryQualityLinks || item.tertiaryServerQualityLinks || {}) };
         // Heal accidental 1080p fallback clone if 1080p has the exact same URL as 720p/480p/360p
         if (s1Quals['1080p'] && ['720p', '480p', '360p'].some(k => s1Quals[k] && s1Quals[k] === s1Quals['1080p'])) {
           delete s1Quals['1080p'];
@@ -5862,8 +5913,12 @@
         if (s2Quals['1080p'] && ['720p', '480p', '360p'].some(k => s2Quals[k] && s2Quals[k] === s2Quals['1080p'])) {
           delete s2Quals['1080p'];
         }
+        if (s3Quals['1080p'] && ['720p', '480p', '360p'].some(k => s3Quals[k] && s3Quals[k] === s3Quals['1080p'])) {
+          delete s3Quals['1080p'];
+        }
         const hasS1QualKeys = Object.keys(s1Quals).length > 0;
         const hasS2QualKeys = Object.keys(s2Quals).length > 0;
+        const hasS3QualKeys = Object.keys(s3Quals).length > 0;
         ['1080p', '720p', '480p', '360p'].forEach(q => {
           const s1Inp = document.getElementById(`movie-s1-q-${q}`);
           const s1Row = s1Inp ? s1Inp.closest('.server-q-row') : null;
@@ -5877,6 +5932,12 @@
             s2Inp.value = s2Quals[q] || (!hasS2QualKeys && q === '1080p' ? itemSecUrl : '') || '';
             if (s2Row) s2Row.style.display = 'flex';
           }
+          const s3Inp = document.getElementById(`movie-s3-q-${q}`);
+          const s3Row = s3Inp ? s3Inp.closest('.server-q-row') : null;
+          if (s3Inp) {
+            s3Inp.value = s3Quals[q] || (!hasS3QualKeys && q === '1080p' ? itemTerUrl : '') || '';
+            if (s3Row) s3Row.style.display = 'flex';
+          }
         });
         if (typeof window.syncMovieSmartServerInputs === 'function') {
           window.syncMovieSmartServerInputs();
@@ -5884,6 +5945,7 @@
         if (typeof window.renderServerRestoreBar === 'function') {
           window.renderServerRestoreBar('movie-s1');
           window.renderServerRestoreBar('movie-s2');
+          window.renderServerRestoreBar('movie-s3');
         }
 
         // Restore movie download qualities and metadata
@@ -5896,6 +5958,9 @@
         }
         if (item.secondaryDownloadQualities && item.secondaryDownloadQualities.length > 0) {
           window.extractedMovieSecondaryDownloadQualities = item.secondaryDownloadQualities;
+        }
+        if (item.tertiaryDownloadQualities && item.tertiaryDownloadQualities.length > 0) {
+          window.extractedMovieTertiaryDownloadQualities = item.tertiaryDownloadQualities;
         }
         
         // Pre-fill movie skip markers (both normal and HLS containers)
@@ -5985,6 +6050,8 @@
       if (movieHlsUrlEl) movieHlsUrlEl.value = '';
       const movieSecHlsUrlEl = document.getElementById('movie-secondary-hls-url');
       if (movieSecHlsUrlEl) movieSecHlsUrlEl.value = '';
+      const movieTerHlsUrlEl = document.getElementById('movie-tertiary-hls-url');
+      if (movieTerHlsUrlEl) movieTerHlsUrlEl.value = '';
       ['1080p', '720p', '480p', '360p'].forEach(q => {
         const s1Inp = document.getElementById(`movie-s1-q-${q}`);
         if (s1Inp) {
@@ -5998,10 +6065,17 @@
           const r = s2Inp.closest('.server-q-row');
           if (r) r.style.display = 'flex';
         }
+        const s3Inp = document.getElementById(`movie-s3-q-${q}`);
+        if (s3Inp) {
+          s3Inp.value = '';
+          const r = s3Inp.closest('.server-q-row');
+          if (r) r.style.display = 'flex';
+        }
       });
       if (typeof window.renderServerRestoreBar === 'function') {
         window.renderServerRestoreBar('movie-s1');
         window.renderServerRestoreBar('movie-s2');
+        window.renderServerRestoreBar('movie-s3');
       }
       const movieHlsIntroS = document.getElementById('movie-hls-intro-start');
       if (movieHlsIntroS) movieHlsIntroS.value = '';
@@ -6021,11 +6095,14 @@
       window.extractedMovieQualityLinks = null;
       window.extractedMovieDownloadQualities = null;
       window.extractedMovieSecondaryDownloadQualities = null;
+      window.extractedMovieTertiaryDownloadQualities = null;
       window.extractedMovieAudioTracks = null;
       const movieResEl = document.getElementById('movie-hls-extract-result');
       if (movieResEl) { movieResEl.style.display = 'none'; movieResEl.innerHTML = ''; }
       const movieSecResEl = document.getElementById('movie-secondary-hls-extract-result');
       if (movieSecResEl) { movieSecResEl.style.display = 'none'; movieSecResEl.innerHTML = ''; }
+      const movieTerResEl = document.getElementById('movie-tertiary-hls-extract-result');
+      if (movieTerResEl) { movieTerResEl.style.display = 'none'; movieTerResEl.innerHTML = ''; }
       
       window.toggleSmartHlsMode(false);
       
@@ -6590,12 +6667,16 @@
             window.MaxPlayNative.probeSingleStreamBoxAsync(cleanUrl, forcedQuality || '', cbId);
           });
 
-          if (nativeData && nativeData.ok && nativeData.m3u8Url) {
+          if (nativeData && nativeData.ok && (nativeData.m3u8Url || nativeData.directUrl)) {
             return {
               ok: true,
               engine: nativeData.engine || 'KOTLIN_NATIVE',
+              provider: nativeData.provider || '',
+              isDirectVideo: Boolean(nativeData.isDirectVideo),
+              mimeType: nativeData.mimeType || '',
+              cdnUrl: nativeData.cdnUrl || '',
               sourceUrl: cleanUrl,
-              m3u8Url: nativeData.m3u8Url,
+              m3u8Url: nativeData.m3u8Url || nativeData.directUrl,
               qualities: Array.isArray(nativeData.qualities) ? nativeData.qualities : (forcedQuality ? [forcedQuality] : []),
               qualityLinks: nativeData.qualityLinks || (forcedQuality ? { [forcedQuality]: cleanUrl } : {}),
               downloadQualities: Array.isArray(nativeData.downloadQualities) ? nativeData.downloadQualities.map(dq => ({
@@ -6643,12 +6724,16 @@
             continue;
           }
           const data = JSON.parse(rawText);
-          if (data && data.ok && data.m3u8Url) {
+          if (data && data.ok && (data.m3u8Url || data.directUrl)) {
             return {
               ok: true,
               engine: 'SERVER_API',
+              provider: data.provider || '',
+              isDirectVideo: Boolean(data.isDirectVideo),
+              mimeType: data.mimeType || '',
+              cdnUrl: data.cdnUrl || '',
               sourceUrl: cleanUrl,
-              m3u8Url: data.m3u8Url,
+              m3u8Url: data.m3u8Url || data.directUrl,
               qualities: Array.isArray(data.qualities) ? data.qualities : (forcedQuality ? [forcedQuality] : []),
               qualityLinks: data.qualityLinks || (forcedQuality ? { [forcedQuality]: cleanUrl } : {}),
               downloadQualities: Array.isArray(data.downloadQualities) ? data.downloadQualities.map(dq => ({
@@ -6983,6 +7068,15 @@
       }
     };
 
+    window.updateMovieTertiaryDownloadSize = function(idx, val) {
+      if (window.extractedMovieTertiaryDownloadQualities && window.extractedMovieTertiaryDownloadQualities[idx]) {
+        const num = parseInt(val, 10);
+        if (!isNaN(num) && num > 0) {
+          window.extractedMovieTertiaryDownloadQualities[idx].sizeMb = num;
+        }
+      }
+    };
+
     window.updateEpisodeDownloadSize = function(epIdx, qIdx, val) {
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (activeSeason && activeSeason.episodes && activeSeason.episodes[epIdx]) {
@@ -7004,6 +7098,19 @@
           const num = parseInt(val, 10);
           if (!isNaN(num) && num > 0) {
             ep.secondaryDownloadQualities[qIdx].sizeMb = num;
+          }
+        }
+      }
+    };
+
+    window.updateEpisodeTertiaryDownloadSize = function(epIdx, qIdx, val) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (activeSeason && activeSeason.episodes && activeSeason.episodes[epIdx]) {
+        const ep = activeSeason.episodes[epIdx];
+        if (ep.tertiaryDownloadQualities && ep.tertiaryDownloadQualities[qIdx]) {
+          const num = parseInt(val, 10);
+          if (!isNaN(num) && num > 0) {
+            ep.tertiaryDownloadQualities[qIdx].sizeMb = num;
           }
         }
       }
@@ -7386,7 +7493,242 @@
       }
     };
 
-    // Helper functions for 4-Quality Server 1 & Server 2 inputs (1080p, 720p, 480p, 360p)
+    window.testAndExtractMovieTertiaryStream = async function() {
+      if (typeof window.syncMovieSmartServerInputs === 'function') {
+        window.syncMovieSmartServerInputs();
+      }
+      const urlInput = document.getElementById('movie-tertiary-hls-url');
+      const statusEl = document.getElementById('movie-tertiary-hls-extract-result');
+      const btn = document.getElementById('btn-test-movie-tertiary-hls');
+      if (!statusEl) return;
+
+      const s3BoxMap = typeof window.collectMovieServerQualityLinks === 'function'
+        ? window.collectMovieServerQualityLinks(3)
+        : {};
+      const rawUrl = urlInput ? urlInput.value.trim() : '';
+      if (Object.keys(s3BoxMap).length === 0 && !rawUrl) {
+        showToast('Please enter at least one Server 3 (Streamtape) URL first', 'warning');
+        return;
+      }
+
+      const origHtml = btn ? btn.innerHTML : '';
+      if (btn) btn.disabled = true;
+      statusEl.style.display = 'block';
+
+      try {
+        const data = await window.verifyServerQualityBoxesBatch(
+          s3BoxMap,
+          rawUrl,
+          (currentIdx, totalCount, qLabel) => {
+            const progMsg = `Verifying ${currentIdx}/${totalCount} (${qLabel})...`;
+            if (btn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${progMsg}`;
+            statusEl.innerHTML = `
+              <div style="background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.35); border-radius:10px; padding:10px 12px; color:#FB7185; display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:700;">
+                <span><i class="fa-solid fa-spinner fa-spin"></i> Server 3: ${progMsg} — extracting Streamtape CDN link & real file size</span>
+                <span style="background:rgba(244,63,94,0.2); padding:2px 8px; border-radius:99px; font-size:10px;">${Math.round((currentIdx / totalCount) * 100)}%</span>
+              </div>
+            `;
+          },
+          window.movieTotalDuration || 0
+        );
+
+        if (data.ok && data.m3u8Url) {
+          window.extractedMovieTertiaryDownloadQualities = data.downloadQualities || [];
+          if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0 && (!window.extractedMovieAudioTracks || window.extractedMovieAudioTracks.length === 0)) {
+            window.extractedMovieAudioTracks = data.audioTracks;
+          }
+          window.syncStep1QualitiesAndLanguages(data.qualities, data.audioTracks);
+
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : 'Verified';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0)
+            ? data.audioTracks.join(', ')
+            : (window.extractedMovieAudioTracks && window.extractedMovieAudioTracks.length > 0 ? window.extractedMovieAudioTracks.join(', ') : 'Shared Audio');
+
+          const s3MovieDlRows = (data.downloadQualities && data.downloadQualities.length > 0)
+            ? data.downloadQualities.map((q, idx) => {
+              const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
+              return `
+              <div style="display:grid; grid-template-columns: 85px 130px 1fr; gap:8px; align-items:center; background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:8px; margin-bottom:5px; border:1px solid rgba(244,63,94,0.22);">
+                <span style="font-weight:800; color:#FB7185; font-size:12px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <input type="number" class="input-control movie-s3-dl-size-input" data-idx="${idx}" value="${q.sizeMb}" style="height:28px; width:75px; padding:2px 6px; font-size:11px; text-align:right;" oninput="updateMovieTertiaryDownloadSize(${idx}, this.value)">
+                  <span style="font-size:11px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+                </div>
+                <input type="text" class="input-control" value="${q.url || data.m3u8Url}" readonly style="height:28px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || data.m3u8Url}">
+              </div>
+            `;}).join('')
+            : '';
+
+          const safePreviewUrl = String(data.m3u8Url).replace(/'/g, "\\'");
+          statusEl.innerHTML = `
+            <div style="background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.35); border-radius:10px; padding:12px; margin-top:6px;">
+              <div style="color:#FB7185; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+                <span><i class="fa-solid fa-circle-check"></i> Server 3 Verified (${data.verifiedCount}/${data.totalBoxes} Link(s))! Direct Streamtape CDN Ready</span>
+                <span style="font-size:10px; background:rgba(244,63,94,0.2); color:#FB7185; padding:2px 8px; border-radius:99px;">${data.engine}</span>
+              </div>
+              <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:11px; color:#ddd; margin-bottom:8px;">
+                <span><strong style="color:#FB7185;">Qualities:</strong> ${qLabels}</span>
+                <span>•</span>
+                <span><strong style="color:#38BDF8;">Audio:</strong> ${aLabels}</span>
+              </div>
+              ${s3MovieDlRows ? `
+                <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(244,63,94,0.25);">
+                  <div style="font-size:11px; font-weight:800; color:#FB7185; margin-bottom:6px;"><i class="fa-solid fa-download"></i> Server 3 Verified Download Sizes (Real Content-Length Probed)</div>
+                  ${s3MovieDlRows}
+                </div>
+              ` : ''}
+              <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(244,63,94,0.25); display:flex; flex-direction:column; gap:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <button type="button" class="btn-secondary" style="font-size:11px; padding:4px 10px; height:auto; color:#FB7185; border-color:rgba(244,63,94,0.5); display:inline-flex; align-items:center; gap:5px;" onclick="window.toggleAdminStreamPreview('s3-movie-preview-box', '${safePreviewUrl}')">
+                    <i class="fa-solid fa-play"></i> Test Play S3 Stream
+                  </button>
+                  <span style="font-size:10px; color:#aaa;">Direct Range Stream Proxy • IP-Bound Ready</span>
+                </div>
+                <div id="s3-movie-preview-box" style="display:none; margin-top:6px;">
+                  <video controls style="width:100%; max-height:240px; border-radius:8px; background:#000;" playsinline></video>
+                </div>
+              </div>
+            </div>
+          `;
+          showToast(`Server 3: Verified ${data.verifiedCount}/${data.totalBoxes} Streamtape link(s)!`, 'success');
+        } else {
+          statusEl.innerHTML = `
+            <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:10px; margin-top:6px; color:#F87171; font-size:12px;">
+              <i class="fa-solid fa-circle-exclamation"></i> Server 3 Verification Failed: ${data.error || 'Could not extract Streamtape stream'}
+            </div>
+          `;
+          showToast(data.error || 'Server 3 extraction failed', 'error');
+        }
+      } catch (err) {
+        statusEl.innerHTML = `<div style="color:#F87171; font-size:12px;">Error: ${err.message}</div>`;
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    };
+
+    window.testAndExtractEpisodeTertiaryStream = async function(epIdx, btn) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (!activeSeason || !activeSeason.episodes[epIdx]) return;
+      const card = btn.closest('.episode-card');
+      if (!card) return;
+      const inp = card.querySelector('.ep-tertiary-hls-stream-input');
+      const statusEl = card.querySelector('.ep-tertiary-hls-extract-status');
+
+      const s3BoxMap = {};
+      card.querySelectorAll('.ep-s3-q-input').forEach(qInp => {
+        const row = qInp.closest('.server-q-row');
+        if (row && row.style.display === 'none') return;
+        const q = qInp.getAttribute('data-quality');
+        const val = window.sanitizeAdminStreamUrl(qInp.value);
+        if (q && val) s3BoxMap[q] = val;
+      });
+      const rawUrl = inp ? window.sanitizeAdminStreamUrl(inp.value) : '';
+
+      if (Object.keys(s3BoxMap).length === 0 && !rawUrl) {
+        showToast('Please enter at least one Server 3 (Streamtape) episode URL first', 'warning');
+        return;
+      }
+
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+
+      try {
+        const ep = activeSeason.episodes[epIdx];
+        const data = await window.verifyServerQualityBoxesBatch(
+          s3BoxMap,
+          rawUrl,
+          (currentIdx, totalCount, qLabel) => {
+            const progMsg = `${currentIdx}/${totalCount} (${qLabel})`;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${progMsg}`;
+            if (statusEl) {
+              statusEl.innerHTML = `<span style="color:#FB7185; font-weight:700;"><i class="fa-solid fa-spinner fa-spin"></i> Server 3: Verifying ${progMsg} — extracting Streamtape CDN & real MB...</span>`;
+            }
+          },
+          ep?.duration || 0
+        );
+
+        if (data.ok && data.m3u8Url) {
+          if (ep) {
+            const primaryS3 = s3BoxMap['1080p'] || s3BoxMap['720p'] || s3BoxMap['480p'] || s3BoxMap['360p'] || rawUrl;
+            ep.tertiaryVideoUrl = primaryS3;
+            ep.tertiaryServerUrl = primaryS3;
+            ep.tertiaryQualityLinks = Object.keys(data.qualityLinks || {}).length > 0 ? data.qualityLinks : s3BoxMap;
+            ep.tertiaryServerQualityLinks = ep.tertiaryQualityLinks;
+            ep.tertiaryDownloadQualities = data.downloadQualities || [];
+            if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0 && (!ep.audioTracks || ep.audioTracks.length === 0)) {
+              ep.audioTracks = data.audioTracks;
+              ep.availableLanguages = data.audioTracks;
+            }
+          }
+          window.syncStep1QualitiesAndLanguages(data.qualities, data.audioTracks);
+
+          const qLabels = (data.qualities && data.qualities.length > 0) ? data.qualities.join(', ') : 'Verified';
+          const aLabels = (data.audioTracks && data.audioTracks.length > 0)
+            ? data.audioTracks.join(', ')
+            : (ep?.availableLanguages && ep.availableLanguages.length > 0 ? ep.availableLanguages.join(', ') : 'Shared Audio');
+
+          const epS3DlRows = (data.downloadQualities && data.downloadQualities.length > 0)
+            ? data.downloadQualities.map((q, idx) => {
+              const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
+              return `
+              <div style="display:grid; grid-template-columns: 80px 125px 1fr; gap:6px; align-items:center; background:rgba(0,0,0,0.3); padding:6px 10px; border-radius:6px; margin-bottom:4px; border:1px solid rgba(244,63,94,0.2);">
+                <span style="font-weight:800; color:#FB7185; font-size:11px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+                <div style="display:flex; align-items:center; gap:3px;">
+                  <input type="number" class="input-control ep-s3-dl-size-input" data-quality="${q.id}" data-ep="${epIdx}" data-idx="${idx}" value="${q.sizeMb}" style="height:26px; width:65px; padding:2px 6px; font-size:10px; text-align:right;" oninput="updateEpisodeTertiaryDownloadSize(${epIdx}, ${idx}, this.value)">
+                  <span style="font-size:10px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+                </div>
+                <input type="text" class="input-control" value="${q.url || data.m3u8Url}" readonly style="height:26px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || data.m3u8Url}">
+              </div>
+            `;}).join('')
+            : '';
+
+          const safePreviewUrl = String(data.m3u8Url).replace(/'/g, "\\'");
+          if (statusEl) {
+            statusEl.innerHTML = `
+              <div style="background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.35); border-radius:8px; padding:8px 10px; margin-top:6px;">
+                <div style="color:#FB7185; font-weight:800; font-size:11px; display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:2px; flex-wrap:wrap;">
+                  <span><i class="fa-solid fa-circle-check"></i> Server 3 Verified (${data.verifiedCount}/${data.totalBoxes} Box(es))</span>
+                  <span style="font-size:9px; background:rgba(244,63,94,0.2); color:#FB7185; padding:1px 6px; border-radius:99px;">${data.engine}</span>
+                </div>
+                <div style="font-size:10px; color:#ddd; margin-bottom:6px;">
+                  <i class="fa-solid fa-sliders" style="color:#FB7185;"></i> ${qLabels} • <i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> ${aLabels}
+                </div>
+                ${epS3DlRows ? `
+                  <div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(244,63,94,0.25);">
+                    <div style="font-size:10px; font-weight:800; color:#FB7185; margin-bottom:4px;"><i class="fa-solid fa-download"></i> Server 3 Real Download Sizes</div>
+                    ${epS3DlRows}
+                  </div>
+                ` : ''}
+                <div style="padding-top:6px; border-top:1px solid rgba(244,63,94,0.25);">
+                  <button type="button" class="btn-secondary" style="font-size:10px; padding:3px 8px; height:auto; color:#FB7185; border-color:rgba(244,63,94,0.5); display:inline-flex; align-items:center; gap:4px;" onclick="window.toggleAdminStreamPreview('s3-ep-preview-box-${epIdx}', '${safePreviewUrl}')">
+                    <i class="fa-solid fa-play"></i> Test Play S3 Stream
+                  </button>
+                  <div id="s3-ep-preview-box-${epIdx}" style="display:none; margin-top:6px;">
+                    <video controls style="width:100%; max-height:200px; border-radius:6px; background:#000;" playsinline></video>
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+          showToast(`Episode ${epIdx + 1}: Verified ${data.verifiedCount}/${data.totalBoxes} Server 3 link(s)!`, 'success');
+        } else {
+          if (statusEl) {
+            statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Server 3 verification failed'}</span>`;
+          }
+          showToast(data.error || 'Server 3 extraction failed', 'error');
+        }
+      } catch (err) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:#EF4444;">Error: ${err.message}</span>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    };
+
+    // Helper functions for 4-Quality Server 1, Server 2 & Server 3 inputs (1080p, 720p, 480p, 360p)
     window.sanitizeAdminStreamUrl = function(rawUrl) {
       if (!rawUrl || typeof rawUrl !== 'string') return '';
       const trimmed = rawUrl.trim();
@@ -7422,11 +7764,24 @@
       const primaryS2 = s2Links['1080p'] || s2Links['720p'] || s2Links['480p'] || s2Links['360p'] || '';
       const secHlsInp = document.getElementById('movie-secondary-hls-url');
       if (secHlsInp) secHlsInp.value = primaryS2;
+
+      const s3Links = {};
+      document.querySelectorAll('.movie-s3-q-input').forEach(inp => {
+        const row = inp.closest('.server-q-row');
+        if (row && row.style.display === 'none') return;
+        const q = inp.getAttribute('data-quality');
+        const val = window.sanitizeAdminStreamUrl(inp.value);
+        if (inp.value && val && inp.value !== val) inp.value = val;
+        if (q && val) s3Links[q] = val;
+      });
+      const primaryS3 = s3Links['1080p'] || s3Links['720p'] || s3Links['480p'] || s3Links['360p'] || '';
+      const terHlsInp = document.getElementById('movie-tertiary-hls-url');
+      if (terHlsInp) terHlsInp.value = primaryS3;
     };
 
     window.collectMovieServerQualityLinks = function(serverNum) {
       const links = {};
-      const selector = serverNum === 1 ? '.movie-s1-q-input' : '.movie-s2-q-input';
+      const selector = serverNum === 1 ? '.movie-s1-q-input' : (serverNum === 2 ? '.movie-s2-q-input' : '.movie-s3-q-input');
       document.querySelectorAll(selector).forEach(inp => {
         const row = inp.closest('.server-q-row');
         if (row && row.style.display === 'none') return;
@@ -7497,7 +7852,7 @@
 
     window.renderEpisodeServerRestoreBar = function(card) {
       if (!card) return;
-      [1, 2].forEach(sNum => {
+      [1, 2, 3].forEach(sNum => {
         const bar = card.querySelector(`.ep-s${sNum}-restore-bar`);
         if (!bar) return;
         const hidden = [];
@@ -7548,6 +7903,21 @@
       showToast('Server 2 links cleared', 'info');
     };
 
+    window.clearMovieServer3 = function() {
+      const inp = document.getElementById('movie-tertiary-hls-url');
+      if (inp) inp.value = '';
+      document.querySelectorAll('.movie-s3-q-input').forEach(el => {
+        el.value = '';
+        const r = el.closest('.server-q-row');
+        if (r) r.style.display = 'flex';
+      });
+      window.renderServerRestoreBar('movie-s3');
+      const res = document.getElementById('movie-tertiary-hls-extract-result');
+      if (res) { res.style.display = 'none'; res.innerHTML = ''; }
+      window.extractedMovieTertiaryDownloadQualities = [];
+      showToast('Server 3 links cleared', 'info');
+    };
+
     window.toggleAdminStreamPreview = function(containerId, streamUrl) {
       const container = document.getElementById(containerId);
       if (!container) return;
@@ -7572,9 +7942,17 @@
       if (!window._adminPreviewHlsInstances) window._adminPreviewHlsInstances = {};
       if (window._adminPreviewHlsInstances[containerId]) {
         window._adminPreviewHlsInstances[containerId].destroy();
+        delete window._adminPreviewHlsInstances[containerId];
       }
 
-      if (window.Hls && window.Hls.isSupported()) {
+      const lowerUrl = (streamUrl || '').toLowerCase();
+      const isDirectNativeVideo =
+        lowerUrl.includes('/api/stream-proxy') ||
+        lowerUrl.includes('/get_video') ||
+        lowerUrl.includes('tapecontent.net') ||
+        (!lowerUrl.includes('.m3u8') && !lowerUrl.includes('/proxy/m3u8'));
+
+      if (!isDirectNativeVideo && window.Hls && window.Hls.isSupported()) {
         const hls = new window.Hls();
         window._adminPreviewHlsInstances[containerId] = hls;
         hls.loadSource(streamUrl);
@@ -7627,11 +8005,38 @@
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
       if (activeSeason && activeSeason.episodes[epIdx]) {
         delete activeSeason.episodes[epIdx].secondaryVideoUrl;
+        delete activeSeason.episodes[epIdx].secondaryServerUrl;
         delete activeSeason.episodes[epIdx].secondaryQualityLinks;
+        delete activeSeason.episodes[epIdx].secondaryServerQualityLinks;
         delete activeSeason.episodes[epIdx].secondaryDownloadQualities;
       }
       if (typeof window.syncEpisodesFromDOM === 'function') window.syncEpisodesFromDOM();
       showToast(`Episode ${epIdx + 1} Server 2 links cleared`, 'info');
+    };
+
+    window.clearEpisodeServer3 = function(epIdx, btn) {
+      const card = btn.closest('.episode-card');
+      if (!card) return;
+      const inp = card.querySelector('.ep-tertiary-hls-stream-input');
+      if (inp) inp.value = '';
+      card.querySelectorAll('.ep-s3-q-input').forEach(el => {
+        el.value = '';
+        const r = el.closest('.server-q-row');
+        if (r) r.style.display = 'flex';
+      });
+      window.renderEpisodeServerRestoreBar(card);
+      const statusEl = card.querySelector('.ep-tertiary-hls-extract-status');
+      if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (activeSeason && activeSeason.episodes[epIdx]) {
+        delete activeSeason.episodes[epIdx].tertiaryVideoUrl;
+        delete activeSeason.episodes[epIdx].tertiaryServerUrl;
+        delete activeSeason.episodes[epIdx].tertiaryQualityLinks;
+        delete activeSeason.episodes[epIdx].tertiaryServerQualityLinks;
+        delete activeSeason.episodes[epIdx].tertiaryDownloadQualities;
+      }
+      if (typeof window.syncEpisodesFromDOM === 'function') window.syncEpisodesFromDOM();
+      showToast(`Episode ${epIdx + 1} Server 3 links cleared`, 'info');
     };
 
     window.promptAndExtractMovieStream = async function(btn) {
@@ -8320,7 +8725,33 @@
             delete ep.secondaryServerQualityLinks;
           }
 
-          // Prune downloadQualities & qualities to strictly match configured s1Links / s2Links boxes
+          const terHlsInp = card.querySelector('.ep-tertiary-hls-stream-input');
+          const s3Links = {};
+          card.querySelectorAll('.ep-s3-q-input').forEach(qInp => {
+            const row = qInp.closest('.server-q-row');
+            if (row && row.style.display === 'none') return;
+            const q = qInp.getAttribute('data-quality');
+            const val = window.sanitizeAdminStreamUrl(qInp.value);
+            if (qInp.value && val && qInp.value !== val) qInp.value = val;
+            if (q && val) s3Links[q] = val;
+          });
+          const primaryS3 = s3Links['1080p'] || s3Links['720p'] || s3Links['480p'] || s3Links['360p'] || (terHlsInp ? window.sanitizeAdminStreamUrl(terHlsInp.value) : '');
+          if (terHlsInp) terHlsInp.value = primaryS3;
+
+          if (primaryS3) {
+            const finalS3Obj = Object.keys(s3Links).length > 0 ? s3Links : { '1080p': primaryS3 };
+            ep.tertiaryVideoUrl = primaryS3;
+            ep.tertiaryServerUrl = primaryS3;
+            ep.tertiaryQualityLinks = finalS3Obj;
+            ep.tertiaryServerQualityLinks = finalS3Obj;
+          } else {
+            delete ep.tertiaryVideoUrl;
+            delete ep.tertiaryServerUrl;
+            delete ep.tertiaryQualityLinks;
+            delete ep.tertiaryServerQualityLinks;
+          }
+
+          // Prune downloadQualities & qualities to strictly match configured s1Links / s2Links / s3Links boxes
           if (Object.keys(s1Links).length > 0) {
             ep.qualities = Object.keys(s1Links);
             if (Array.isArray(ep.downloadQualities)) {
@@ -8330,8 +8761,11 @@
           if (Object.keys(s2Links).length > 0 && Array.isArray(ep.secondaryDownloadQualities)) {
             ep.secondaryDownloadQualities = ep.secondaryDownloadQualities.filter(q => q && s2Links[q.id]);
           }
+          if (Object.keys(s3Links).length > 0 && Array.isArray(ep.tertiaryDownloadQualities)) {
+            ep.tertiaryDownloadQualities = ep.tertiaryDownloadQualities.filter(q => q && s3Links[q.id]);
+          }
 
-          // Preserve & sync episode download sizes if edited (Server 1 & Server 2)
+          // Preserve & sync episode download sizes if edited (Server 1, Server 2 & Server 3)
           const sizeInputs = card.querySelectorAll('.ep-dl-size-input');
           if (sizeInputs.length > 0 && ep.downloadQualities) {
             sizeInputs.forEach(sInp => {
@@ -8349,6 +8783,17 @@
               const qId = sInp.getAttribute('data-quality');
               const sVal = parseInt(sInp.value, 10);
               const qItem = ep.secondaryDownloadQualities.find(q => q.id === qId);
+              if (qItem && !isNaN(sVal) && sVal > 0) {
+                qItem.sizeMb = sVal;
+              }
+            });
+          }
+          const s3SizeInputs = card.querySelectorAll('.ep-s3-dl-size-input');
+          if (s3SizeInputs.length > 0 && ep.tertiaryDownloadQualities) {
+            s3SizeInputs.forEach(sInp => {
+              const qId = sInp.getAttribute('data-quality');
+              const sVal = parseInt(sInp.value, 10);
+              const qItem = ep.tertiaryDownloadQualities.find(q => q.id === qId);
               if (qItem && !isNaN(sVal) && sVal > 0) {
                 qItem.sizeMb = sVal;
               }
@@ -8672,7 +9117,15 @@
                 delete s2Links['1080p'];
               }
               const hasEpS2Keys = Object.keys(s2Links).length > 0;
-              const s2Fallback = ep.secondaryVideoUrl || ep.secondaryUrl || s2Links['1080p'] || '';
+              const s2Fallback = ep.secondaryVideoUrl || ep.secondaryServerUrl || ep.secondaryUrl || s2Links['1080p'] || '';
+
+              const s3Links = { ...(ep.tertiaryQualityLinks || ep.tertiaryServerQualityLinks || {}) };
+              if (s3Links['1080p'] && ['720p', '480p', '360p'].some(k => s3Links[k] && s3Links[k] === s3Links['1080p'])) {
+                delete s3Links['1080p'];
+              }
+              const hasEpS3Keys = Object.keys(s3Links).length > 0;
+              const s3Fallback = ep.tertiaryVideoUrl || ep.tertiaryServerUrl || s3Links['1080p'] || '';
+
               const qMeta = [
                 { q: '1080p', badge: '🟣 1080p', color: '#A78BFA', bg: 'rgba(168,85,247,0.15)', border: 'rgba(168,85,247,0.35)' },
                 { q: '720p',  badge: '🔵 720p',  color: '#60A5FA', bg: 'rgba(96,165,250,0.15)', border: 'rgba(96,165,250,0.35)' },
@@ -8697,6 +9150,17 @@
                     <span style="min-width:64px; font-size:10px; font-weight:800; color:${m.color}; background:${m.bg}; border:1px solid ${m.border}; padding:5px 6px; border-radius:6px; text-align:center;">${m.badge}</span>
                     <input type="text" class="input-control ep-s2-q-input" data-quality="${m.q}" value="${val}" placeholder="Server 2 — ${m.q} Link ${m.q === '1080p' ? '(or Master Stream)' : '(Optional)'}..." onchange="syncEpisodesFromDOM()" style="flex:1; font-family:monospace; font-size:11px; height:32px;">
                     <button type="button" onclick="hideServerQualityRow(this, 'ep-s2')" title="Remove ${m.q} input" style="width:28px; height:32px; border-radius:6px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
+                  </div>
+                `;
+              }).join('');
+
+              const s3RowsHtml = qMeta.map(m => {
+                const val = s3Links[m.q] || (!hasEpS3Keys && m.q === '1080p' ? s3Fallback : '') || '';
+                return `
+                  <div class="server-q-row ep-s3-q-row" data-quality="${m.q}" style="display:flex; align-items:center; gap:8px;">
+                    <span style="min-width:64px; font-size:10px; font-weight:800; color:${m.color}; background:${m.bg}; border:1px solid ${m.border}; padding:5px 6px; border-radius:6px; text-align:center;">${m.badge}</span>
+                    <input type="text" class="input-control ep-s3-q-input" data-quality="${m.q}" value="${val}" placeholder="Server 3 (Streamtape) — ${m.q} Link ${m.q === '1080p' ? '' : '(Optional)'}..." onchange="syncEpisodesFromDOM()" style="flex:1; font-family:monospace; font-size:11px; height:32px;">
+                    <button type="button" onclick="hideServerQualityRow(this, 'ep-s3')" title="Remove ${m.q} input" style="width:28px; height:32px; border-radius:6px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:#F87171; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-xmark"></i></button>
                   </div>
                 `;
               }).join('');
@@ -8735,6 +9199,24 @@
                   </div>
                   <div class="ep-s2-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;"></div>
                   <div class="ep-secondary-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
+                </div>
+
+                <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.08);">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:6px;">
+                    <label class="form-label" style="font-size:12px; font-weight:800; color:#FB7185; margin-bottom:0; display:flex; align-items:center; gap:6px;">
+                      <i class="fa-solid fa-tape" style="color:#FB7185;"></i> Server 3 (Streamtape) — Multi-Quality Links (1080p / 720p / 480p / 360p)
+                    </label>
+                    <div style="display:flex; gap:6px;">
+                      <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:28px; font-size:10px; font-weight:700; border-color:rgba(244,63,94,0.45); color:#FB7185;" onclick="syncEpisodesFromDOM(); testAndExtractEpisodeTertiaryStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S3</button>
+                      <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 8px; height:28px; font-size:10px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer3(${epIdx}, this)" title="Clear Server 3"><i class="fa-solid fa-trash-can"></i></button>
+                    </div>
+                  </div>
+                  <input type="hidden" class="ep-tertiary-hls-stream-input" value="${s3Fallback}">
+                  <div style="display:flex; flex-direction:column; gap:6px;">
+                    ${s3RowsHtml}
+                  </div>
+                  <div class="ep-s3-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;"></div>
+                  <div class="ep-tertiary-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
                 </div>
               </div>
               `;
@@ -9112,29 +9594,42 @@
             if (Object.keys(s2QualityMap).length > 0 && Array.isArray(window.extractedMovieSecondaryDownloadQualities)) {
               window.extractedMovieSecondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities.filter(q => q && s2QualityMap[q.id]);
             }
+            const s3QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(3) : {};
+            if (Object.keys(s3QualityMap).length > 0 && Array.isArray(window.extractedMovieTertiaryDownloadQualities)) {
+              window.extractedMovieTertiaryDownloadQualities = window.extractedMovieTertiaryDownloadQualities.filter(q => q && s3QualityMap[q.id]);
+            }
 
             const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || s1QualityMap['1080p'] || s1QualityMap['720p'] || s1QualityMap['480p'] || s1QualityMap['360p'] || '';
             const secUrl = document.getElementById('movie-secondary-hls-url')?.value.trim() || s2QualityMap['1080p'] || s2QualityMap['720p'] || s2QualityMap['480p'] || s2QualityMap['360p'] || '';
-            firstVideoUrl = hlsUrl || secUrl;
+            const terUrl = document.getElementById('movie-tertiary-hls-url')?.value.trim() || s3QualityMap['1080p'] || s3QualityMap['720p'] || s3QualityMap['480p'] || s3QualityMap['360p'] || '';
+            firstVideoUrl = hlsUrl || secUrl || terUrl;
 
             const finalS1Links = Object.keys(s1QualityMap).length > 0 ? s1QualityMap : (hlsUrl ? { '1080p': hlsUrl } : {});
             const finalS2Links = Object.keys(s2QualityMap).length > 0 ? s2QualityMap : (secUrl ? { '1080p': secUrl } : {});
+            const finalS3Links = Object.keys(s3QualityMap).length > 0 ? s3QualityMap : (terUrl ? { '1080p': terUrl } : {});
 
-            if (hlsUrl && secUrl) {
-              firstVideoUrl = hlsUrl;
-              mainQualityLinks = finalS1Links;
-              mainVideoSources = { 'Default': finalS1Links };
-              movieParts = [{ videoSources: { 'Default': finalS1Links }, qualityLinks: finalS1Links, secondaryVideoUrl: secUrl, secondaryQualityLinks: finalS2Links }];
-            } else if (hlsUrl) {
-              firstVideoUrl = hlsUrl;
-              mainQualityLinks = finalS1Links;
-              mainVideoSources = { 'Default': finalS1Links };
-              movieParts = [{ videoSources: { 'Default': finalS1Links }, qualityLinks: finalS1Links }];
-            } else if (secUrl) {
-              firstVideoUrl = '';
-              mainQualityLinks = {};
-              mainVideoSources = {};
-              movieParts = [{ secondaryVideoUrl: secUrl, secondaryQualityLinks: finalS2Links }];
+            if (hlsUrl || secUrl || terUrl) {
+              const partObj = {};
+              if (hlsUrl) {
+                firstVideoUrl = hlsUrl;
+                mainQualityLinks = finalS1Links;
+                mainVideoSources = { 'Default': finalS1Links };
+                partObj.videoSources = { 'Default': finalS1Links };
+                partObj.qualityLinks = finalS1Links;
+              } else {
+                firstVideoUrl = '';
+                mainQualityLinks = {};
+                mainVideoSources = {};
+              }
+              if (secUrl) {
+                partObj.secondaryVideoUrl = secUrl;
+                partObj.secondaryQualityLinks = finalS2Links;
+              }
+              if (terUrl) {
+                partObj.tertiaryVideoUrl = terUrl;
+                partObj.tertiaryQualityLinks = finalS3Links;
+              }
+              movieParts = [partObj];
             } else {
               firstVideoUrl = '';
               movieParts = [];
@@ -9367,9 +9862,9 @@
           qualityLinks: mainQualityLinks,
           videoSources: mainVideoSources,
           availableLanguages: configuredLangs.length > 0 ? configuredLangs : ['Hindi', 'English'],
-          videoLinks: (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl))).length > 0
-            ? (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl)))
-            : (firstVideoUrl ? [firstVideoUrl] : ((document.getElementById('movie-secondary-hls-url')?.value.trim()) ? [{ secondaryVideoUrl: window.sanitizeAdminStreamUrl(document.getElementById('movie-secondary-hls-url')?.value) }] : [])),
+          videoLinks: (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl || p.tertiaryVideoUrl || p.tertiaryServerUrl))).length > 0
+            ? (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl || p.tertiaryVideoUrl || p.tertiaryServerUrl)))
+            : (firstVideoUrl ? [firstVideoUrl] : ((document.getElementById('movie-secondary-hls-url')?.value.trim()) ? [{ secondaryVideoUrl: window.sanitizeAdminStreamUrl(document.getElementById('movie-secondary-hls-url')?.value) }] : ((document.getElementById('movie-tertiary-hls-url')?.value.trim()) ? [{ tertiaryVideoUrl: window.sanitizeAdminStreamUrl(document.getElementById('movie-tertiary-hls-url')?.value) }] : []))),
           seasonsData: activeSeasons,
           episodesList: lightweightEpisodes,
           trending: selectedRows.length > 0,
@@ -9396,8 +9891,28 @@
             delete rawDoc.secondaryQualityLinks;
             delete rawDoc.secondaryServerQualityLinks;
           }
+
+          const movieTerUrl = window.sanitizeAdminStreamUrl(document.getElementById('movie-tertiary-hls-url')?.value || '');
+          const s3QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(3) : {};
+          if (movieTerUrl || Object.keys(s3QualityMap).length > 0) {
+            const finalTerUrl = movieTerUrl || Object.values(s3QualityMap)[0] || '';
+            const finalTerLinks = Object.keys(s3QualityMap).length > 0 ? s3QualityMap : { '1080p': finalTerUrl };
+            rawDoc.tertiaryVideoUrl = finalTerUrl;
+            rawDoc.tertiaryServerUrl = finalTerUrl;
+            rawDoc.tertiaryQualityLinks = finalTerLinks;
+            rawDoc.tertiaryServerQualityLinks = finalTerLinks;
+          } else {
+            delete rawDoc.tertiaryVideoUrl;
+            delete rawDoc.tertiaryServerUrl;
+            delete rawDoc.tertiaryQualityLinks;
+            delete rawDoc.tertiaryServerQualityLinks;
+          }
+
           if (window.extractedMovieSecondaryDownloadQualities && window.extractedMovieSecondaryDownloadQualities.length > 0) {
             rawDoc.secondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities;
+          }
+          if (window.extractedMovieTertiaryDownloadQualities && window.extractedMovieTertiaryDownloadQualities.length > 0) {
+            rawDoc.tertiaryDownloadQualities = window.extractedMovieTertiaryDownloadQualities;
           }
           if (window.extractedMovieDownloadQualities && window.extractedMovieDownloadQualities.length > 0) {
             rawDoc.downloadQualities = window.extractedMovieDownloadQualities;
@@ -9426,6 +9941,16 @@
           if (ep0SecLinks && Object.keys(ep0SecLinks).length > 0) {
             rawDoc.secondaryQualityLinks = ep0SecLinks;
             rawDoc.secondaryServerQualityLinks = ep0SecLinks;
+          }
+          const ep0TerUrl = ep0?.tertiaryServerUrl || ep0?.tertiaryVideoUrl || '';
+          const ep0TerLinks = ep0?.tertiaryServerQualityLinks || ep0?.tertiaryQualityLinks;
+          if (ep0TerUrl) {
+            rawDoc.tertiaryVideoUrl = ep0TerUrl;
+            rawDoc.tertiaryServerUrl = ep0TerUrl;
+          }
+          if (ep0TerLinks && Object.keys(ep0TerLinks).length > 0) {
+            rawDoc.tertiaryQualityLinks = ep0TerLinks;
+            rawDoc.tertiaryServerQualityLinks = ep0TerLinks;
           }
           if (ep0?.qualityLinks && Object.keys(ep0.qualityLinks).length > 0) {
             rawDoc.qualityLinks = ep0.qualityLinks;

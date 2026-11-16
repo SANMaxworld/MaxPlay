@@ -60,24 +60,43 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 .build()
         }
 
-        // Stores custom Referer/Origin headers discovered per stream host domain & root domain
+        // Stores custom Referer/Origin & User-Agent headers discovered per stream host domain & root domain
         val hostRefererMap = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val hostUserAgentMap = java.util.concurrent.ConcurrentHashMap<String, String>()
 
         @Volatile
         var lastActiveReferer: String? = null
 
-        fun registerStreamReferer(streamUrl: String, refererUrl: String) {
-            if (refererUrl.isBlank()) return
+        fun registerStreamReferer(streamUrl: String, refererUrl: String, userAgent: String = "") {
+            if (refererUrl.isBlank() && userAgent.isBlank()) return
             try {
                 val host = android.net.Uri.parse(streamUrl).host?.lowercase() ?: return
                 val root = extractRootDomain(host)
-                lastActiveReferer = refererUrl
-                hostRefererMap[host] = refererUrl
-                if (root.isNotEmpty()) {
-                    hostRefererMap[root] = refererUrl
+                if (refererUrl.isNotBlank()) {
+                    lastActiveReferer = refererUrl
+                    hostRefererMap[host] = refererUrl
+                    if (root.isNotEmpty()) {
+                        hostRefererMap[root] = refererUrl
+                    }
+                }
+                if (userAgent.isNotBlank()) {
+                    hostUserAgentMap[host] = userAgent
+                    if (root.isNotEmpty()) {
+                        hostUserAgentMap[root] = userAgent
+                    }
                 }
             } catch (_: Exception) {
             }
+        }
+
+        fun resolveUserAgentForHost(host: String): String {
+            val cleanHost = host.lowercase()
+            hostUserAgentMap[cleanHost]?.let { return it }
+            val root = extractRootDomain(cleanHost)
+            if (root.isNotEmpty()) {
+                hostUserAgentMap[root]?.let { return it }
+            }
+            return InbuiltStreamScraper.DEFAULT_USER_AGENT
         }
 
         fun resolveRefererForHost(host: String, fallbackScheme: String = "https"): String {
@@ -86,6 +105,12 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             val root = extractRootDomain(cleanHost)
             if (root.isNotEmpty()) {
                 hostRefererMap[root]?.let { return it }
+            }
+            if (cleanHost.contains("streamtape") || cleanHost.contains("strtape") ||
+                cleanHost.contains("shavetape") || cleanHost.contains("streamta.pe") ||
+                cleanHost.contains("tapecontent")
+            ) {
+                return "https://streamtape.com/"
             }
             if (cleanHost.contains("sprintcdn") || cleanHost.contains("owphbf") ||
                 cleanHost.contains("r66nv9ed") || cleanHost.contains("n1mwq") ||
@@ -120,6 +145,11 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 cleanHost.contains("kerapoxy") ||
                 cleanHost.contains("moonmov") ||
                 cleanHost.contains("voe") ||
+                cleanHost.contains("streamtape") ||
+                cleanHost.contains("strtape") ||
+                cleanHost.contains("shavetape") ||
+                cleanHost.contains("streamta.pe") ||
+                cleanHost.contains("tapecontent") ||
                 cleanHost.contains("upnshare") ||
                 cleanHost.contains("streamwish") ||
                 cleanHost.contains("hlswish") ||
@@ -412,9 +442,17 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                     pathOnly.endsWith("master.txt") ||
                     lowerUrl.contains(".m3u8?")
 
+            val customUa = resolveUserAgentForHost(host)
+            val isDirectProgressiveMedia =
+                lowerUrl.contains("/get_video") ||
+                    host.lowercase().contains("tapecontent") ||
+                    pathOnly.endsWith(".mp4") ||
+                    pathOnly.endsWith(".mkv") ||
+                    pathOnly.endsWith(".webm")
+
             val okReqBuilder = Request.Builder()
                 .url(targetUrl)
-                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                .header("User-Agent", customUa)
                 .header("Accept", "*/*")
                 .header("Referer", customReferer)
                 .header("Origin", customOrigin)
@@ -427,13 +465,17 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             val response = streamCdnHttpClient.newCall(okReqBuilder.build()).execute()
             val statusCode = response.code
             val finalResolvedUrl = response.request.url.toString()
-            registerStreamReferer(finalResolvedUrl, customReferer)
+            registerStreamReferer(finalResolvedUrl, customReferer, customUa)
 
             val contentTypeRaw = response.header("Content-Type") ?: guessMediaMimeType(lowerUrl)
             var mimeType = contentTypeRaw.substringBefore(";").trim().ifEmpty { "application/octet-stream" }
 
             if (isLikelyPlaylist) {
                 mimeType = "application/vnd.apple.mpegurl"
+            } else if (isDirectProgressiveMedia) {
+                if (mimeType == "application/octet-stream" || mimeType.startsWith("text/") || mimeType.startsWith("image/")) {
+                    mimeType = if (pathOnly.endsWith(".mkv") || lowerUrl.contains(".mkv")) "video/x-matroska" else if (pathOnly.endsWith(".webm")) "video/webm" else "video/mp4"
+                }
             } else if (lowerUrl.contains("/hls2/") || lowerUrl.contains("/hls/") || isKnownStreamCdnHost(host)) {
                 // Normalize disguised segment MIME types (.jpg, .png, .webp, .html, .txt) so hls.js / MSE never rejects segment buffers
                 if (mimeType.startsWith("image/") || mimeType.startsWith("text/html") || mimeType.startsWith("text/plain")) {
@@ -484,6 +526,7 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             "woff2" -> "font/woff2"
             "ttf" -> "font/ttf"
             "mp4" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
             "webm" -> "video/webm"
             else -> "application/octet-stream"
         }
@@ -493,7 +536,9 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
         return when {
             lowerUrl.contains(".m3u8") -> "application/vnd.apple.mpegurl"
             lowerUrl.contains(".ts") -> "video/mp2t"
-            lowerUrl.contains(".m4s") || lowerUrl.contains(".mp4") -> "video/mp4"
+            lowerUrl.contains(".mkv") -> "video/x-matroska"
+            lowerUrl.contains(".webm") -> "video/webm"
+            lowerUrl.contains(".m4s") || lowerUrl.contains(".mp4") || lowerUrl.contains("/get_video") || lowerUrl.contains("tapecontent") -> "video/mp4"
             else -> "application/octet-stream"
         }
     }

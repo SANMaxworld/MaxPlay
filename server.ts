@@ -207,6 +207,19 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
     }
 
+    // Check if source is a Streamtape watch/embed link before probing
+    if (isStreamtapeUrl(cleanUrl) && !isStreamtapeDirectUrl(cleanUrl)) {
+      try {
+        const stRes = await extractStreamtapeDirectStream(cleanUrl);
+        if (stRes.ok && (stRes.cdnUrl || stRes.directUrl)) {
+          const resolvedDur = await probeVideoDuration(stRes.cdnUrl || stRes.directUrl!);
+          if (resolvedDur > 0) return resolvedDur;
+        }
+      } catch (stErr) {
+        console.warn("Probe Streamtape auto-extraction error:", stErr);
+      }
+    }
+
     // Check if source is an extractable stream (e.g. voe.sx) before probing
     const isVoeOrExtractable = isVoeOrMirrorUrl(cleanUrl);
     if (isVoeOrExtractable) {
@@ -1852,6 +1865,310 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
   }
 
+  // ============================================================================
+  // ⚡ DEDICATED STREAMTAPE / SERVER 3 EXTRACTOR (Zero Fake-Token Trap)
+  // ============================================================================
+  const STREAMTAPE_DOMAINS = [
+    "streamtape.com", "streamtape.net", "streamtape.to", "streamtape.xyz",
+    "streamta.pe", "strtape.cloud", "strcloud.link", "stape.fun",
+    "shavetape.cash", "tapecontent.net", "streamtape"
+  ];
+
+  function isStreamtapeDirectUrl(rawUrl: string): boolean {
+    if (!rawUrl || typeof rawUrl !== "string") return false;
+    const lower = rawUrl.toLowerCase().trim();
+    return lower.includes("/get_video") || lower.includes("tapecontent.net") || lower.includes("/api/stream-proxy");
+  }
+
+  function isStreamtapeUrl(rawUrl: string): boolean {
+    if (!rawUrl || typeof rawUrl !== "string") return false;
+    const trimmed = rawUrl.trim();
+    const lower = trimmed.toLowerCase();
+    if (STREAMTAPE_DOMAINS.some((d) => lower.includes(d))) return true;
+    try {
+      const host = new URL(trimmed).hostname.toLowerCase();
+      return host.includes("streamtape") || host.includes("strtape") || host.includes("shavetape") || host.includes("streamta.pe") || host.includes("tapecontent");
+    } catch {
+      return false;
+    }
+  }
+
+  function evaluateStreamtapeJsExprServer(rawExpr: string): string {
+    if (!rawExpr || typeof rawExpr !== "string") return "";
+
+    const splitTopLevelPlus = (expr: string): string[] => {
+      const parts: string[] = [];
+      let current = "";
+      let depth = 0;
+      let quote: string | null = null;
+      let escaped = false;
+      for (let i = 0; i < expr.length; i++) {
+        const ch = expr[i];
+        if (escaped) {
+          current += ch;
+          escaped = false;
+          continue;
+        }
+        if (quote) {
+          current += ch;
+          if (ch === "\\") escaped = true;
+          else if (ch === quote) quote = null;
+          continue;
+        }
+        if (ch === "'" || ch === '"') {
+          quote = ch;
+          current += ch;
+        } else if (ch === "(") {
+          depth++;
+          current += ch;
+        } else if (ch === ")") {
+          if (depth > 0) depth--;
+          current += ch;
+        } else if (ch === "+" && depth === 0) {
+          parts.push(current.trim());
+          current = "";
+        } else {
+          current += ch;
+        }
+      }
+      if (current.trim()) parts.push(current.trim());
+      return parts;
+    };
+
+    const evalTerm = (term: string): string => {
+      let s = term.trim();
+      if (!s) return "";
+
+      // Recursively strip chained .substring(...) / .substr(...) / .slice(...) from outer expression
+      const methodChain: Array<{ name: string; start: number; end?: number }> = [];
+      while (true) {
+        const m = s.match(/^(.*)\.(substring|substr|slice)\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)\s*$/s);
+        if (!m) break;
+        s = m[1].trim();
+        methodChain.unshift({
+          name: m[2],
+          start: parseInt(m[3], 10),
+          end: m[4] !== undefined ? parseInt(m[4], 10) : undefined,
+        });
+      }
+
+      let baseVal = "";
+      if (s.startsWith("(") && s.endsWith(")")) {
+        baseVal = evaluateStreamtapeJsExprServer(s.slice(1, -1));
+      } else if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith('"') && s.endsWith('"'))) {
+        baseVal = s.slice(1, -1)
+          .replace(/\\\//g, "/")
+          .replace(/\\'/g, "'")
+          .replace(/\\"/g, '"')
+          .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+          .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+      } else {
+        baseVal = evaluateStreamtapeJsExprServer(s);
+      }
+
+      for (const op of methodChain) {
+        if (op.name === "substr") {
+          baseVal = op.end !== undefined ? baseVal.substr(op.start, op.end) : baseVal.substr(op.start);
+        } else if (op.name === "slice") {
+          baseVal = op.end !== undefined ? baseVal.slice(op.start, op.end) : baseVal.slice(op.start);
+        } else {
+          baseVal = op.end !== undefined ? baseVal.substring(op.start, op.end) : baseVal.substring(op.start);
+        }
+      }
+      return baseVal;
+    };
+
+    const topParts = splitTopLevelPlus(rawExpr.trim());
+    if (topParts.length > 1) {
+      return topParts.map(evalTerm).join("");
+    }
+    return evalTerm(topParts[0] || rawExpr);
+  }
+
+  function normalizeStreamtapeDirectUrl(rawCandidate: string): string {
+    let url = (rawCandidate || "").trim().replace(/^['"]|['"]$/g, "");
+    if (!url || !url.includes("get_video")) return "";
+    if (url.startsWith("//")) url = "https:" + url;
+    else if (url.startsWith("/streamtape.com")) url = "https:/" + url;
+    else if (url.startsWith("streamtape.com") || url.startsWith("strtape.") || url.startsWith("streamta.pe")) url = "https://" + url;
+    else if (url.startsWith("/get_video")) url = "https://streamtape.com" + url;
+    else if (!url.startsWith("http")) {
+      const idx = url.indexOf("streamtape.");
+      if (idx >= 0) url = "https://" + url.slice(idx);
+      else if (url.includes("/get_video")) url = "https://streamtape.com/get_video" + url.split("/get_video")[1];
+    }
+    if (!url.startsWith("http")) return "";
+    if (!url.includes("stream=1")) {
+      url += (url.includes("?") ? "&" : "?") + "stream=1";
+    }
+    return url;
+  }
+
+  function extractQualityAndAudioFromMeta(metaText: string): { quality: string; audioTracks: string[] } {
+    const lower = (metaText || "").toLowerCase();
+    let quality = "";
+    if (lower.includes("2160p") || lower.includes("4k")) quality = "1080p";
+    else if (lower.includes("1440p")) quality = "1440p";
+    else if (lower.includes("1080p")) quality = "1080p";
+    else if (lower.includes("720p")) quality = "720p";
+    else if (lower.includes("480p")) quality = "480p";
+    else if (lower.includes("360p")) quality = "360p";
+
+    const audioTracks: string[] = [];
+    const addLang = (l: string) => {
+      if (!audioTracks.includes(l)) audioTracks.push(l);
+    };
+    if (lower.includes("hindi") || /\bhin\b/.test(lower)) addLang("Hindi");
+    if (lower.includes("english") || /\beng\b/.test(lower)) addLang("English");
+    if (lower.includes("japanese") || /\bjpn\b/.test(lower) || /\bjap\b/.test(lower)) addLang("Japanese");
+    if (lower.includes("tamil")) addLang("Tamil");
+    if (lower.includes("telugu")) addLang("Telugu");
+    if (lower.includes("malayalam")) addLang("Malayalam");
+    if (lower.includes("kannada")) addLang("Kannada");
+    if (lower.includes("korean")) addLang("Korean");
+
+    return { quality, audioTracks };
+  }
+
+  async function extractStreamtapeDirectStream(sourceUrl: string): Promise<{
+    ok: boolean;
+    directUrl?: string;
+    cdnUrl?: string;
+    sizeBytes?: number;
+    sizeMb?: number;
+    mimeType?: string;
+    quality?: string;
+    audioTracks?: string[];
+    title?: string;
+    headers?: Record<string, string>;
+    error?: string;
+  }> {
+    const ua = defaultByseUa;
+    try {
+      const trimmed = sourceUrl.trim();
+      const candidates = Array.from(
+        new Set([
+          trimmed,
+          trimmed.replace(/\/v\//i, "/e/")
+        ])
+      );
+
+      let directUrl = "";
+      let pageTitle = "";
+
+      for (const candidateUrl of candidates) {
+        try {
+          const resp = await fetch(candidateUrl, {
+            headers: {
+              "User-Agent": ua,
+              "Referer": "https://streamtape.com/",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9"
+            },
+            signal: AbortSignal.timeout(10000)
+          });
+          if (!resp.ok) continue;
+          const html = await resp.text();
+          if (!html) continue;
+
+          if (!pageTitle) {
+            const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+              || html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            if (ogMatch && ogMatch[1]) {
+              pageTitle = ogMatch[1].trim();
+            }
+          }
+
+          // Capture ALL robotlink/ideoolink/botlink innerHTML JS assignments and evaluate LAST to FIRST
+          const assignments: string[] = [];
+          const regex = /getElementById\s*\(\s*['"](?:robotlink|ideoolink|botlink)['"]\s*\)\s*\.innerHTML\s*=\s*([^;]+);/gi;
+          let match: RegExpExecArray | null;
+          while ((match = regex.exec(html)) !== null) {
+            if (match[1]) assignments.push(match[1]);
+          }
+
+          for (let i = assignments.length - 1; i >= 0; i--) {
+            const evaluated = evaluateStreamtapeJsExprServer(assignments[i]);
+            const normalized = normalizeStreamtapeDirectUrl(evaluated);
+            if (normalized) {
+              directUrl = normalized;
+              break;
+            }
+          }
+          if (directUrl) break;
+        } catch (err) {
+          console.warn("[StreamtapeExtractor] Fetch attempt failed:", candidateUrl, err);
+        }
+      }
+
+      if (!directUrl) {
+        return { ok: false, error: "Could not locate active Streamtape stream token (link may have been removed)" };
+      }
+
+      // Follow 302 redirect & probe real size via HEAD / 1-byte Range GET
+      let cdnUrl = directUrl;
+      let sizeBytes = 0;
+      let mimeType = (trimmed.toLowerCase().includes(".mkv") || pageTitle.toLowerCase().includes(".mkv"))
+        ? "video/x-matroska"
+        : "video/mp4";
+
+      try {
+        const probeResp = await fetch(directUrl, {
+          method: "GET",
+          headers: {
+            "User-Agent": ua,
+            "Referer": "https://streamtape.com/",
+            "Origin": "https://streamtape.com",
+            "Range": "bytes=0-0",
+            "Accept": "*/*"
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(9000)
+        });
+        try { await probeResp.body?.cancel(); } catch {}
+
+        if (probeResp.url && probeResp.url.startsWith("http")) {
+          cdnUrl = probeResp.url;
+        }
+        const contentRange = probeResp.headers.get("content-range") || "";
+        const totalMatch = contentRange.match(/\/(\d+)\s*$/);
+        if (totalMatch && totalMatch[1]) {
+          sizeBytes = parseInt(totalMatch[1], 10) || 0;
+        } else {
+          const cl = parseInt(probeResp.headers.get("content-length") || "0", 10);
+          if (!isNaN(cl) && cl > 1) sizeBytes = cl;
+        }
+        const upstreamCt = (probeResp.headers.get("content-type") || "").toLowerCase();
+        if (upstreamCt.startsWith("video/")) {
+          mimeType = upstreamCt.split(";")[0].trim();
+        }
+      } catch (probeErr) {
+        console.warn("[StreamtapeExtractor] Direct size probe note:", probeErr);
+      }
+
+      const sizeMb = sizeBytes > 0 ? Math.max(1, Math.round(sizeBytes / (1024 * 1024))) : 0;
+      const meta = extractQualityAndAudioFromMeta(`${pageTitle} ${trimmed}`);
+
+      return {
+        ok: true,
+        directUrl,
+        cdnUrl,
+        sizeBytes,
+        sizeMb,
+        mimeType,
+        quality: meta.quality || "1080p",
+        audioTracks: meta.audioTracks,
+        title: pageTitle,
+        headers: {
+          "Referer": "https://streamtape.com/",
+          "User-Agent": ua
+        }
+      };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || "Streamtape extraction error" };
+    }
+  }
+
   const handleExtractStream = async (req: any, res: any) => {
     try {
       const sourceUrl = (req.body?.url || req.query?.url) as string;
@@ -1876,7 +2193,13 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           res.json({
             ok: true,
             m3u8Url: cached.m3u8Url,
+            directUrl: (cached as any).directUrl || (cached as any).rawM3u8Url,
             rawM3u8Url: (cached as any).rawM3u8Url || cached.m3u8Url,
+            cdnUrl: (cached as any).cdnUrl,
+            isDirectVideo: Boolean((cached as any).isDirectVideo),
+            mimeType: (cached as any).mimeType,
+            sizeBytes: (cached as any).sizeBytes,
+            provider: (cached as any).provider,
             qualities: cached.qualities || [],
             qualityLinks: cached.qualityLinks || { [forcedQuality || '720p']: cached.m3u8Url },
             rawQualityLinks: (cached as any).rawQualityLinks || cached.qualityLinks,
@@ -1890,6 +2213,92 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           });
           return;
         }
+      }
+
+      // ====================================================================
+      // DEDICATED STREAMTAPE / SERVER 3 FAST PATH (Runs BEFORE .mp4/.mkv & VOE)
+      // ====================================================================
+      if (isStreamtapeUrl(trimmedUrl) && !isStreamtapeDirectUrl(trimmedUrl)) {
+        const stResult = await extractStreamtapeDirectStream(trimmedUrl);
+        if (stResult.ok && stResult.directUrl) {
+          const ttlMs = 25 * 60 * 1000;
+          const expiresAt = now + ttlMs;
+          const qLabel = forcedQuality || stResult.quality || "1080p";
+          const host = req.get("host") || "localhost:3000";
+          const reqOrigin = String(req.headers.origin || "");
+          const isExternalCrossOrigin = Boolean(reqOrigin && !reqOrigin.includes(host) && host.includes("hf.space"));
+          const serverOrigin = isExternalCrossOrigin ? `https://${host}` : "";
+          const proxiedUrl = `${serverOrigin}/api/stream-proxy?url=${encodeURIComponent(stResult.directUrl)}&referer=${encodeURIComponent("https://streamtape.com/")}`;
+
+          const permanentQualityLinks: Record<string, string> = { [qLabel]: trimmedUrl };
+          const dlQualities = [
+            {
+              id: qLabel,
+              label: `${qLabel} ${qLabel.includes("1080") ? "Full HD" : qLabel.includes("720") ? "HD" : "Standard"}`,
+              sizeMb: stResult.sizeMb || 0,
+              sizeBytes: stResult.sizeBytes || 0,
+              url: trimmedUrl,
+              directUrl: stResult.cdnUrl || stResult.directUrl,
+              mimeType: stResult.mimeType || "video/mp4"
+            }
+          ];
+          const finalDur = requestedDuration > 0 ? requestedDuration : 0;
+
+          streamExtractionCache.set(cacheKey, {
+            m3u8Url: proxiedUrl,
+            directUrl: stResult.directUrl,
+            rawM3u8Url: stResult.directUrl,
+            cdnUrl: stResult.cdnUrl || stResult.directUrl,
+            isDirectVideo: true,
+            mimeType: stResult.mimeType || "video/mp4",
+            sizeBytes: stResult.sizeBytes || 0,
+            provider: "STREAMTAPE",
+            rawQualityLinks: permanentQualityLinks,
+            headers: stResult.headers,
+            expiresAt,
+            cachedAt: now,
+            qualities: [qLabel],
+            qualityLinks: permanentQualityLinks,
+            downloadQualities: dlQualities,
+            audioTracks: stResult.audioTracks || [],
+            duration: finalDur
+          } as any);
+
+          res.json({
+            ok: true,
+            m3u8Url: proxiedUrl,
+            directUrl: stResult.directUrl,
+            rawM3u8Url: stResult.directUrl,
+            cdnUrl: stResult.cdnUrl || stResult.directUrl,
+            isDirectVideo: true,
+            mimeType: stResult.mimeType || "video/mp4",
+            sizeBytes: stResult.sizeBytes || 0,
+            qualities: [qLabel],
+            qualityLinks: permanentQualityLinks,
+            rawQualityLinks: permanentQualityLinks,
+            downloadQualities: dlQualities,
+            audioTracks: stResult.audioTracks || [],
+            duration: finalDur,
+            durationFormatted: finalDur > 0 ? Math.floor(finalDur / 60) + ":" + (finalDur % 60).toString().padStart(2, "0") : "0:00",
+            headers: stResult.headers,
+            provider: "STREAMTAPE",
+            cached: false,
+            expiresAt,
+            remainingSeconds: Math.round(ttlMs / 1000)
+          });
+          return;
+        }
+        // Fallback response for Streamtape if token extraction failed — do NOT hit VOE/HF Space
+        const fallbackEmbed = trimmedUrl.replace(/\/v\//i, "/e/");
+        res.status(200).json({
+          ok: false,
+          error: stResult.error || "Streamtape stream extraction failed",
+          provider: "STREAMTAPE",
+          canFallbackToEmbed: true,
+          fallbackUrl: fallbackEmbed,
+          isEmbed: true
+        });
+        return;
       }
 
       // Direct HLS stream parsing without third-party extractor if URL is already an m3u8
@@ -2316,8 +2725,17 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       let streamUrl = rawUrl.trim();
 
-      // Resolve Filemoon / Byse URL if needed
-      if (isFilemoonOrByseUrl(streamUrl)) {
+      // Resolve Filemoon / Byse / VOE / Streamtape URL if needed
+      let resolvedReferer = "";
+      if (isStreamtapeUrl(streamUrl) && !isStreamtapeDirectUrl(streamUrl)) {
+        resolvedReferer = "https://streamtape.com/";
+        const stRes = await extractStreamtapeDirectStream(streamUrl);
+        if (stRes.ok && (stRes.cdnUrl || stRes.directUrl)) {
+          streamUrl = stRes.cdnUrl || stRes.directUrl!;
+        }
+      } else if (isStreamtapeUrl(streamUrl)) {
+        resolvedReferer = "https://streamtape.com/";
+      } else if (isFilemoonOrByseUrl(streamUrl)) {
         const cached = streamExtractionCache.get(streamUrl);
         if (cached && cached.m3u8Url) {
           streamUrl = cached.m3u8Url;
@@ -2426,38 +2844,55 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           }
         });
       } else {
-        // Direct MP4 or video source
+        // Direct MP4 / MKV / Streamtape source with Range & Referer support
+        const dlHeaders: Record<string, string> = {
+          "User-Agent": defaultByseUa,
+          "Accept": "*/*"
+        };
+        if (resolvedReferer) {
+          dlHeaders["Referer"] = resolvedReferer;
+          try { dlHeaders["Origin"] = new URL(resolvedReferer).origin; } catch {}
+        }
+        if (req.headers.range) {
+          dlHeaders["Range"] = req.headers.range;
+        }
         let directResp = await fetch(streamUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "*/*"
-          }
+          headers: dlHeaders,
+          redirect: "follow"
         });
         if (!directResp.ok && (directResp.status === 403 || directResp.status === 401)) {
           // Retry with bare fetch if server blocks custom headers
-          directResp = await fetch(streamUrl);
+          directResp = await fetch(streamUrl, { redirect: "follow" });
         }
         if (!directResp.ok) {
           res.status(directResp.status).json({ error: `Failed to fetch direct video source (HTTP ${directResp.status})` });
           return;
         }
-        res.setHeader("Content-Type", directResp.headers.get("content-type") || "video/mp4");
+        const upstreamCt = (directResp.headers.get("content-type") || "").toLowerCase();
+        const isMkvTarget = rawUrl.toLowerCase().includes(".mkv") || streamUrl.toLowerCase().includes(".mkv");
+        const resolvedMime = (upstreamCt.startsWith("video/") ? upstreamCt.split(";")[0] : (isMkvTarget ? "video/x-matroska" : "video/mp4"));
+        res.setHeader("Content-Type", resolvedMime);
+        res.setHeader("Accept-Ranges", directResp.headers.get("accept-ranges") || "bytes");
         if (directResp.headers.get("content-length")) {
           res.setHeader("Content-Length", directResp.headers.get("content-length")!);
         }
-        res.setHeader("Content-Disposition", 'attachment; filename="maxplay_download.mp4"');
+        if (directResp.headers.get("content-range")) {
+          res.setHeader("Content-Range", directResp.headers.get("content-range")!);
+        }
+        const fileExt = resolvedMime.includes("matroska") ? "mkv" : "mp4";
+        res.setHeader("Content-Disposition", `attachment; filename="maxplay_download.${fileExt}"`);
+        res.status(directResp.status);
 
         if (directResp.body) {
-          const reader = (directResp.body as any).getReader();
-          req.on("close", () => {
-            try { reader.cancel(); } catch (_) {}
+          const { Readable } = await import("stream");
+          const nodeStream = Readable.fromWeb(directResp.body as any);
+          nodeStream.on("error", () => {
+            try { if (!res.writableEnded) res.end(); } catch {}
           });
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-          }
-          res.end();
+          req.on("close", () => {
+            try { nodeStream.destroy(); } catch {}
+          });
+          nodeStream.pipe(res);
         } else {
           const buffer = await directResp.arrayBuffer();
           res.send(Buffer.from(buffer));
@@ -2784,6 +3219,127 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "*");
+    res.sendStatus(204);
+  });
+
+  // Streaming Direct MP4/MKV Proxy with HTTP 206 Range Seeking & Streamtape CDN Redirects
+  const handleStreamProxy = async (req: any, res: any) => {
+    try {
+      const targetUrl = (req.query.url as string || "").trim();
+      if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+        res.status(400).json({ error: "Missing or invalid url parameter" });
+        return;
+      }
+
+      let referer = (req.query.referer as string || "").trim();
+      if (!referer) {
+        if (isStreamtapeUrl(targetUrl)) {
+          referer = "https://streamtape.com/";
+        } else {
+          try {
+            const u = new URL(targetUrl);
+            const h = u.hostname.toLowerCase();
+            if (h.includes("sprintcdn") || h.includes("owphbf") || h.includes("r66nv9ed") || h.includes("filemoon") || h.includes("byse") || h.includes("n1mwq")) {
+              referer = "https://byseraguci.com/";
+            } else if (h.includes("voe")) {
+              referer = "https://voe.sx/";
+            } else {
+              referer = `${u.origin}/`;
+            }
+          } catch {
+            referer = "https://streamtape.com/";
+          }
+        }
+      }
+
+      let originHeader = "";
+      try {
+        originHeader = new URL(referer).origin;
+      } catch {}
+
+      const headers: Record<string, string> = {
+        "User-Agent": defaultByseUa,
+        "Referer": referer,
+        ...(originHeader ? { "Origin": originHeader } : {}),
+        "Accept": "*/*"
+      };
+
+      if (req.headers.range) {
+        headers["Range"] = req.headers.range;
+      }
+
+      const isHeadReq = req.method === "HEAD";
+      const upstream = await fetch(targetUrl, {
+        method: isHeadReq ? "HEAD" : "GET",
+        headers,
+        redirect: "follow",
+        signal: AbortSignal.timeout(30000)
+      });
+
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Type");
+      res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges") || "bytes");
+
+      const upstreamCt = (upstream.headers.get("content-type") || "").toLowerCase();
+      const dispHeader = (upstream.headers.get("content-disposition") || "").toLowerCase();
+      const lowerUrl = `${targetUrl} ${upstream.url || ""}`.toLowerCase();
+      let finalContentType = upstreamCt;
+      if (!finalContentType || finalContentType.includes("application/octet-stream")) {
+        if (dispHeader.includes(".mkv") || lowerUrl.includes(".mkv")) {
+          finalContentType = "video/x-matroska";
+        } else if (dispHeader.includes(".webm") || lowerUrl.includes(".webm")) {
+          finalContentType = "video/webm";
+        } else {
+          finalContentType = "video/mp4";
+        }
+      }
+      res.setHeader("Content-Type", finalContentType);
+
+      if (upstream.headers.get("content-length")) {
+        res.setHeader("Content-Length", upstream.headers.get("content-length")!);
+      }
+      if (upstream.headers.get("content-range")) {
+        res.setHeader("Content-Range", upstream.headers.get("content-range")!);
+      }
+
+      res.status(upstream.status);
+
+      if (isHeadReq) {
+        try { await upstream.body?.cancel(); } catch {}
+        res.end();
+        return;
+      }
+
+      if (upstream.body) {
+        const { Readable } = await import("stream");
+        const nodeStream = Readable.fromWeb(upstream.body as any);
+        nodeStream.on("error", () => {
+          try { if (!res.writableEnded) res.end(); } catch {}
+        });
+        req.on("close", () => {
+          try { nodeStream.destroy(); } catch {}
+        });
+        nodeStream.pipe(res);
+      } else {
+        const arrayBuf = await upstream.arrayBuffer();
+        res.send(Buffer.from(arrayBuf));
+      }
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(502).json({ error: err.message || "Stream proxy failed" });
+      }
+    }
+  };
+
+  app.get(["/api/stream-proxy", "/stream-proxy"], handleStreamProxy);
+  app.head(["/api/stream-proxy", "/stream-proxy"], handleStreamProxy);
+  app.options(["/api/stream-proxy", "/stream-proxy"], (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Type");
     res.sendStatus(204);
   });
 

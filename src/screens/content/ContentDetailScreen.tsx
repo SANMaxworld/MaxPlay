@@ -661,14 +661,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [isAllEpisodesModalOpen, setIsAllEpisodesModalOpen] = useState<boolean>(false);
   const [isAutoNextEnabled, setIsAutoNextEnabled] = useState<boolean>(true);
   const [showDetails, setShowDetails] = useState(false);
-  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2'>(() => {
+  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>(() => {
     try {
       if (content?.id) {
         const savedForContent = localStorage.getItem(`maxplay_server_${content.id}`);
-        if (savedForContent === 'server1' || savedForContent === 'server2') return savedForContent;
+        if (savedForContent === 'server1' || savedForContent === 'server2' || savedForContent === 'server3') return savedForContent;
       }
       const savedGlobal = localStorage.getItem('maxplay_preferred_server');
-      if (savedGlobal === 'server1' || savedGlobal === 'server2') return savedGlobal;
+      if (savedGlobal === 'server1' || savedGlobal === 'server2' || savedGlobal === 'server3') return savedGlobal;
     } catch {}
     return 'server1';
   });
@@ -680,15 +680,17 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [discoveredAudioTracks, setDiscoveredAudioTracks] = useState<string[]>([]);
   const [s1DiscoveredAudioTracks, setS1DiscoveredAudioTracks] = useState<string[]>([]);
   const [s2DiscoveredAudioTracks, setS2DiscoveredAudioTracks] = useState<string[]>([]);
+  const [s3DiscoveredAudioTracks, setS3DiscoveredAudioTracks] = useState<string[]>([]);
   const [discoveredQualities, setDiscoveredQualities] = useState<string[]>([]);
   const [s1DiscoveredQualities, setS1DiscoveredQualities] = useState<string[]>([]);
   const [s2DiscoveredQualities, setS2DiscoveredQualities] = useState<string[]>([]);
+  const [s3DiscoveredQualities, setS3DiscoveredQualities] = useState<string[]>([]);
   const lastUserSelectedLangRef = useRef<string>('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
   // Remembered Server Selection helper (persists per-title and globally)
-  const handleSelectServer = (srv: 'server1' | 'server2') => {
+  const handleSelectServer = (srv: 'server1' | 'server2' | 'server3') => {
     saveProgressNow(playbackPosition, false, true);
     setSelectedServer(srv);
     try {
@@ -720,30 +722,48 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       (ep0 as any)?.secondaryServerUrl ||
       (ep0 as any)?.secondaryVideoUrl ||
       ((ep0 as any)?.secondaryServerQualityLinks && Object.keys((ep0 as any).secondaryServerQualityLinks).length > 0) ||
+      ((ep0 as any)?.secondaryQualityLinks && Object.keys((ep0 as any).secondaryQualityLinks).length > 0) ||
       (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.secondaryVideoUrl || p?.secondaryServerUrl || p?.secondaryUrl)))
     );
+    const hasS3 = Boolean(
+      content.tertiaryVideoUrl ||
+      content.tertiaryServerUrl ||
+      (content as any).tertiaryUrl ||
+      (content.tertiaryQualityLinks && Object.keys(content.tertiaryQualityLinks).length > 0) ||
+      (content.tertiaryServerQualityLinks && Object.keys(content.tertiaryServerQualityLinks).length > 0) ||
+      (ep0 as any)?.tertiaryServerUrl ||
+      (ep0 as any)?.tertiaryVideoUrl ||
+      (ep0 as any)?.tertiaryUrl ||
+      ((ep0 as any)?.tertiaryServerQualityLinks && Object.keys((ep0 as any).tertiaryServerQualityLinks).length > 0) ||
+      ((ep0 as any)?.tertiaryQualityLinks && Object.keys((ep0 as any).tertiaryQualityLinks).length > 0) ||
+      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.tertiaryVideoUrl || p?.tertiaryServerUrl || p?.tertiaryUrl)))
+    );
 
-    let desiredServer: 'server1' | 'server2' = selectedServer;
+    let desiredServer: 'server1' | 'server2' | 'server3' = selectedServer;
     try {
       const savedForContent = localStorage.getItem(`maxplay_server_${content.id}`);
-      if (savedForContent === 'server1' || savedForContent === 'server2') {
+      if (savedForContent === 'server1' || savedForContent === 'server2' || savedForContent === 'server3') {
         desiredServer = savedForContent;
       } else {
         const savedGlobal = localStorage.getItem('maxplay_preferred_server');
-        if (savedGlobal === 'server1' || savedGlobal === 'server2') {
+        if (savedGlobal === 'server1' || savedGlobal === 'server2' || savedGlobal === 'server3') {
           desiredServer = savedGlobal;
         }
       }
     } catch {}
 
-    if (!hasS1 && hasS2) {
-      setSelectedServer('server2');
-    } else if (!hasS2 && hasS1) {
-      setSelectedServer('server1');
+    if (desiredServer === 'server3' && hasS3) {
+      setSelectedServer('server3');
     } else if (desiredServer === 'server2' && hasS2) {
       setSelectedServer('server2');
     } else if (desiredServer === 'server1' && hasS1) {
       setSelectedServer('server1');
+    } else if (hasS1) {
+      setSelectedServer('server1');
+    } else if (hasS2) {
+      setSelectedServer('server2');
+    } else if (hasS3) {
+      setSelectedServer('server3');
     }
   }, [content?.id]);
 
@@ -1456,7 +1476,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     return '';
   };
 
-  // 3. DUAL-SERVER RESOLUTION (Server 1: Primary Voe.sx / HLS | Server 2: Secondary Filemoon / Byse)
+  // 3. TRI-SERVER RESOLUTION (Server 1: Primary Voe.sx / HLS | Server 2: Secondary Filemoon / Byse | Server 3: Streamtape Direct)
   let primaryServerUrl = SmartStreamService.sanitizeStreamUrl(
     playerVideoUrl || firstNonEmptyUrl(playerQualityLinks, content.videoUrl)
   );
@@ -1465,6 +1485,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   let secondaryServerUrl = '';
   let secondaryServerQualityLinks: Record<string, string> = {};
   let secondaryVideoSources: Record<string, any> = {};
+  let tertiaryServerUrl = '';
+  let tertiaryServerQualityLinks: Record<string, string> = {};
+  let tertiaryVideoSources: Record<string, any> = {};
 
   if (isSeries && !isMovie && currentEpisode) {
     const epExtraParts = Array.isArray(currentEpisode.videoLinks) ? currentEpisode.videoLinks : [];
@@ -1486,6 +1509,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       );
       if (extraPartObj.secondaryVideoSources && typeof extraPartObj.secondaryVideoSources === 'object') {
         secondaryVideoSources = extraPartObj.secondaryVideoSources;
+      }
+
+      tertiaryServerQualityLinks = extractNonEmptyQualityMap(
+        extraPartObj.tertiaryServerQualityLinks,
+        extraPartObj.tertiaryQualityLinks,
+        extraPartObj.tertiaryDownloadQualities
+      );
+      tertiaryServerUrl = firstNonEmptyUrl(
+        tertiaryServerQualityLinks,
+        extraPartObj.tertiaryServerUrl,
+        extraPartObj.tertiaryVideoUrl,
+        extraPartObj.tertiaryUrl
+      );
+      if (extraPartObj.tertiaryVideoSources && typeof extraPartObj.tertiaryVideoSources === 'object') {
+        tertiaryVideoSources = extraPartObj.tertiaryVideoSources;
       }
     } else {
       secondaryServerQualityLinks = extractNonEmptyQualityMap(
@@ -1513,6 +1551,33 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       );
       if ((currentEpisode as any).secondaryVideoSources && typeof (currentEpisode as any).secondaryVideoSources === 'object') {
         secondaryVideoSources = (currentEpisode as any).secondaryVideoSources;
+      }
+
+      tertiaryServerQualityLinks = extractNonEmptyQualityMap(
+        (currentEpisode as any).tertiaryServerQualityLinks,
+        currentEpisode.tertiaryQualityLinks,
+        (currentEpisode as any).tertiaryDownloadQualities,
+        epPart0?.tertiaryServerQualityLinks,
+        epPart0?.tertiaryQualityLinks,
+        epPart0?.tertiaryDownloadQualities,
+        (content as any).tertiaryServerQualityLinks,
+        content.tertiaryQualityLinks,
+        (content as any).tertiaryDownloadQualities
+      );
+      tertiaryServerUrl = firstNonEmptyUrl(
+        tertiaryServerQualityLinks,
+        (currentEpisode as any).tertiaryServerUrl,
+        currentEpisode.tertiaryVideoUrl,
+        (currentEpisode as any).tertiaryUrl,
+        epPart0?.tertiaryServerUrl,
+        epPart0?.tertiaryVideoUrl,
+        epPart0?.tertiaryUrl,
+        (content as any).tertiaryServerUrl,
+        content.tertiaryVideoUrl,
+        (content as any).tertiaryUrl
+      );
+      if ((currentEpisode as any).tertiaryVideoSources && typeof (currentEpisode as any).tertiaryVideoSources === 'object') {
+        tertiaryVideoSources = (currentEpisode as any).tertiaryVideoSources;
       }
     }
   } else {
@@ -1560,6 +1625,41 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       } else if ((content as any).secondaryVideoSources && typeof (content as any).secondaryVideoSources === 'object') {
         secondaryVideoSources = (content as any).secondaryVideoSources;
       }
+
+      tertiaryServerQualityLinks = extractNonEmptyQualityMap(
+        activeMoviePart.tertiaryServerQualityLinks,
+        activeMoviePart.tertiaryQualityLinks,
+        activeMoviePart.tertiaryDownloadQualities,
+        contentPart0?.tertiaryServerQualityLinks,
+        contentPart0?.tertiaryQualityLinks,
+        contentPart0?.tertiaryDownloadQualities,
+        moviePart0?.tertiaryServerQualityLinks,
+        moviePart0?.tertiaryQualityLinks,
+        moviePart0?.tertiaryDownloadQualities,
+        (content as any).tertiaryServerQualityLinks,
+        content.tertiaryQualityLinks,
+        (content as any).tertiaryDownloadQualities
+      );
+      tertiaryServerUrl = firstNonEmptyUrl(
+        tertiaryServerQualityLinks,
+        activeMoviePart.tertiaryServerUrl,
+        activeMoviePart.tertiaryVideoUrl,
+        activeMoviePart.tertiaryUrl,
+        contentPart0?.tertiaryServerUrl,
+        contentPart0?.tertiaryVideoUrl,
+        contentPart0?.tertiaryUrl,
+        moviePart0?.tertiaryServerUrl,
+        moviePart0?.tertiaryVideoUrl,
+        moviePart0?.tertiaryUrl,
+        (content as any).tertiaryServerUrl,
+        content.tertiaryVideoUrl,
+        (content as any).tertiaryUrl
+      );
+      if (activeMoviePart.tertiaryVideoSources && typeof activeMoviePart.tertiaryVideoSources === 'object') {
+        tertiaryVideoSources = activeMoviePart.tertiaryVideoSources;
+      } else if ((content as any).tertiaryVideoSources && typeof (content as any).tertiaryVideoSources === 'object') {
+        tertiaryVideoSources = (content as any).tertiaryVideoSources;
+      }
     } else {
       secondaryServerQualityLinks = extractNonEmptyQualityMap(
         (content as any).secondaryServerQualityLinks,
@@ -1575,11 +1675,37 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       if ((content as any).secondaryVideoSources && typeof (content as any).secondaryVideoSources === 'object') {
         secondaryVideoSources = (content as any).secondaryVideoSources;
       }
+
+      tertiaryServerQualityLinks = extractNonEmptyQualityMap(
+        (content as any).tertiaryServerQualityLinks,
+        content.tertiaryQualityLinks,
+        (content as any).tertiaryDownloadQualities
+      );
+      tertiaryServerUrl = firstNonEmptyUrl(
+        tertiaryServerQualityLinks,
+        (content as any).tertiaryServerUrl,
+        content.tertiaryVideoUrl,
+        (content as any).tertiaryUrl
+      );
+      if ((content as any).tertiaryVideoSources && typeof (content as any).tertiaryVideoSources === 'object') {
+        tertiaryVideoSources = (content as any).tertiaryVideoSources;
+      }
     }
   }
 
   if (!offlineVideoUrl) {
-    if (selectedServer === 'server2') {
+    if (selectedServer === 'server3') {
+      if (tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0) {
+        const smartS3 = SmartStreamService.selectSourceUrlForQuality(
+          tertiaryServerUrl,
+          tertiaryServerQualityLinks,
+          activeQuality
+        );
+        playerQualityLinks = smartS3.cleanQualityLinks;
+        playerVideoUrl = smartS3.chosenUrl || tertiaryServerUrl;
+        playerVideoSources = tertiaryVideoSources || {};
+      }
+    } else if (selectedServer === 'server2') {
       if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
         const smartS2 = SmartStreamService.selectSourceUrlForQuality(
           secondaryServerUrl,
@@ -1611,6 +1737,15 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         );
         playerQualityLinks = smartS2.cleanQualityLinks;
         playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
+      } else if (!playerVideoUrl && (tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0)) {
+        // Automatic fallback if only Server 3 link was filled
+        const smartS3 = SmartStreamService.selectSourceUrlForQuality(
+          tertiaryServerUrl,
+          tertiaryServerQualityLinks,
+          activeQuality
+        );
+        playerQualityLinks = smartS3.cleanQualityLinks;
+        playerVideoUrl = smartS3.chosenUrl || tertiaryServerUrl;
       }
     }
   }
@@ -1620,83 +1755,30 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     setDiscoveredAudioTracks([]);
     setS1DiscoveredAudioTracks([]);
     setS2DiscoveredAudioTracks([]);
+    setS3DiscoveredAudioTracks([]);
     setDiscoveredQualities([]);
     setS1DiscoveredQualities([]);
     setS2DiscoveredQualities([]);
+    setS3DiscoveredQualities([]);
   }, [content?.id, selectedSeasonIndex, selectedEpisodeIndex]);
 
-  // Sync active server's discovered tracks/qualities when toggling Server 1 <-> Server 2
+  // Sync active server's discovered tracks/qualities when toggling Server 1 / Server 2 / Server 3
   useEffect(() => {
-    setDiscoveredAudioTracks(selectedServer === 'server2' ? s2DiscoveredAudioTracks : s1DiscoveredAudioTracks);
-    setDiscoveredQualities(selectedServer === 'server2' ? s2DiscoveredQualities : s1DiscoveredQualities);
-  }, [selectedServer, s1DiscoveredAudioTracks, s2DiscoveredAudioTracks, s1DiscoveredQualities, s2DiscoveredQualities]);
-
-  // Pre-warm the active server stream immediately, plus distinct quality links, backup server, and the NEXT episode so episode taps & quality switches happen in 0ms!
-  useEffect(() => {
-    const activeUrl = selectedServer === 'server2' ? (secondaryServerUrl || primaryServerUrl) : (primaryServerUrl || secondaryServerUrl);
-    const backupUrl = selectedServer === 'server2' ? primaryServerUrl : secondaryServerUrl;
-
-    if (activeUrl) {
-      SmartStreamService.prefetchStream(activeUrl);
-    }
-
-    const timers: ReturnType<typeof setTimeout>[] = [];
-
-    // 1. Pre-warm any distinct quality links on the current episode/movie after 2.2s
-    const distinctQualityUrls = Array.from(
-      new Set(
-        Object.values(playerQualityLinks || {})
-          .map((u) => SmartStreamService.sanitizeStreamUrl(u))
-          .filter((u) => u && u !== activeUrl)
-      )
+    setDiscoveredAudioTracks(
+      selectedServer === 'server3'
+        ? s3DiscoveredAudioTracks
+        : selectedServer === 'server2'
+        ? s2DiscoveredAudioTracks
+        : s1DiscoveredAudioTracks
     );
-    if (distinctQualityUrls.length > 0) {
-      timers.push(
-        setTimeout(() => {
-          distinctQualityUrls.slice(0, 3).forEach((qUrl) => SmartStreamService.prefetchStream(qUrl));
-        }, 2200)
-      );
-    }
-
-    // 2. Pre-warm the NEXT episode (and episode after next) after 2.6s so tapping another episode starts in 0ms!
-    if (isSeries && !isMovie && activeSeasonEpisodes.length > selectedEpisodeIndex + 1) {
-      timers.push(
-        setTimeout(() => {
-          const nextEps = activeSeasonEpisodes.slice(selectedEpisodeIndex + 1, selectedEpisodeIndex + 3);
-          nextEps.forEach((ep: any) => {
-            if (!ep) return;
-            const epS1 = SmartStreamService.sanitizeStreamUrl(
-              ep.videoUrl ||
-                (ep.qualityLinks && Object.values(ep.qualityLinks)[0]) ||
-                (Array.isArray(ep.videoLinks) && ep.videoLinks[0]?.videoUrl) ||
-                ''
-            );
-            const epS2 = SmartStreamService.sanitizeStreamUrl(
-              ep.secondaryServerUrl ||
-                ep.secondaryVideoUrl ||
-                (ep.secondaryQualityLinks && Object.values(ep.secondaryQualityLinks)[0]) ||
-                ''
-            );
-            if (epS1) SmartStreamService.prefetchStream(epS1);
-            if (epS2 && epS2 !== epS1) SmartStreamService.prefetchStream(epS2);
-          });
-        }, 2600)
-      );
-    }
-
-    // 3. Pre-warm backup server after 3.4s
-    if (backupUrl && backupUrl !== activeUrl) {
-      timers.push(
-        setTimeout(() => {
-          SmartStreamService.prefetchStream(backupUrl);
-        }, 3400)
-      );
-    }
-
-    return () => {
-      timers.forEach(clearTimeout);
-    };
-  }, [primaryServerUrl, secondaryServerUrl, selectedServer, selectedEpisodeIndex, selectedSeasonIndex]);
+    setDiscoveredQualities(
+      selectedServer === 'server3'
+        ? s3DiscoveredQualities
+        : selectedServer === 'server2'
+        ? s2DiscoveredQualities
+        : s1DiscoveredQualities
+    );
+  }, [selectedServer, s1DiscoveredAudioTracks, s2DiscoveredAudioTracks, s3DiscoveredAudioTracks, s1DiscoveredQualities, s2DiscoveredQualities, s3DiscoveredQualities]);
 
   const isQualityKeyString = (val?: string): boolean => {
     if (!val || typeof val !== 'string') return false;
@@ -1984,173 +2066,111 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     secondaryServerUrl ||
     (secondaryServerQualityLinks ? Object.values(secondaryServerQualityLinks).find((v) => typeof v === 'string' && v.trim()) : '') ||
     '';
+  const s3ProbeTargetUrl =
+    tertiaryServerUrl ||
+    (tertiaryServerQualityLinks ? Object.values(tertiaryServerQualityLinks).find((v) => typeof v === 'string' && v.trim()) : '') ||
+    '';
 
-  // Proactively probe Server 1 and Server 2 master playlists without competing with active video startup
+  // Read cached stream metadata synchronously without spawning background network probes or competing with active video startup
   useEffect(() => {
-    let cancelled = false;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-
-    const applyCachedMeta = (targetUrl: string, srv: 'server1' | 'server2') => {
-      if (!targetUrl) return false;
+    const applyCachedMeta = (targetUrl: string, srv: 'server1' | 'server2' | 'server3') => {
+      if (!targetUrl) return;
       const meta = SmartStreamService.getCachedStreamMeta(targetUrl);
-      if (!meta) return false;
-      const setSrvQualities = srv === 'server2' ? setS2DiscoveredQualities : setS1DiscoveredQualities;
-      const setSrvAudios = srv === 'server2' ? setS2DiscoveredAudioTracks : setS1DiscoveredAudioTracks;
-      let foundAny = false;
+      if (!meta) return;
+      const setSrvQualities =
+        srv === 'server3'
+          ? setS3DiscoveredQualities
+          : srv === 'server2'
+          ? setS2DiscoveredQualities
+          : setS1DiscoveredQualities;
+      const setSrvAudios =
+        srv === 'server3'
+          ? setS3DiscoveredAudioTracks
+          : srv === 'server2'
+          ? setS2DiscoveredAudioTracks
+          : setS1DiscoveredAudioTracks;
       if (Array.isArray(meta.audioTracks) && meta.audioTracks.length > 0) {
-        foundAny = true;
         setSrvAudios((prev) => {
           const next = Array.from(new Set([...prev, ...meta.audioTracks!]));
           return next.length !== prev.length ? next : prev;
         });
       }
       if (Array.isArray(meta.qualities) && meta.qualities.length > 0) {
-        foundAny = true;
         setSrvQualities((prev) => {
           const next = Array.from(new Set([...prev, ...meta.qualities!]));
           return next.length !== prev.length ? next : prev;
         });
       }
-      return foundAny;
     };
 
-    const probeUrlForServer = async (targetUrl: string, srv: 'server1' | 'server2', isActiveServer: boolean) => {
-      if (!targetUrl || cancelled) return;
-      try {
-        if (applyCachedMeta(targetUrl, srv) && isActiveServer) {
-          return;
-        }
-        let m3u8Url = targetUrl;
-        const setSrvQualities = srv === 'server2' ? setS2DiscoveredQualities : setS1DiscoveredQualities;
-        const setSrvAudios = srv === 'server2' ? setS2DiscoveredAudioTracks : setS1DiscoveredAudioTracks;
+    if (s1ProbeTargetUrl) applyCachedMeta(s1ProbeTargetUrl, 'server1');
+    if (s2ProbeTargetUrl) applyCachedMeta(s2ProbeTargetUrl, 'server2');
+    if (s3ProbeTargetUrl) applyCachedMeta(s3ProbeTargetUrl, 'server3');
+  }, [s1ProbeTargetUrl, s2ProbeTargetUrl, s3ProbeTargetUrl, selectedServer]);
 
-        if (SmartStreamService.isExtractableSource(targetUrl, true)) {
-          const res = await SmartStreamService.resolveStream(targetUrl, { forceRefresh: false });
-          if (cancelled) return;
-          if (res?.streamUrl) {
-            m3u8Url = res.streamUrl;
-            applyCachedMeta(targetUrl, srv);
-          }
-        }
-        // For the active server, InlinePlayer's Hls.js already parses the manifest and reports qualities/audio tracks;
-        // only probe the manifest directly for the inactive server (or if non-HLS player needed it)
-        if (!isActiveServer && m3u8Url && (m3u8Url.includes('.m3u8') || m3u8Url.includes('m3u8') || m3u8Url.includes('master.txt'))) {
-          const parsed = await ClientHlsDownloader.probeMasterPlaylist(m3u8Url);
-          if (cancelled || !parsed) return;
-          if (parsed.audioTracks && parsed.audioTracks.length > 0) {
-            const labels = parsed.audioTracks.map((a: any) => (typeof a === 'string' ? a : a?.label || a?.name || '')).filter(Boolean);
-            if (labels.length > 0) {
-              setSrvAudios((prev) => {
-                const next = Array.from(new Set([...prev, ...labels]));
-                return next.length !== prev.length ? next : prev;
-              });
-            }
-          }
-          if (parsed.qualities && parsed.qualities.length > 0) {
-            const qLabels = parsed.qualities.map((q: any) => (typeof q === 'string' ? q : q?.label || '')).filter(Boolean);
-            if (qLabels.length > 0) {
-              setSrvQualities((prev) => {
-                const next = Array.from(new Set([...prev, ...qLabels]));
-                return next.length !== prev.length ? next : prev;
-              });
-            }
-          }
-        }
-      } catch {}
-    };
-
-    const isS1Active = selectedServer !== 'server2';
-    if (s1ProbeTargetUrl) {
-      applyCachedMeta(s1ProbeTargetUrl, 'server1');
-      if (isS1Active) {
-        timers.push(setTimeout(() => probeUrlForServer(s1ProbeTargetUrl, 'server1', true), 1500));
-      } else {
-        timers.push(setTimeout(() => probeUrlForServer(s1ProbeTargetUrl, 'server1', false), 4200));
-      }
-    }
-    if (s2ProbeTargetUrl) {
-      applyCachedMeta(s2ProbeTargetUrl, 'server2');
-      if (!isS1Active) {
-        timers.push(setTimeout(() => probeUrlForServer(s2ProbeTargetUrl, 'server2', true), 1500));
-      } else {
-        timers.push(setTimeout(() => probeUrlForServer(s2ProbeTargetUrl, 'server2', false), 4200));
-      }
-    }
-
-    return () => {
-      cancelled = true;
-      timers.forEach(clearTimeout);
-    };
-  }, [s1ProbeTargetUrl, s2ProbeTargetUrl, selectedServer]);
-
-  // Compute cross-server qualities with [S1] / [S2] badges so both servers' qualities appear in the unified Quality drawer & selector
+  // Compute cross-server qualities with [S1] / [S2] / [S3] badges so configured servers' qualities appear in the unified Quality drawer & selector
   const crossServerQualities = useMemo(() => {
-    const otherSet = new Set<string>();
-    const addOtherQual = (q?: string) => {
-      if (!q || typeof q !== 'string') return;
-      const clean = q.trim();
-      if (!clean || clean.toLowerCase() === 'auto' || clean.toLowerCase() === 'default') return;
-      if (isQualityKeyString(clean)) {
-        otherSet.add(clean);
+    const gatherServerQualities = (
+      badge: 'S1' | 'S2' | 'S3',
+      url: string,
+      links: Record<string, string> | undefined,
+      discovered: string[]
+    ): string[] => {
+      const hasSrv = Boolean(url || (links && Object.keys(links).length > 0));
+      if (!hasSrv) return [];
+      const set = new Set<string>();
+      const addQ = (q?: string) => {
+        if (!q || typeof q !== 'string') return;
+        const clean = q.trim();
+        if (!clean || clean.toLowerCase() === 'auto' || clean.toLowerCase() === 'default') return;
+        if (isQualityKeyString(clean)) set.add(clean);
+      };
+      if (links && typeof links === 'object') {
+        Object.entries(links).forEach(([k, v]) => {
+          if (v && typeof v === 'string' && v.trim().length > 0) addQ(k);
+        });
       }
+      discovered.forEach(addQ);
+      if (url) {
+        const cached = SmartStreamService.getCachedStreamMeta(url);
+        if (cached && Array.isArray((cached as any).qualities)) {
+          (cached as any).qualities.forEach(addQ);
+        }
+      }
+      if (set.size === 0 && url) {
+        (badge === 'S3' ? ['1080p', '720p'] : ['1080p', '720p', '480p', '360p']).forEach(addQ);
+      }
+      return Array.from(set)
+        .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0))
+        .map((q) => `${q} [${badge}]`);
     };
 
-    if (selectedServer === 'server1') {
-      // Currently on Server 1 -> gather Server 2 qualities with [S2] badge
-      const hasS2 = Boolean(secondaryServerUrl || (secondaryServerQualityLinks && Object.keys(secondaryServerQualityLinks).length > 0));
-      if (!hasS2) return [];
+    const s1Links =
+      (isSeries && !isMovie ? currentEpisode?.qualityLinks : (activeMoviePart as any)?.qualityLinks) ||
+      content.qualityLinks ||
+      {};
 
-      if (secondaryServerQualityLinks && typeof secondaryServerQualityLinks === 'object') {
-        Object.entries(secondaryServerQualityLinks).forEach(([k, v]) => {
-          if (v && typeof v === 'string' && v.trim().length > 0) addOtherQual(k);
-        });
-      }
-      s2DiscoveredQualities.forEach(addOtherQual);
-      if (secondaryServerUrl) {
-        const cachedS2 = SmartStreamService.getCachedStreamMeta(secondaryServerUrl);
-        if (cachedS2 && Array.isArray((cachedS2 as any).qualities)) {
-          (cachedS2 as any).qualities.forEach(addOtherQual);
-        }
-      }
-      if (otherSet.size === 0 && secondaryServerUrl) {
-        ['1080p', '720p', '480p', '360p'].forEach(addOtherQual);
-      }
-      const sortedOther = Array.from(otherSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
-      return sortedOther.map((q) => `${q} [S2]`);
-    } else {
-      // Currently on Server 2 -> gather Server 1 qualities with [S1] badge
-      const s1Links =
-        (isSeries && !isMovie ? currentEpisode?.qualityLinks : (activeMoviePart as any)?.qualityLinks) ||
-        content.qualityLinks ||
-        {};
-      const hasS1 = Boolean(primaryServerUrl || (s1Links && Object.keys(s1Links).length > 0));
-      if (!hasS1) return [];
-
-      if (s1Links && typeof s1Links === 'object') {
-        Object.entries(s1Links).forEach(([k, v]) => {
-          if (v && typeof v === 'string' && v.trim().length > 0) addOtherQual(k);
-        });
-      }
-      s1DiscoveredQualities.forEach(addOtherQual);
-      if (primaryServerUrl) {
-        const cachedS1 = SmartStreamService.getCachedStreamMeta(primaryServerUrl);
-        if (cachedS1 && Array.isArray((cachedS1 as any).qualities)) {
-          (cachedS1 as any).qualities.forEach(addOtherQual);
-        }
-      }
-      if (otherSet.size === 0 && primaryServerUrl) {
-        ['1080p', '720p', '480p', '360p'].forEach(addOtherQual);
-      }
-      const sortedOther = Array.from(otherSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
-      return sortedOther.map((q) => `${q} [S1]`);
+    const result: string[] = [];
+    if (selectedServer !== 'server1') {
+      result.push(...gatherServerQualities('S1', primaryServerUrl, s1Links, s1DiscoveredQualities));
     }
+    if (selectedServer !== 'server2') {
+      result.push(...gatherServerQualities('S2', secondaryServerUrl, secondaryServerQualityLinks, s2DiscoveredQualities));
+    }
+    if (selectedServer !== 'server3') {
+      result.push(...gatherServerQualities('S3', tertiaryServerUrl, tertiaryServerQualityLinks, s3DiscoveredQualities));
+    }
+    return result;
   }, [
     selectedServer,
     primaryServerUrl,
     secondaryServerUrl,
     secondaryServerQualityLinks,
+    tertiaryServerUrl,
+    tertiaryServerQualityLinks,
     s1DiscoveredQualities,
     s2DiscoveredQualities,
+    s3DiscoveredQualities,
     isSeries,
     isMovie,
     currentEpisode,
@@ -2158,7 +2178,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     content.qualityLinks,
   ]);
 
-  // Derive available qualities for the active server + cross-server qualities ([S1] / [S2]), never mixing language names into qualities!
+  // Derive available qualities for the active server + cross-server qualities ([S1] / [S2] / [S3]), never mixing language names into qualities!
   const availableDetailQualities = useMemo(() => {
     const qSet = new Set<string>();
     const addQual = (q?: string) => {
@@ -2185,7 +2205,12 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
 
     // 3. Cached stream metadata for the active server
-    const activeTargetUrl = selectedServer === 'server2' && secondaryServerUrl ? secondaryServerUrl : primaryServerUrl;
+    const activeTargetUrl =
+      selectedServer === 'server3' && tertiaryServerUrl
+        ? tertiaryServerUrl
+        : selectedServer === 'server2' && secondaryServerUrl
+        ? secondaryServerUrl
+        : primaryServerUrl;
     if (activeTargetUrl) {
       const cachedMeta = SmartStreamService.getCachedStreamMeta(activeTargetUrl);
       if (cachedMeta && Array.isArray((cachedMeta as any).qualities)) {
@@ -2200,7 +2225,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
     const sorted = Array.from(qSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
     return ['auto', ...sorted, ...crossServerQualities];
-  }, [playerQualityLinks, discoveredQualities, selectedServer, primaryServerUrl, secondaryServerUrl, crossServerQualities]);
+  }, [playerQualityLinks, discoveredQualities, selectedServer, primaryServerUrl, secondaryServerUrl, tertiaryServerUrl, crossServerQualities]);
 
   // Resolve all parts for the current media (episode or movie)
   const allCurrentParts = useMemo(() => {
@@ -3054,7 +3079,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               availableLanguages={availableLanguages}
               chunks={playerChunks}
               skipMarkers={currentPlayerSkipMarkers}
-              isSmartHls={Boolean(content.isSmartHls || (currentEpisode as any)?.isSmartHls || (activeMoviePart as any)?.isSmartHls || secondaryServerUrl)}
+              isSmartHls={Boolean(content.isSmartHls || (currentEpisode as any)?.isSmartHls || (activeMoviePart as any)?.isSmartHls || secondaryServerUrl || tertiaryServerUrl)}
               posterUrl={posterOrBackdrop}
               title={playerTitle || 'Video'}
               initialTime={playbackPosition}
@@ -3084,11 +3109,16 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 }
               }}
               onQualityChange={(qual) => {
+                const s3Match = /\[S3\]/i.test(qual);
                 const s2Match = /\[S2\]/i.test(qual);
                 const s1Match = /\[S1\]/i.test(qual);
-                const cleanQ = qual.replace(/\s*\[(S1|S2)\]/i, '').trim();
+                const cleanQ = qual.replace(/\s*\[(S1|S2|S3)\]/i, '').trim();
                 saveProgressNow(playbackPosition, false, true);
-                if (s2Match && selectedServer !== 'server2') {
+                if (s3Match && selectedServer !== 'server3') {
+                  handleSelectServer('server3');
+                  setToastMessage(`Switched to Server 3 • ${cleanQ.toUpperCase()}`);
+                  setTimeout(() => setToastMessage(null), 2800);
+                } else if (s2Match && selectedServer !== 'server2') {
                   handleSelectServer('server2');
                   setToastMessage(`Switched to Server 2 • ${cleanQ.toUpperCase()}`);
                   setTimeout(() => setToastMessage(null), 2800);
@@ -3105,7 +3135,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               }}
               onDiscoveredAudioTracks={(tracks) => {
                 setDiscoveredAudioTracks(tracks);
-                if (selectedServer === 'server2') {
+                if (selectedServer === 'server3') {
+                  setS3DiscoveredAudioTracks(tracks);
+                } else if (selectedServer === 'server2') {
                   setS2DiscoveredAudioTracks(tracks);
                 } else {
                   setS1DiscoveredAudioTracks(tracks);
@@ -3113,7 +3145,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               }}
               onDiscoveredQualities={(quals) => {
                 setDiscoveredQualities(quals);
-                if (selectedServer === 'server2') {
+                if (selectedServer === 'server3') {
+                  setS3DiscoveredQualities(quals);
+                } else if (selectedServer === 'server2') {
                   setS2DiscoveredQualities(quals);
                 } else {
                   setS1DiscoveredQualities(quals);
@@ -3182,8 +3216,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           {/* Selected Quality */}
           <span className="text-[#7c808b] shrink-0 uppercase">
             {activeQuality && activeQuality !== 'auto'
-              ? activeQuality.replace(/\s*\[(S1|S2)\]/i, '').toUpperCase()
-              : (discoveredQualities[0] || displayQualityTag || '480P').replace(/\s*\[(S1|S2)\]/i, '').toUpperCase()}
+              ? activeQuality.replace(/\s*\[(S1|S2|S3)\]/i, '').toUpperCase()
+              : (discoveredQualities[0] || displayQualityTag || '480P').replace(/\s*\[(S1|S2|S3)\]/i, '').toUpperCase()}
           </span>
 
           <span className="text-[#3a3d46] shrink-0">|</span>
@@ -3248,11 +3282,13 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               (currentEpisode as any)?.isSmartHls ||
               (activeMoviePart as any)?.isSmartHls ||
               secondaryServerUrl ||
+              tertiaryServerUrl ||
               (content.videoUrl && (content.videoUrl.includes('.m3u8') || content.videoUrl.includes('m3u8'))) ||
               (currentEpisode?.videoUrl && (currentEpisode.videoUrl.includes('.m3u8') || currentEpisode.videoUrl.includes('m3u8'))) ||
               SmartStreamService.isExtractableSource(content.videoUrl, content.isSmartHls) ||
               SmartStreamService.isExtractableSource(currentEpisode?.videoUrl, (currentEpisode as any)?.isSmartHls) ||
-              SmartStreamService.isExtractableSource(secondaryServerUrl, true)
+              SmartStreamService.isExtractableSource(secondaryServerUrl, true) ||
+              SmartStreamService.isExtractableSource(tertiaryServerUrl, true)
             );
 
             return (
@@ -3260,7 +3296,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 type="button"
                 onClick={() => {
                   if (!isContentHlsSupported) {
-                    setToastMessage("Download is only available for HLS Mode content. Normal links do not support offline downloading.");
+                    setToastMessage("Download is only available for HLS / Server 3 content. Normal links do not support offline downloading.");
                     setTimeout(() => setToastMessage(null), 3500);
                     return;
                   }
@@ -3269,7 +3305,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 className={`shrink-0 flex items-center justify-center gap-2 h-[38px] px-4 rounded-full bg-[#1e2029] hover:bg-[#262936] text-[13px] font-medium transition-colors cursor-pointer active:scale-95 ${
                   isContentHlsSupported ? 'text-[#e4e6eb]' : 'text-white/50'
                 }`}
-                title={isContentHlsSupported ? "Download for offline viewing" : "Download available only for HLS Mode"}
+                title={isContentHlsSupported ? "Download for offline viewing" : "Download available only for HLS / Server 3"}
               >
                 <Download className="w-4 h-4 text-[#b0b3b8] stroke-[2] shrink-0" />
                 <span>Download</span>
@@ -3277,7 +3313,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             );
           })()}
 
-          {/* 4. Server 1 (Purple Gradient) / Server 2 (Gold Gradient) */}
+          {/* 4. Server 1 (Purple) / Server 2 (Gold) / Server 3 (Crimson) */}
           <button 
             type="button"
             onClick={() => {
@@ -3285,14 +3321,16 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               setIsServerModalOpen(true);
             }}
             className={`shrink-0 flex items-center justify-center gap-2 h-[38px] px-4 rounded-full text-[13px] font-bold transition-all cursor-pointer active:scale-95 border ${
-              selectedServer === 'server2'
+              selectedServer === 'server3'
+                ? 'bg-gradient-to-r from-[#E11D48] via-[#BE123C] to-[#9F1239] text-white border-rose-400/50 shadow-md shadow-rose-950/50'
+                : selectedServer === 'server2'
                 ? 'bg-gradient-to-r from-[#F59E0B] via-[#D97706] to-[#B45309] text-black border-amber-300/60 shadow-md shadow-amber-950/50'
                 : 'bg-gradient-to-r from-[#8B5CF6] via-[#7C3AED] to-[#5B21B6] text-white border-purple-400/50 shadow-md shadow-purple-950/50'
             }`}
-            title="Switch Streaming Server (Server 1 / Server 2)"
+            title="Switch Streaming Server (Server 1 / Server 2 / Server 3)"
           >
-            <Server className={`w-4 h-4 shrink-0 stroke-[2.2] ${selectedServer === 'server2' ? 'text-black' : 'text-purple-100'}`} />
-            <span>{selectedServer === 'server2' ? 'Server 2' : 'Server 1'}</span>
+            <Server className={`w-4 h-4 shrink-0 stroke-[2.2] ${selectedServer === 'server2' ? 'text-black' : selectedServer === 'server3' ? 'text-rose-100' : 'text-purple-100'}`} />
+            <span>{selectedServer === 'server3' ? 'Server 3' : selectedServer === 'server2' ? 'Server 2' : 'Server 1'}</span>
           </button>
         </div>
 
@@ -3450,7 +3488,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       <span className="truncate max-w-[90px]">
                         {activeQuality === 'auto'
                           ? (discoveredQualities[0] ? discoveredQualities[0].toUpperCase() : '480P')
-                          : activeQuality.replace(/\s*\[(S1|S2)\]/i, '').toUpperCase()}
+                          : activeQuality.replace(/\s*\[(S1|S2|S3)\]/i, '').toUpperCase()}
                       </span>
                       <ChevronDown className={`w-4 h-4 text-[#8e929b] transition-transform duration-150 shrink-0 ${isQualityModalOpen ? 'rotate-180 text-white' : ''}`} />
                     </button>
@@ -3477,11 +3515,16 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   qualities={availableDetailQualities}
                   activeQuality={activeQuality}
                   onSelectQuality={(newQual) => {
+                    const s3Match = /\[S3\]/i.test(newQual);
                     const s2Match = /\[S2\]/i.test(newQual);
                     const s1Match = /\[S1\]/i.test(newQual);
-                    const cleanQ = newQual.replace(/\s*\[(S1|S2)\]/i, '').trim();
+                    const cleanQ = newQual.replace(/\s*\[(S1|S2|S3)\]/i, '').trim();
                     saveProgressNow(playbackPosition, false, true);
-                    if (s2Match && selectedServer !== 'server2') {
+                    if (s3Match && selectedServer !== 'server3') {
+                      handleSelectServer('server3');
+                      setToastMessage(`Switched to Server 3 • ${cleanQ.toUpperCase()}`);
+                      setTimeout(() => setToastMessage(null), 2800);
+                    } else if (s2Match && selectedServer !== 'server2') {
                       handleSelectServer('server2');
                       setToastMessage(`Switched to Server 2 • ${cleanQ.toUpperCase()}`);
                       setTimeout(() => setToastMessage(null), 2800);
@@ -4246,13 +4289,75 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         </p>
                       </div>
                     </div>
+                      <div className="shrink-0 ml-2">
+                        {isSelected ? (
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-r from-[#F59E0B] to-[#D97706] flex items-center justify-center text-black shadow-sm">
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          </div>
+                        ) : (
+                          <span className="text-[10px] font-bold text-amber-200 px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/30">
+                            Select
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })()}
+
+              {/* Server 3 (Crimson / Rose Gradient Identity — Streamtape Direct MP4/MKV) */}
+              {(() => {
+                const isSelected = selectedServer === 'server3';
+                const hasTertiary = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleSelectServer('server3');
+                      setIsServerModalOpen(false);
+                      setToastMessage(
+                        hasTertiary
+                          ? 'Switched to Server 3'
+                          : 'Switched to Server 3 (Using available stream)'
+                      );
+                      setTimeout(() => setToastMessage(null), 2500);
+                    }}
+                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer text-left ${
+                      isSelected
+                        ? 'bg-gradient-to-r from-[#E11D48]/35 via-[#BE123C]/25 to-[#181822] border-[#E11D48] ring-1 ring-[#E11D48]/60 shadow-lg shadow-rose-950/50'
+                        : 'bg-gradient-to-r from-[#E11D48]/15 via-[#BE123C]/10 to-[#14141d] border-rose-500/35 hover:border-rose-400/60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-xs border bg-gradient-to-br from-[#E11D48] to-[#9F1239] text-white border-rose-300/60 shadow-md shadow-rose-900/50">
+                        S3
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs sm:text-sm font-extrabold text-rose-200 truncate">
+                            Server 3
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
+                            hasTertiary
+                              ? 'bg-rose-500/20 text-rose-200 border-rose-400/40'
+                              : 'bg-white/10 text-white/50 border-white/15'
+                          }`}>
+                            {hasTertiary ? 'Ready' : 'Not configured'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-rose-200/70 mt-0.5 truncate">
+                          {hasTertiary
+                            ? 'Direct High-Speed Streamtape MP4 / MKV Mirror'
+                            : 'Server 3 is not configured for this title'}
+                        </p>
+                      </div>
+                    </div>
                     <div className="shrink-0 ml-2">
                       {isSelected ? (
-                        <div className="w-6 h-6 rounded-full bg-gradient-to-r from-[#F59E0B] to-[#D97706] flex items-center justify-center text-black shadow-sm">
+                        <div className="w-6 h-6 rounded-full bg-gradient-to-r from-[#E11D48] to-[#9F1239] flex items-center justify-center text-white shadow-sm">
                           <Check className="w-3.5 h-3.5 stroke-[3]" />
                         </div>
                       ) : (
-                        <span className="text-[10px] font-bold text-amber-200 px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/30">
+                        <span className="text-[10px] font-bold text-rose-200 px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-400/30">
                           Select
                         </span>
                       )}
@@ -4275,6 +4380,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         selectedServer={selectedServer}
         activePrimaryUrl={primaryServerUrl}
         activeSecondaryUrl={secondaryServerUrl}
+        activeTertiaryUrl={tertiaryServerUrl}
         activeStreamDuration={globalTotalDuration || activePartDuration}
         onClose={() => setShowDownloadModal(false)}
         onSuccessToast={(msg) => {

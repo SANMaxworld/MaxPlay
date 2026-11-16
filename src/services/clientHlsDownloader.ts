@@ -848,14 +848,21 @@ export class ClientHlsDownloader {
 
     try {
       const cleanUrl = unwrapProxyUrl(streamUrl);
+      const cleanLower = cleanUrl.toLowerCase();
       const effectiveReferer =
         refererUrl ||
         extractRefererFromProxyUrl(streamUrl) ||
         SmartStreamService.resolveEmbedReferer(streamUrl) ||
-        SmartStreamService.resolveEmbedReferer(cleanUrl);
+        SmartStreamService.resolveEmbedReferer(cleanUrl) ||
+        (cleanLower.includes('get_video') || cleanLower.includes('tapecontent')
+          ? 'https://streamtape.com/'
+          : '');
       const isDirectMp4 =
-        cleanUrl.toLowerCase().includes('.mp4') &&
-        !cleanUrl.toLowerCase().includes('.m3u8');
+        (cleanLower.includes('.mp4') ||
+          cleanLower.includes('.mkv') ||
+          cleanLower.includes('get_video') ||
+          cleanLower.includes('tapecontent.net')) &&
+        !cleanLower.includes('.m3u8');
 
       if (isDirectMp4) {
         if (useNativeDisk) {

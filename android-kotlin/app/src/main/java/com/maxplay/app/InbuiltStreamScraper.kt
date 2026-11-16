@@ -66,6 +66,7 @@ class InbuiltStreamScraper(
     enum class ProviderType {
         VOE,
         FILEMOON,
+        STREAMTAPE,
         GENERIC
     }
 
@@ -133,15 +134,19 @@ class InbuiltStreamScraper(
             "propellerads", "adsterra", "acscdn", "usrpubtrk", "tsyndicate"
         )
 
-        private val KNOWN_STREAM_DOMAINS = VOE_DOMAIN_KEYWORDS + FILEMOON_DOMAIN_KEYWORDS + listOf(
+        private val STREAMTAPE_DOMAIN_KEYWORDS = listOf(
+            "streamtape.", "strtape.", "shavetape.", "streamta.pe", "tapecontent."
+        )
+
+        private val KNOWN_STREAM_DOMAINS = VOE_DOMAIN_KEYWORDS + FILEMOON_DOMAIN_KEYWORDS + STREAMTAPE_DOMAIN_KEYWORDS + listOf(
             "streamwish", "hlswish", "playerwish", "vidhide", "dood", "streamtape"
         )
     }
 
     /**
      * 2-Layer Smart Provider Classifier:
-     * Layer 1: Identifies VOE vs FILEMOON from URL domain and path patterns.
-     * Layer 2: If a link uses a brand-new mirror domain, identifies VOE vs FILEMOON from HTML signatures.
+     * Layer 1: Identifies VOE vs FILEMOON vs STREAMTAPE from URL domain and path patterns.
+     * Layer 2: If a link uses a brand-new mirror domain, identifies provider from HTML signatures.
      */
     fun detectProviderType(url: String, html: String = ""): ProviderType {
         try {
@@ -149,12 +154,17 @@ class InbuiltStreamScraper(
             val host = (uri.host ?: "").lowercase()
             val path = (uri.path ?: "").lowercase()
 
-            // Layer 1A: Explicit Voe domain match
+            // Layer 1A: Explicit Streamtape domain match (must run before generic extension checks)
+            if (STREAMTAPE_DOMAIN_KEYWORDS.any { host.contains(it) }) {
+                return ProviderType.STREAMTAPE
+            }
+
+            // Layer 1B: Explicit Voe domain match
             if (VOE_DOMAIN_KEYWORDS.any { host.contains(it) }) {
                 return ProviderType.VOE
             }
 
-            // Layer 1B: Explicit Filemoon / Byse domain or /d/, /bkg/, /wz28/ path match
+            // Layer 1C: Explicit Filemoon / Byse domain or /d/, /bkg/, /wz28/ path match
             if (FILEMOON_DOMAIN_KEYWORDS.any { host.contains(it) } ||
                 path.startsWith("/d/") ||
                 path.startsWith("/bkg/") ||
@@ -168,6 +178,13 @@ class InbuiltStreamScraper(
         // Layer 2: HTML Signature Detection (for unknown rotating mirror domains)
         if (html.isNotBlank()) {
             val lowerHtml = html.lowercase()
+            if (lowerHtml.contains("robotlink") ||
+                lowerHtml.contains("ideoolink") ||
+                lowerHtml.contains("streamtape.com/get_video")
+            ) {
+                return ProviderType.STREAMTAPE
+            }
+
             val hasVoeSignature =
                 lowerHtml.contains("voe.sx") ||
                     lowerHtml.contains("let wc0") ||
@@ -216,6 +233,7 @@ class InbuiltStreamScraper(
                     }
                     trimmed
                 }
+                ProviderType.STREAMTAPE -> trimmed
                 ProviderType.GENERIC -> {
                     if (path.startsWith("/d/")) {
                         val newPath = path.replace(Regex("^/d/"), "/e/")
@@ -230,7 +248,7 @@ class InbuiltStreamScraper(
     }
 
     /**
-     * Stage 1 Router: Detects whether the link is VOE or FILEMOON and dispatches to its dedicated pipeline.
+     * Stage 1 Router: Detects whether the link is VOE, FILEMOON, or STREAMTAPE and dispatches to its dedicated pipeline.
      */
     fun scrapeStreamSync(sourceUrl: String, customHeaders: Map<String, String> = emptyMap()): JSONObject {
         val trimmed = sourceUrl.trim()
@@ -246,6 +264,7 @@ class InbuiltStreamScraper(
 
         val initialProvider = detectProviderType(trimmed)
         return when (initialProvider) {
+            ProviderType.STREAMTAPE -> StreamtapeExtractor(activity, mainWebView).extractStreamSync(trimmed)
             ProviderType.VOE -> scrapeVoePipeline(trimmed, customHeaders)
             ProviderType.FILEMOON -> scrapeFilemoonPipeline(trimmed, customHeaders)
             ProviderType.GENERIC -> scrapeGenericWithAutoDetectPipeline(trimmed, customHeaders)
@@ -1083,7 +1102,12 @@ class InbuiltStreamScraper(
 
                 // Auto-detect provider from final hop URL + HTML signature
                 val detected = detectProviderType(currentUrl, html)
-                if (detected == ProviderType.VOE) {
+                if (detected == ProviderType.STREAMTAPE) {
+                    val directSt = StreamtapeExtractor.extractDirectUrlFromHtml(html)
+                    if (!directSt.isNullOrBlank()) {
+                        return StreamtapeExtractor(activity, mainWebView).extractStreamSync(currentUrl)
+                    }
+                } else if (detected == ProviderType.VOE) {
                     val voeM3u8 = extractVoeM3u8FromHtml(html, currentUrl)
                     if (!voeM3u8.isNullOrBlank()) {
                         return buildSuccessResponse(voeM3u8, currentUrl, "kotlin_voe_autodetect", ProviderType.VOE)
@@ -1723,6 +1747,14 @@ class InbuiltStreamScraper(
         val mainHandler = Handler(Looper.getMainLooper())
         val isResolved = AtomicBoolean(false)
         val detectedProvider = detectProviderType(sourceUrl)
+        if (detectedProvider == ProviderType.STREAMTAPE) {
+            StreamtapeExtractor(activity, mainWebView).extractStreamViaHeadlessWebView(
+                sourceUrl = sourceUrl,
+                timeoutMs = timeoutMs.coerceAtMost(15000L),
+                onResult = onResult
+            )
+            return
+        }
         val normalizedTargetUrl = normalizeProviderUrl(sourceUrl, detectedProvider)
 
         mainHandler.post {

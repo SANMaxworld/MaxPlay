@@ -44,9 +44,29 @@ export class SmartStreamService {
     if (!url || typeof url !== "string") return false;
     const lower = url.toLowerCase().trim();
 
+    // Streamtape (Server 3): Watch/embed URLs (/v/ or /e/) often contain .mkv or .mp4 in the filename slug,
+    // so check Streamtape domains BEFORE the generic .mp4 extension check.
+    if (
+      lower.includes("streamtape.") ||
+      lower.includes("strtape.") ||
+      lower.includes("shavetape.") ||
+      lower.includes("streamta.pe") ||
+      lower.includes("tapecontent.net")
+    ) {
+      if (
+        lower.includes("/get_video") ||
+        lower.includes("tapecontent.net") ||
+        lower.includes("/api/stream-proxy")
+      ) {
+        return false;
+      }
+      return true;
+    }
+
     // Already a direct HLS master/media stream, MP4, blob, or MaxPlay backend proxy
     if (
       lower.includes("/proxy/m3u8") ||
+      lower.includes("/api/stream-proxy") ||
       lower.includes(".m3u8") ||
       lower.includes(".mp4") ||
       lower.startsWith("blob:")
@@ -54,7 +74,7 @@ export class SmartStreamService {
       return false;
     }
 
-    // Recognised video hosters that require extraction (Voe, Filemoon, Byse, StreamWish, VidHide, etc.)
+    // Recognised video hosters that require extraction (Voe, Filemoon, Byse, Streamtape, StreamWish, VidHide, etc.)
     if (
       lower.includes("voe.sx") ||
       lower.includes("voe.") ||
@@ -86,7 +106,10 @@ export class SmartStreamService {
       lower.includes("vidhide.") ||
       lower.includes("dood.") ||
       lower.includes("streamtape.") ||
-      /https?:\/\/[^\/]+\/(?:e|d|bkg)\/[a-z0-9_-]{6,}/i.test(lower)
+      lower.includes("strtape.") ||
+      lower.includes("shavetape.") ||
+      lower.includes("streamta.pe") ||
+      /https?:\/\/[^\/]+\/(?:e|d|v|bkg)\/[a-z0-9_-]{6,}/i.test(lower)
     ) {
       return true;
     }
@@ -99,12 +122,21 @@ export class SmartStreamService {
   }
 
   /**
-   * Helper to retrieve iframe embed URL for external hosters like VOE / Filemoon / Byse.
+   * Helper to retrieve iframe embed URL for external hosters like VOE / Filemoon / Byse / Streamtape.
    */
   public static getEmbedUrl(sourceUrl?: string): string | null {
     if (!sourceUrl || typeof sourceUrl !== "string") return null;
     const trimmed = sourceUrl.trim();
     const lower = trimmed.toLowerCase();
+
+    if (
+      lower.includes("streamtape.") ||
+      lower.includes("strtape.") ||
+      lower.includes("shavetape.") ||
+      lower.includes("streamta.pe")
+    ) {
+      return trimmed.replace(/\/v\//i, "/e/");
+    }
 
     if (
       lower.includes("filemoon.") ||
@@ -183,14 +215,14 @@ export class SmartStreamService {
     if (!trimmed) return "";
 
     // Unwrap legacy external proxy URLs (e.g. nawazkhan001-mw-hub-master.hf.space or /proxy/ts?url=...)
-    // Only unwrap /proxy/m3u8?url= inside the native Kotlin app where WebView intercepts headers directly;
-    // in web browsers, /proxy/m3u8?url= MUST remain wrapped so SprintCDN/Byse requests include Referer & server ASN!
+    // Only unwrap /proxy/m3u8?url= or /api/stream-proxy?url= inside the native Kotlin app where WebView intercepts headers directly;
+    // in web browsers, /proxy/m3u8?url= and /api/stream-proxy?url= MUST remain wrapped so Referer & Range requests work!
     const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
     for (let depth = 0; depth < 3; depth++) {
       if (
         trimmed.includes("nawazkhan001-mw-hub-master.hf.space") ||
         trimmed.includes("/proxy/ts?url=") ||
-        trimmed.includes("/api/stream-proxy?url=") ||
+        (isKotlinApp && trimmed.includes("/api/stream-proxy?url=")) ||
         (isKotlinApp && trimmed.includes("/proxy/m3u8?url="))
       ) {
         const m = trimmed.match(/[?&]url=([^&#]+)/i);
@@ -216,6 +248,17 @@ export class SmartStreamService {
       !trimmed.startsWith("/")
     ) {
       const idx = trimmed.indexOf("/proxy/m3u8?url=");
+      if (idx !== -1) {
+        return trimmed.slice(idx).split(/\s+/)[0];
+      }
+    }
+
+    if (
+      !isKotlinApp &&
+      trimmed.includes("/api/stream-proxy?url=") &&
+      !trimmed.startsWith("/")
+    ) {
+      const idx = trimmed.indexOf("/api/stream-proxy?url=");
       if (idx !== -1) {
         return trimmed.slice(idx).split(/\s+/)[0];
       }
@@ -278,13 +321,25 @@ export class SmartStreamService {
 
       const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
 
-      // In Kotlin native app, always use direct rawM3u8Url instead of server-proxied (/proxy/m3u8) URLs
-      if (isKotlinApp && data?.m3u8Url && data.m3u8Url.includes("/proxy/m3u8")) {
-        if (data.meta?.rawM3u8Url && !data.meta.rawM3u8Url.includes("/proxy/m3u8")) {
+      // In Kotlin native app, always use direct rawM3u8Url instead of server-proxied (/proxy/m3u8 or /api/stream-proxy) URLs
+      if (
+        isKotlinApp &&
+        data?.m3u8Url &&
+        (data.m3u8Url.includes("/proxy/m3u8") || data.m3u8Url.includes("/api/stream-proxy"))
+      ) {
+        if (
+          data.meta?.rawM3u8Url &&
+          !data.meta.rawM3u8Url.includes("/proxy/m3u8") &&
+          !data.meta.rawM3u8Url.includes("/api/stream-proxy")
+        ) {
           data.m3u8Url = data.meta.rawM3u8Url;
         } else {
           const unwrapped = this.sanitizeStreamUrl(data.m3u8Url);
-          if (unwrapped && !unwrapped.includes("/proxy/m3u8")) {
+          if (
+            unwrapped &&
+            !unwrapped.includes("/proxy/m3u8") &&
+            !unwrapped.includes("/api/stream-proxy")
+          ) {
             data.m3u8Url = unwrapped;
           } else {
             this.clearClientCache(cleanUrl);
@@ -294,7 +349,8 @@ export class SmartStreamService {
       }
 
       // In Web Browser, ensure SprintCDN / Byse / Filemoon streams are wrapped in /proxy/m3u8
-      if (!isKotlinApp && data?.m3u8Url && !data.m3u8Url.includes("/proxy/m3u8")) {
+      // and Streamtape / Tapecontent direct MP4 streams are wrapped in /api/stream-proxy
+      if (!isKotlinApp && data?.m3u8Url && !data.m3u8Url.includes("/proxy/m3u8") && !data.m3u8Url.includes("/api/stream-proxy")) {
         const lowerM3u8 = data.m3u8Url.toLowerCase();
         if (
           lowerM3u8.includes("sprintcdn") ||
@@ -305,6 +361,12 @@ export class SmartStreamService {
         ) {
           const ref = data.meta?.referer || this.resolveEmbedReferer(cleanUrl) || "https://byseraguci.com/";
           data.m3u8Url = `/proxy/m3u8?url=${encodeURIComponent(data.m3u8Url)}&referer=${encodeURIComponent(ref)}`;
+        } else if (
+          lowerM3u8.includes("streamtape.com/get_video") ||
+          lowerM3u8.includes("tapecontent.net")
+        ) {
+          const ref = data.meta?.referer || "https://streamtape.com/";
+          data.m3u8Url = `/api/stream-proxy?url=${encodeURIComponent(data.m3u8Url)}&referer=${encodeURIComponent(ref)}`;
         }
       }
 
@@ -468,6 +530,15 @@ export class SmartStreamService {
       lower.includes("ralphysuccessfull")
     ) {
       return "https://voe.sx/";
+    }
+    if (
+      lower.includes("streamtape") ||
+      lower.includes("tapecontent") ||
+      lower.includes("strtape") ||
+      lower.includes("shavetape") ||
+      lower.includes("streamta.pe")
+    ) {
+      return "https://streamtape.com/";
     }
     try {
       if (/^https?:\/\//i.test(trimmed) && !lower.includes(".m3u8") && !lower.includes(".ts")) {
@@ -1023,6 +1094,229 @@ export class SmartStreamService {
     return { ok: false };
   }
 
+  /**
+   * Client-side Streamtape (Server 3) Direct Token Extractor.
+   * Evaluates Streamtape's obfuscated JS `getElementById('robotlink').innerHTML = ...` substring
+   * expression (ignoring the fake static `<span>` trap) to compute the real IP-bound `get_video` stream URL.
+   */
+  public static evaluateStreamtapeJsExpr(expr: string): string {
+    if (!expr || typeof expr !== "string") return "";
+
+    const splitTopLevelPlus = (input: string): string[] => {
+      const parts: string[] = [];
+      let cur = "";
+      let inQuote: string | null = null;
+      let parenDepth = 0;
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+        if (inQuote) {
+          if (ch === "\\" && i + 1 < input.length) {
+            cur += ch + input[i + 1];
+            i++;
+            continue;
+          }
+          if (ch === inQuote) inQuote = null;
+          cur += ch;
+        } else {
+          if (ch === "'" || ch === '"') {
+            inQuote = ch;
+            cur += ch;
+          } else if (ch === "(") {
+            parenDepth++;
+            cur += ch;
+          } else if (ch === ")") {
+            parenDepth = Math.max(0, parenDepth - 1);
+            cur += ch;
+          } else if (ch === "+" && parenDepth === 0) {
+            parts.push(cur.trim());
+            cur = "";
+          } else {
+            cur += ch;
+          }
+        }
+      }
+      if (cur.trim()) parts.push(cur.trim());
+      return parts;
+    };
+
+    const evalTerm = (term: string): string => {
+      let s = term.trim();
+      if (!s) return "";
+
+      const ops: Array<{ name: string; start: number; end?: number }> = [];
+      while (true) {
+        const m = s.match(/^(.*)\.(substring|substr|slice)\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)\s*$/s);
+        if (!m) break;
+        s = m[1].trim();
+        ops.unshift({
+          name: m[2],
+          start: parseInt(m[3], 10),
+          end: m[4] !== undefined ? parseInt(m[4], 10) : undefined,
+        });
+      }
+
+      let baseVal = "";
+      if (s.startsWith("(") && s.endsWith(")")) {
+        baseVal = this.evaluateStreamtapeJsExpr(s.slice(1, -1));
+      } else if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith('"') && s.endsWith('"'))) {
+        baseVal = s.slice(1, -1)
+          .replace(/\\\//g, "/")
+          .replace(/\\'/g, "'")
+          .replace(/\\"/g, '"')
+          .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+          .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+      } else {
+        baseVal = this.evaluateStreamtapeJsExpr(s);
+      }
+
+      for (const op of ops) {
+        if (op.name === "substr") {
+          baseVal = op.end !== undefined ? baseVal.substr(op.start, op.end) : baseVal.substr(op.start);
+        } else if (op.name === "slice") {
+          baseVal = op.end !== undefined ? baseVal.slice(op.start, op.end) : baseVal.slice(op.start);
+        } else {
+          baseVal = op.end !== undefined ? baseVal.substring(op.start, op.end) : baseVal.substring(op.start);
+        }
+      }
+      return baseVal;
+    };
+
+    const topParts = splitTopLevelPlus(expr.trim());
+    if (topParts.length > 1) {
+      return topParts.map(evalTerm).join("").trim();
+    }
+    return evalTerm(topParts[0] || expr).trim();
+  }
+
+  public static async extractStreamtapeClientSide(
+    sourceUrl: string
+  ): Promise<{
+    ok: boolean;
+    m3u8Url?: string;
+    meta?: CachedStreamMetadata;
+  }> {
+    try {
+      const trimmed = sourceUrl.trim();
+      const lower = trimmed.toLowerCase();
+      if (
+        !lower.includes("streamtape.") &&
+        !lower.includes("strtape.") &&
+        !lower.includes("shavetape.") &&
+        !lower.includes("streamta.pe")
+      ) {
+        return { ok: false };
+      }
+
+      const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
+      const refererUrl = "https://streamtape.com/";
+      let html = "";
+
+      if (isKotlinApp) {
+        html = await NativeBridgeService.fetchTextCorsFree(trimmed, { Referer: refererUrl }).catch(() => "");
+      }
+      if (!html) {
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(trimmed)}&referer=${encodeURIComponent(refererUrl)}`;
+        const resp = await fetch(proxyUrl).catch(() => null);
+        if (resp && resp.ok) {
+          html = await resp.text().catch(() => "");
+        }
+      }
+      if (!html) return { ok: false };
+
+      // Find all getElementById('robotlink'|'ideoolink'|'botlink').innerHTML = ... assignments
+      // Streamtape places a fake token trap first and the real token calculation last!
+      const assignRegex = /getElementById\s*\(\s*['"](?:robotlink|ideoolink|botlink)['"]\s*\)\.innerHTML\s*=\s*([^;]+);/gi;
+      const expressions: string[] = [];
+      let match: RegExpExecArray | null;
+      while ((match = assignRegex.exec(html)) !== null) {
+        if (match[1]) expressions.push(match[1].trim());
+      }
+
+      let resolvedGetVideo = "";
+      for (let i = expressions.length - 1; i >= 0; i--) {
+        const candidate = this.evaluateStreamtapeJsExpr(expressions[i]);
+        if (candidate && candidate.includes("get_video?") && candidate.includes("token=")) {
+          resolvedGetVideo = candidate;
+          break;
+        }
+      }
+
+      if (!resolvedGetVideo) return { ok: false };
+
+      if (resolvedGetVideo.startsWith("//")) {
+        resolvedGetVideo = `https:${resolvedGetVideo}`;
+      } else if (resolvedGetVideo.startsWith("/")) {
+        resolvedGetVideo = `https://streamtape.com${resolvedGetVideo}`;
+      } else if (!/^https?:\/\//i.test(resolvedGetVideo)) {
+        resolvedGetVideo = `https://${resolvedGetVideo.replace(/^\/+/, "")}`;
+      }
+
+      if (!resolvedGetVideo.includes("stream=1")) {
+        resolvedGetVideo += (resolvedGetVideo.includes("?") ? "&" : "?") + "stream=1";
+      }
+
+      const titleMatch = html.match(/<meta[^>]+name=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+        html.match(/<title>([^<]+)<\/title>/i);
+      const rawTitle = `${titleMatch?.[1] || ""} ${decodeURIComponent(trimmed)}`.toLowerCase();
+
+      const detectedQualities: string[] = [];
+      if (rawTitle.includes("1080p") || rawTitle.includes("fhd") || rawTitle.includes("bluray")) {
+        detectedQualities.push("1080p");
+      } else if (rawTitle.includes("720p") || rawTitle.includes("hd")) {
+        detectedQualities.push("720p");
+      } else if (rawTitle.includes("480p")) {
+        detectedQualities.push("480p");
+      } else if (rawTitle.includes("360p")) {
+        detectedQualities.push("360p");
+      } else {
+        detectedQualities.push("1080p");
+      }
+
+      const qLabel = detectedQualities[0];
+      const detectedAudios: string[] = [];
+      const addLang = (l: string) => {
+        if (l && !detectedAudios.includes(l)) detectedAudios.push(l);
+      };
+      if (rawTitle.includes("hindi") || /\bhin\b/.test(rawTitle)) addLang("Hindi");
+      if (rawTitle.includes("japanese") || /\bjpn\b|\bjap\b/.test(rawTitle)) addLang("Japanese");
+      if (rawTitle.includes("english") || /\beng\b/.test(rawTitle)) addLang("English");
+      if (rawTitle.includes("tamil") || /\btam\b/.test(rawTitle)) addLang("Tamil");
+      if (rawTitle.includes("telugu") || /\btel\b/.test(rawTitle)) addLang("Telugu");
+      if (rawTitle.includes("dual_audio") || rawTitle.includes("dual audio") || rawTitle.includes("multi")) {
+        if (detectedAudios.length === 0) {
+          addLang("Hindi");
+          addLang("English");
+        }
+      }
+
+      this.registerStreamHostReferer(resolvedGetVideo, refererUrl);
+
+      return {
+        ok: true,
+        m3u8Url: resolvedGetVideo,
+        meta: {
+          qualities: [qLabel],
+          qualityLinks: { [qLabel]: resolvedGetVideo },
+          rawM3u8Url: resolvedGetVideo,
+          downloadQualities: [
+            {
+              id: qLabel,
+              label: `${qLabel} ${qLabel === "1080p" ? "Full HD" : qLabel === "720p" ? "HD" : "Standard"}`,
+              sizeMb: qLabel === "1080p" ? 950 : qLabel === "720p" ? 550 : 320,
+              url: resolvedGetVideo,
+              bandwidth: qLabel === "1080p" ? 2800000 : 1500000,
+            },
+          ],
+          audioTracks: detectedAudios,
+          headers: { Referer: refererUrl },
+          referer: refererUrl,
+        },
+      };
+    } catch {
+      return { ok: false };
+    }
+  }
+
   private static async resolveStreamInternal(
     trimmed: string,
     options: { forceRefresh?: boolean } = {}
@@ -1042,13 +1336,18 @@ export class SmartStreamService {
       lowerUrl.includes("n1mwq") ||
       lowerUrl.includes("moonmov") ||
       lowerUrl.includes("kerapoxy");
+    const isStreamtape =
+      lowerUrl.includes("streamtape.") ||
+      lowerUrl.includes("strtape.") ||
+      lowerUrl.includes("shavetape.") ||
+      lowerUrl.includes("streamta.pe");
 
-    // 1.1 Priority Tier (Android APK): Inbuilt Native Kotlin Scraper & Multi-Core Byse Engine (Zero CORS, Off-UI Thread)
+    // 1.1 Priority Tier (Android APK): Inbuilt Native Kotlin Scraper & Multi-Core Byse / Streamtape Engine (Zero CORS, Off-UI Thread)
     if (isKotlinApp) {
       try {
         const nativeRes = await NativeBridgeService.extractStreamNative(trimmed);
         if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
-          const ttlMs = 170 * 60 * 1000;
+          const ttlMs = isStreamtape ? 25 * 60 * 1000 : 170 * 60 * 1000;
           const expiresAt = Date.now() + ttlMs;
           const refHeader = nativeRes.headers?.Referer || nativeRes.headers?.referer || this.resolveEmbedReferer(trimmed);
           this.registerStreamHostReferer(nativeRes.m3u8Url, refHeader);
@@ -1077,9 +1376,31 @@ export class SmartStreamService {
       }
     }
 
-    // 1.2 Fallback Client-Side Direct Extraction in Kotlin APK (Byse / Filemoon / VOE)
+    // 1.2 Fallback Client-Side Direct Extraction in Kotlin APK (Streamtape / Byse / Filemoon / VOE)
     if (isKotlinApp) {
-      if (isByseOrFilemoon) {
+      if (isStreamtape) {
+        try {
+          const clientSt = await this.extractStreamtapeClientSide(trimmed);
+          if (clientSt.ok && clientSt.m3u8Url) {
+            const ttlMs = 25 * 60 * 1000;
+            const expiresAt = Date.now() + ttlMs;
+            const chosenUrl = clientSt.m3u8Url;
+            const meta: CachedStreamMetadata = {
+              ...(clientSt.meta || {}),
+              rawM3u8Url: clientSt.m3u8Url,
+            };
+            this.setClientCache(trimmed, chosenUrl, expiresAt, meta);
+            this.setClientCache(chosenUrl, chosenUrl, expiresAt, meta);
+            return {
+              streamUrl: chosenUrl,
+              isExtracted: true,
+              cached: false,
+              isEmbed: false,
+              expiresAt,
+            };
+          }
+        } catch {}
+      } else if (isByseOrFilemoon) {
         try {
           const clientByse = await this.extractByseClientSide(trimmed);
           if (clientByse.ok && clientByse.m3u8Url) {
@@ -1152,7 +1473,7 @@ export class SmartStreamService {
           : result.m3u8Url;
 
         if (result.ok && chosenM3u8) {
-          if (isKotlinApp && result.headers?.Referer) {
+          if (isKotlinApp && result.headers?.Referer && !isStreamtape) {
             NativeBridgeService.fetchTextCorsFree(chosenM3u8, result.headers).catch(() => {});
           }
           if (result.expiresAt) {
@@ -1181,6 +1502,33 @@ export class SmartStreamService {
             isEmbed: false,
             expiresAt: result.expiresAt
           };
+        }
+
+        // If backend failed on Streamtape in web browser, try client-side Streamtape extractor
+        if (isStreamtape) {
+          const clientSt = await this.extractStreamtapeClientSide(trimmed);
+          if (clientSt.ok && clientSt.m3u8Url) {
+            const ttlMs = 25 * 60 * 1000;
+            const expiresAt = Date.now() + ttlMs;
+            const refUrl = clientSt.meta?.referer || "https://streamtape.com/";
+            const chosenUrl = isKotlinApp
+              ? clientSt.m3u8Url
+              : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`;
+            const meta: CachedStreamMetadata = {
+              ...(clientSt.meta || {}),
+              rawM3u8Url: clientSt.m3u8Url,
+              proxiedM3u8Url: chosenUrl,
+            };
+            this.setClientCache(trimmed, chosenUrl, expiresAt, meta);
+            this.setClientCache(chosenUrl, chosenUrl, expiresAt, meta);
+            return {
+              streamUrl: chosenUrl,
+              isExtracted: true,
+              cached: false,
+              isEmbed: false,
+              expiresAt,
+            };
+          }
         }
 
         // If backend failed on Byse/Filemoon in web browser, try client-side Byse extractor before returning embed fallback
@@ -1225,6 +1573,33 @@ export class SmartStreamService {
       console.warn("[SmartStreamService] Backend proxy call failed or timed out:", proxyErr);
     }
 
+    // 3.4 If backend proxy timed out on Streamtape, try client-side Streamtape extractor
+    if (isStreamtape) {
+      const clientSt = await this.extractStreamtapeClientSide(trimmed);
+      if (clientSt.ok && clientSt.m3u8Url) {
+        const ttlMs = 25 * 60 * 1000;
+        const expiresAt = Date.now() + ttlMs;
+        const refUrl = clientSt.meta?.referer || "https://streamtape.com/";
+        const chosenUrl = isKotlinApp
+          ? clientSt.m3u8Url
+          : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`;
+        const meta: CachedStreamMetadata = {
+          ...(clientSt.meta || {}),
+          rawM3u8Url: clientSt.m3u8Url,
+          proxiedM3u8Url: chosenUrl,
+        };
+        this.setClientCache(trimmed, chosenUrl, expiresAt, meta);
+        this.setClientCache(chosenUrl, chosenUrl, expiresAt, meta);
+        return {
+          streamUrl: chosenUrl,
+          isExtracted: true,
+          cached: false,
+          isEmbed: false,
+          expiresAt,
+        };
+      }
+    }
+
     // 3.5 If backend proxy timed out on Byse/Filemoon, try client-side Byse extractor
     if (isByseOrFilemoon) {
       const clientByse = await this.extractByseClientSide(trimmed);
@@ -1253,7 +1628,7 @@ export class SmartStreamService {
     }
 
     // 3.6 If backend proxy failed or timed out on VOE / Server 1, try client-side VOE extractor
-    if (!isByseOrFilemoon) {
+    if (!isByseOrFilemoon && !isStreamtape) {
       const clientVoe = await this.extractVoeClientSide(trimmed);
       if (clientVoe.ok && clientVoe.m3u8Url) {
         const ttlMs = 170 * 60 * 1000;
@@ -1494,7 +1869,7 @@ export class SmartStreamService {
 
   /**
    * Detects whether a URL is a temporary extracted HLS / CDN / proxy token URL
-   * that should never override a permanent hoster/provider URL (e.g. voe.sx, byseraguci.com, filemoon).
+   * that should never override a permanent hoster/provider URL (e.g. voe.sx, byseraguci.com, filemoon, streamtape.com/v/).
    */
   public static isTemporaryHlsUrl(rawUrl?: string | null): boolean {
     if (!rawUrl || typeof rawUrl !== "string") return false;
@@ -1511,6 +1886,8 @@ export class SmartStreamService {
       lower.includes("cdn-centaurus") ||
       lower.includes("voe-network") ||
       lower.includes("edgeon-bandwidth") ||
+      lower.includes("tapecontent.net") ||
+      lower.includes("get_video?id=") ||
       lower.includes("/engine/hls") ||
       lower.includes("/hls2/") ||
       lower.includes("master.txt") ||
@@ -1594,7 +1971,7 @@ export class SmartStreamService {
 
     // If user explicitly picked a quality (e.g. 480p or 720p or 1080p)
     if (requestedQuality && requestedQuality.toLowerCase() !== "auto") {
-      const reqLower = requestedQuality.toLowerCase().trim().replace(/\s*\[(s1|s2)\]/i, "");
+      const reqLower = requestedQuality.toLowerCase().trim().replace(/\s*\[(s1|s2|s3)\]/i, "");
       const exactKey = availableQualities.find(
         (q) => q.toLowerCase() === reqLower || q.toLowerCase() === `${reqLower}p`
       );

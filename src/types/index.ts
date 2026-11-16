@@ -65,13 +65,19 @@ export interface ContentItem {
   createdAt?: string;
   videoUrl?: string;
   secondaryVideoUrl?: string;
+  tertiaryVideoUrl?: string;
+  tertiaryServerUrl?: string;
   isSmartHls?: boolean;
   qualityLinks?: Record<string, string>;
   secondaryQualityLinks?: Record<string, string>;
+  tertiaryQualityLinks?: Record<string, string>;
+  tertiaryServerQualityLinks?: Record<string, string>;
   downloadQualities?: any[];
   secondaryDownloadQualities?: any[];
+  tertiaryDownloadQualities?: any[];
   availableLanguages?: string[];
   videoSources?: Record<string, Record<string, string>>;
+  tertiaryVideoSources?: Record<string, Record<string, string>>;
   videoLinks?: any[]; // Array of splitted video links for movies
   skipMarkers?: {
     intro?: { start: number; end: number };
@@ -99,12 +105,18 @@ export interface Episode {
   thumbnailUrl: string;
   videoUrl: string;
   secondaryVideoUrl?: string;
+  tertiaryVideoUrl?: string;
+  tertiaryServerUrl?: string;
   isSmartHls?: boolean;
   qualityLinks?: Record<string, string>;
   secondaryQualityLinks?: Record<string, string>;
+  tertiaryQualityLinks?: Record<string, string>;
+  tertiaryServerQualityLinks?: Record<string, string>;
   downloadQualities?: any[];
   secondaryDownloadQualities?: any[];
+  tertiaryDownloadQualities?: any[];
   videoSources?: Record<string, Record<string, string>>;
+  tertiaryVideoSources?: Record<string, Record<string, string>>;
   videoLinks?: any[]; // Array of splitted video links for this episode
   skipMarkers?: {
     intro?: { start: number; end: number };

@@ -15,7 +15,8 @@ export interface DownloadTask {
   language?: string;
   videoUrl?: string;
   secondaryVideoUrl?: string;
-  selectedServer?: 'server1' | 'server2';
+  tertiaryVideoUrl?: string;
+  selectedServer?: 'server1' | 'server2' | 'server3';
   status: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed';
   bytesDownloaded: number;
   totalBytes: number;
@@ -188,7 +189,8 @@ class DownloadManagerService {
     language: string;
     videoUrl: string;
     secondaryVideoUrl?: string;
-    selectedServer?: 'server1' | 'server2';
+    tertiaryVideoUrl?: string;
+    selectedServer?: 'server1' | 'server2' | 'server3';
     estimatedBytes?: number;
   }): DownloadTask {
     const storageKey = this.buildStorageKey(params);
@@ -235,6 +237,7 @@ class DownloadManagerService {
       language: params.language || 'Default',
       videoUrl: params.videoUrl,
       secondaryVideoUrl: params.secondaryVideoUrl,
+      tertiaryVideoUrl: params.tertiaryVideoUrl,
       selectedServer: params.selectedServer || 'server1',
       status: hasActiveDownload ? 'queued' : 'downloading',
       bytesDownloaded: initialBytes,
@@ -344,8 +347,15 @@ class DownloadManagerService {
       return null;
     };
 
-    const firstUrl = preferSecondary && task.secondaryVideoUrl ? task.secondaryVideoUrl : task.videoUrl;
-    const secondUrl = preferSecondary && task.secondaryVideoUrl ? task.videoUrl : task.secondaryVideoUrl;
+    const candidatePool = Array.from(
+      new Set(
+        [task.videoUrl, task.secondaryVideoUrl, task.tertiaryVideoUrl]
+          .map((u) => (u || '').trim())
+          .filter(Boolean)
+      )
+    );
+    const firstUrl = preferSecondary && candidatePool.length > 1 ? candidatePool[1] : candidatePool[0];
+    const backupUrls = candidatePool.filter((u) => u !== firstUrl);
 
     const doesStreamSupportRequestedLang = async (
       rawSourceUrl: string | undefined,
@@ -388,24 +398,26 @@ class DownloadManagerService {
 
     const primaryResolved = await tryResolveUrl(firstUrl);
     if (primaryResolved) {
-      // If a backup server URL exists and a specific language was requested (e.g. Tamil on Server 2),
-      // verify that the primary stream actually contains that language track; otherwise auto-switch to backup server!
-      if (secondUrl && secondUrl !== firstUrl && task.language) {
+      // If backup server URLs exist and a specific language was requested (e.g. Tamil on Server 2),
+      // verify that the primary stream actually contains that language track; otherwise auto-switch to a backup server!
+      if (backupUrls.length > 0 && task.language) {
         const hasLangOnPrimary = await doesStreamSupportRequestedLang(
           firstUrl,
           primaryResolved.streamUrl,
           task.language
         );
         if (!hasLangOnPrimary) {
-          const secondaryResolved = await tryResolveUrl(secondUrl);
-          if (secondaryResolved) {
-            const hasLangOnSecondary = await doesStreamSupportRequestedLang(
-              secondUrl,
-              secondaryResolved.streamUrl,
-              task.language
-            );
-            if (hasLangOnSecondary) {
-              return secondaryResolved;
+          for (const bUrl of backupUrls) {
+            const backupResolved = await tryResolveUrl(bUrl);
+            if (backupResolved) {
+              const hasLangOnBackup = await doesStreamSupportRequestedLang(
+                bUrl,
+                backupResolved.streamUrl,
+                task.language
+              );
+              if (hasLangOnBackup) {
+                return backupResolved;
+              }
             }
           }
         }
@@ -413,12 +425,12 @@ class DownloadManagerService {
       return primaryResolved;
     }
 
-    if (secondUrl && secondUrl !== firstUrl) {
-      const secondaryResolved = await tryResolveUrl(secondUrl);
-      if (secondaryResolved) return secondaryResolved;
+    for (const bUrl of backupUrls) {
+      const backupResolved = await tryResolveUrl(bUrl);
+      if (backupResolved) return backupResolved;
     }
 
-    throw new Error('Failed to extract playable HLS stream from Server 1 or Server 2');
+    throw new Error('Failed to extract playable stream from Server 1, Server 2, or Server 3');
   }
 
   private async executeTask(task: DownloadTask) {

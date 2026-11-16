@@ -96,18 +96,20 @@ object MaxPlayOfflineVault {
                 return res
             }
 
+            val segHost = try { android.net.Uri.parse(segmentUrl).host ?: "" } catch (_: Exception) { "" }
+            val resolvedUa = CorsFreeWebViewClient.resolveUserAgentForHost(segHost)
+
             val reqBuilder = Request.Builder()
                 .url(segmentUrl)
                 .header(
                     "User-Agent",
-                    InbuiltStreamScraper.DEFAULT_USER_AGENT
+                    resolvedUa
                 )
                 .header("Accept", "*/*")
 
             val resolvedRef = if (refererUrl.isNotBlank()) {
                 refererUrl
             } else {
-                val segHost = try { android.net.Uri.parse(segmentUrl).host ?: "" } catch (_: Exception) { "" }
                 CorsFreeWebViewClient.resolveRefererForHost(segHost)
             }
 

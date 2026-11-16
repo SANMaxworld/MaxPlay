@@ -228,13 +228,43 @@ class MaxPlayNativeBridge(
             }
 
             try {
-                // Step 1: Try fast OkHttp Stage 1 Scraper (VOE.sx & Filemoon/Byse dedicated pipelines)
+                // Step 1: Try fast OkHttp Stage 1 Scraper (VOE.sx, Filemoon/Byse, & Streamtape dedicated pipelines)
                 val stage1 = scraper.scrapeStreamSync(cleanSource, emptyMap())
                 if (stage1.optBoolean("ok") && stage1.optString("m3u8Url").isNotEmpty()) {
                     val m3u8Url = stage1.optString("m3u8Url")
                     val ref = stage1.optJSONObject("headers")?.optString("Referer") ?: cleanSource
-                    if (ref.isNotEmpty()) {
-                        CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
+                    val ua = stage1.optJSONObject("headers")?.optString("User-Agent") ?: ""
+                    if (ref.isNotEmpty() || ua.isNotEmpty()) {
+                        CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref, ua)
+                    }
+                    val isDirectProgressive = stage1.optBoolean("isDirectVideo", false) ||
+                        stage1.optString("provider", "").equals("STREAMTAPE", ignoreCase = true)
+                    if (isDirectProgressive) {
+                        val enrichedDirect = JSONObject(stage1.toString()).apply {
+                            put("engine", "KOTLIN_STREAMTAPE")
+                            put("sourceUrl", cleanSource)
+                            put("referer", ref)
+                            if (qualityHint.isNotBlank()) {
+                                val sizeMb = optInt("sizeMb", 950)
+                                val sizeBytes = optLong("sizeBytes", 0L)
+                                val cdnUrl = optString("cdnUrl", m3u8Url)
+                                val mimeType = optString("mimeType", "video/mp4")
+                                put("qualities", org.json.JSONArray().put(qualityHint))
+                                put("qualityLinks", JSONObject().put(qualityHint, cleanSource))
+                                put("downloadQualities", org.json.JSONArray().put(JSONObject().apply {
+                                    put("id", qualityHint)
+                                    put("label", "$qualityHint ${if (qualityHint.contains("1080")) "Full HD" else if (qualityHint.contains("720")) "HD" else "Standard"}")
+                                    put("sizeMb", sizeMb)
+                                    put("sizeBytes", sizeBytes)
+                                    put("url", cleanSource)
+                                    put("resolvedUrl", m3u8Url)
+                                    put("cdnUrl", cdnUrl)
+                                    put("mimeType", mimeType)
+                                }))
+                            }
+                        }
+                        finishWithResult(enrichedDirect)
+                        return@execute
                     }
                     val enriched = probeHlsPlaylistDetailsSync(
                         cleanSource,
@@ -250,14 +280,26 @@ class MaxPlayNativeBridge(
                     }
                 }
 
-                // Step 2: Fallback to Offscreen Headless WebView Sniffer (for JS-packed VOE / Filemoon / Byse pages)
+                // Step 2: Fallback to Offscreen Headless WebView Sniffer (for JS-packed VOE / Filemoon / Byse / Streamtape pages)
                 scraper.sniffStreamWithHeadlessWebView(cleanSource, 16000L) { stage2 ->
                     InbuiltStreamScraper.backgroundExecutor.execute {
                         try {
                             if (stage2.optBoolean("ok") && stage2.optString("m3u8Url").isNotEmpty()) {
                                 val m3u8Url = stage2.optString("m3u8Url")
                                 val ref = stage2.optJSONObject("headers")?.optString("Referer") ?: cleanSource
-                                CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref)
+                                val ua = stage2.optJSONObject("headers")?.optString("User-Agent") ?: ""
+                                CorsFreeWebViewClient.registerStreamReferer(m3u8Url, ref, ua)
+                                val isDirectProgressive = stage2.optBoolean("isDirectVideo", false) ||
+                                    stage2.optString("provider", "").equals("STREAMTAPE", ignoreCase = true)
+                                if (isDirectProgressive) {
+                                    val enrichedDirect = JSONObject(stage2.toString()).apply {
+                                        put("engine", "KOTLIN_SNIFFER_DIRECT")
+                                        put("sourceUrl", cleanSource)
+                                        put("referer", ref)
+                                    }
+                                    finishWithResult(enrichedDirect)
+                                    return@execute
+                                }
                                 val enriched = probeHlsPlaylistDetailsSync(
                                     cleanSource,
                                     m3u8Url,

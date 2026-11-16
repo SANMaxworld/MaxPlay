@@ -28,9 +28,10 @@ interface DownloadSelectionModalProps {
   content: ContentItem;
   initialSeasonIndex?: number;
   initialEpisodeIndex?: number;
-  selectedServer?: 'server1' | 'server2';
+  selectedServer?: 'server1' | 'server2' | 'server3';
   activePrimaryUrl?: string;
   activeSecondaryUrl?: string;
+  activeTertiaryUrl?: string;
   activeStreamDuration?: number;
   onClose: () => void;
   onSuccessToast?: (msg: string) => void;
@@ -45,7 +46,7 @@ interface QualityOptionItem {
   bandwidth: number;
   url: string;
   isLive: boolean;
-  serverSource: 'server1' | 'server2';
+  serverSource: 'server1' | 'server2' | 'server3';
 }
 
 interface EpisodeResolvedPlan {
@@ -55,7 +56,7 @@ interface EpisodeResolvedPlan {
   epId: string;
   requestedQuality: string;
   resolvedQuality: string;
-  resolvedServer: 'server1' | 'server2';
+  resolvedServer: 'server1' | 'server2' | 'server3';
   language: string;
   targetUrl: string;
   backupUrl?: string;
@@ -81,6 +82,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   selectedServer = 'server1',
   activePrimaryUrl = '',
   activeSecondaryUrl = '',
+  activeTertiaryUrl = '',
   activeStreamDuration = 0,
   onClose,
   onSuccessToast,
@@ -179,7 +181,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   const [showSummaryReview, setShowSummaryReview] = useState<boolean>(false);
 
   // In-modal server selector (defaults to currently active player server, switchable inside modal!)
-  const [modalServer, setModalServer] = useState<'server1' | 'server2'>(selectedServer);
+  const [modalServer, setModalServer] = useState<'server1' | 'server2' | 'server3'>(selectedServer);
 
   useEffect(() => {
     setModalServer(selectedServer);
@@ -224,6 +226,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
   const [server1Meta, setServer1Meta] = useState<ExtractedServerMeta | null>(null);
   const [server2Meta, setServer2Meta] = useState<ExtractedServerMeta | null>(null);
+  const [server3Meta, setServer3Meta] = useState<ExtractedServerMeta | null>(null);
   const [isProbing, setIsProbing] = useState<boolean>(false);
 
   const isQualityKey = (val: string): boolean => {
@@ -268,7 +271,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   const extractUrlsFromItem = (
     ep: any | null,
     useActivePlayerFallback: boolean
-  ): { primaryUrl: string; secondaryUrl: string } => {
+  ): { primaryUrl: string; secondaryUrl: string; tertiaryUrl: string } => {
     const firstFromDict = (dict: any): string => {
       if (!dict || typeof dict !== 'object') return '';
       for (const k of ['1080p', '720p', '480p', '360p', ...Object.keys(dict)]) {
@@ -293,6 +296,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
     let pUrl = '';
     let sUrl = '';
+    let tUrl = '';
 
     if (ep) {
       // Strictly inspect THIS episode only — never fall back to root content!
@@ -324,6 +328,19 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         epPart0?.secondaryServerUrl ||
         epPart0?.secondaryVideoUrl ||
         epPart0?.secondaryUrl ||
+        '';
+
+      tUrl =
+        firstFromDict(ep.tertiaryServerQualityLinks) ||
+        firstFromDict(ep.tertiaryQualityLinks) ||
+        ep.tertiaryServerUrl ||
+        ep.tertiaryVideoUrl ||
+        ep.tertiaryUrl ||
+        firstFromDict(epPart0?.tertiaryServerQualityLinks) ||
+        firstFromDict(epPart0?.tertiaryQualityLinks) ||
+        epPart0?.tertiaryServerUrl ||
+        epPart0?.tertiaryVideoUrl ||
+        epPart0?.tertiaryUrl ||
         '';
     } else {
       // Movie: inspect content-level fields
@@ -372,49 +389,75 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         (content as any).secondaryUrl ||
         '';
 
+      tUrl =
+        firstFromDict((content as any).tertiaryServerQualityLinks) ||
+        firstFromDict(content.tertiaryQualityLinks) ||
+        firstFromDict(contentPart0?.tertiaryServerQualityLinks) ||
+        firstFromDict(contentPart0?.tertiaryQualityLinks) ||
+        firstFromDict(moviePart0?.tertiaryServerQualityLinks) ||
+        firstFromDict(moviePart0?.tertiaryQualityLinks) ||
+        contentPart0?.tertiaryServerUrl ||
+        contentPart0?.tertiaryVideoUrl ||
+        contentPart0?.tertiaryUrl ||
+        moviePart0?.tertiaryServerUrl ||
+        moviePart0?.tertiaryVideoUrl ||
+        moviePart0?.tertiaryUrl ||
+        (content as any).tertiaryServerUrl ||
+        content.tertiaryVideoUrl ||
+        (content as any).tertiaryUrl ||
+        '';
+
       if (useActivePlayerFallback) {
         if (!pUrl && activePrimaryUrl) pUrl = activePrimaryUrl;
         if (!sUrl && activeSecondaryUrl) sUrl = activeSecondaryUrl;
+        if (!tUrl && activeTertiaryUrl) tUrl = activeTertiaryUrl;
       }
     }
 
     return {
       primaryUrl: SmartStreamService.sanitizeStreamUrl(pUrl),
       secondaryUrl: SmartStreamService.sanitizeStreamUrl(sUrl),
+      tertiaryUrl: SmartStreamService.sanitizeStreamUrl(tUrl),
     };
   };
 
   // Determine available server URLs across Movie or Season Episodes
-  const { primaryUrl, secondaryUrl, hasServer1, hasServer2 } = useMemo(() => {
+  const { primaryUrl, secondaryUrl, tertiaryUrl, hasServer1, hasServer2, hasServer3 } = useMemo(() => {
     if (isMovie) {
-      const { primaryUrl: pUrl, secondaryUrl: sUrl } = extractUrlsFromItem(null, true);
+      const { primaryUrl: pUrl, secondaryUrl: sUrl, tertiaryUrl: tUrl } = extractUrlsFromItem(null, true);
       return {
         primaryUrl: pUrl,
         secondaryUrl: sUrl,
+        tertiaryUrl: tUrl,
         hasServer1: Boolean(pUrl && pUrl.length > 0),
         hasServer2: Boolean(sUrl && sUrl.length > 0),
+        hasServer3: Boolean(tUrl && tUrl.length > 0),
       };
     }
 
     const activeEp = currentEpisodes[focusedEpisodeIdx] || currentEpisodes[0] || null;
-    const { primaryUrl: fPUrl, secondaryUrl: fSUrl } = extractUrlsFromItem(activeEp, false);
+    const { primaryUrl: fPUrl, secondaryUrl: fSUrl, tertiaryUrl: fTUrl } = extractUrlsFromItem(activeEp, false);
 
     let anyS1 = Boolean(fPUrl);
     let anyS2 = Boolean(fSUrl);
+    let anyS3 = Boolean(fTUrl);
     for (const ep of currentEpisodes) {
-      if (anyS1 && anyS2) break;
+      if (anyS1 && anyS2 && anyS3) break;
       const u = extractUrlsFromItem(ep, false);
       if (u.primaryUrl) anyS1 = true;
       if (u.secondaryUrl) anyS2 = true;
+      if (u.tertiaryUrl) anyS3 = true;
     }
 
     return {
       primaryUrl: fPUrl,
       secondaryUrl: fSUrl,
+      tertiaryUrl: fTUrl,
       hasServer1: anyS1,
       hasServer2: anyS2,
+      hasServer3: anyS3,
     };
-  }, [isMovie, currentEpisodes, focusedEpisodeIdx, content, activePrimaryUrl, activeSecondaryUrl]);
+  }, [isMovie, currentEpisodes, focusedEpisodeIdx, content, activePrimaryUrl, activeSecondaryUrl, activeTertiaryUrl]);
 
   // Helper to probe a single server URL (0ms if cached in SmartStreamService)
   const probeSingleServerUrl = async (
@@ -478,20 +521,34 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
       const resolved = await SmartStreamService.resolveStream(targetUrl, { forceRefresh: false });
       if (resolved && resolved.streamUrl && !resolved.isEmbed) {
-        const parsedAfterResolve = await ClientHlsDownloader.probeMasterPlaylist(
-          resolved.streamUrl,
-          requestedDur
-        );
-        if (parsedAfterResolve && parsedAfterResolve.downloadQualities.length > 0) {
-          SmartStreamService.setCachedStreamMeta(scopedMetaKey, parsedAfterResolve);
-          SmartStreamService.setCachedStreamMeta(targetUrl, parsedAfterResolve);
-          return {
-            audioTracks: parsedAfterResolve.audioTracks,
-            qualities: parsedAfterResolve.qualities,
-            downloadQualities: parsedAfterResolve.downloadQualities,
-            duration: parsedAfterResolve.duration,
-            isLiveProbed: true,
-          };
+        if (resolved.streamUrl.toLowerCase().includes('.m3u8')) {
+          const parsedAfterResolve = await ClientHlsDownloader.probeMasterPlaylist(
+            resolved.streamUrl,
+            requestedDur
+          );
+          if (parsedAfterResolve && parsedAfterResolve.downloadQualities.length > 0) {
+            SmartStreamService.setCachedStreamMeta(scopedMetaKey, parsedAfterResolve);
+            SmartStreamService.setCachedStreamMeta(targetUrl, parsedAfterResolve);
+            return {
+              audioTracks: parsedAfterResolve.audioTracks,
+              qualities: parsedAfterResolve.qualities,
+              downloadQualities: parsedAfterResolve.downloadQualities,
+              duration: parsedAfterResolve.duration,
+              isLiveProbed: true,
+            };
+          }
+        } else {
+          // Direct MP4 / MKV / Streamtape stream: read cached meta populated during extraction
+          const directMeta = SmartStreamService.getCachedStreamMeta(targetUrl);
+          if (directMeta) {
+            return {
+              audioTracks: directMeta.audioTracks,
+              qualities: directMeta.qualities,
+              downloadQualities: directMeta.downloadQualities,
+              duration: directMeta.duration || requestedDur,
+              isLiveProbed: true,
+            };
+          }
         }
       }
     } catch (err) {
@@ -508,6 +565,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
     setServer1Meta(null);
     setServer2Meta(null);
+    setServer3Meta(null);
 
     const contentPart0 =
       Array.isArray((content as any)?.videoLinks) && (content as any).videoLinks.length > 0
@@ -524,15 +582,22 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     const existingS2Dl = isSeries
       ? (activeEp as any)?.secondaryDownloadQualities || epPart0?.secondaryDownloadQualities
       : (content as any)?.secondaryDownloadQualities || contentPart0?.secondaryDownloadQualities;
+    const existingS3Dl = isSeries
+      ? (activeEp as any)?.tertiaryDownloadQualities || epPart0?.tertiaryDownloadQualities
+      : (content as any)?.tertiaryDownloadQualities || contentPart0?.tertiaryDownloadQualities;
     const existingS1Audios = isSeries
       ? (activeEp as any)?.audioTracks || epPart0?.audioTracks
       : (content as any)?.audioTracks || contentPart0?.audioTracks;
     const existingS2Audios = isSeries
       ? (activeEp as any)?.secondaryAudioTracks || epPart0?.secondaryAudioTracks
       : (content as any)?.secondaryAudioTracks || contentPart0?.secondaryAudioTracks;
+    const existingS3Audios = isSeries
+      ? (activeEp as any)?.tertiaryAudioTracks || epPart0?.tertiaryAudioTracks
+      : (content as any)?.tertiaryAudioTracks || contentPart0?.tertiaryAudioTracks;
 
     const hasVerifiedS1 = Array.isArray(existingS1Dl) && existingS1Dl.length > 0;
     const hasVerifiedS2 = Array.isArray(existingS2Dl) && existingS2Dl.length > 0;
+    const hasVerifiedS3 = Array.isArray(existingS3Dl) && existingS3Dl.length > 0;
 
     if (hasVerifiedS1) {
       setServer1Meta({
@@ -550,20 +615,31 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         isLiveProbed: true,
       });
     }
+    if (hasVerifiedS3) {
+      setServer3Meta({
+        downloadQualities: existingS3Dl,
+        audioTracks: Array.isArray(existingS3Audios) ? existingS3Audios : undefined,
+        duration: requestedDur,
+        isLiveProbed: true,
+      });
+    }
 
-    // Proactively probe BOTH Server 1 and Server 2 in parallel so exact per-server audio tracks (e.g. Tamil on S2)
-    // and cross-server qualities are known immediately!
     const needS1Probe = Boolean(primaryUrl && (!hasVerifiedS1 || !Array.isArray(existingS1Audios) || existingS1Audios.length === 0));
     const needS2Probe = Boolean(secondaryUrl && (!hasVerifiedS2 || !Array.isArray(existingS2Audios) || existingS2Audios.length === 0));
+    const needS3Probe = Boolean(tertiaryUrl && !hasVerifiedS3);
 
-    if (!needS1Probe && !needS2Probe) {
+    if (!needS1Probe && !needS2Probe && !needS3Probe) {
       setIsProbing(false);
       return;
     }
 
     const deferTimer = setTimeout(async () => {
       if (isCancelled) return;
-      if ((modalServer === 'server1' && !hasVerifiedS1) || (modalServer === 'server2' && !hasVerifiedS2)) {
+      if (
+        (modalServer === 'server1' && !hasVerifiedS1) ||
+        (modalServer === 'server2' && !hasVerifiedS2) ||
+        (modalServer === 'server3' && !hasVerifiedS3)
+      ) {
         setIsProbing(true);
       }
       try {
@@ -600,6 +676,22 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                 }
               })
             : Promise.resolve(),
+          needS3Probe
+            ? probeSingleServerUrl(tertiaryUrl, requestedDur).then((s3) => {
+                if (!isCancelled && s3) {
+                  setServer3Meta((prev) => ({
+                    downloadQualities:
+                      prev?.downloadQualities && prev.downloadQualities.length > 0
+                        ? prev.downloadQualities
+                        : s3.downloadQualities,
+                    audioTracks:
+                      s3.audioTracks && s3.audioTracks.length > 0 ? s3.audioTracks : prev?.audioTracks,
+                    duration: s3.duration || prev?.duration || requestedDur,
+                    isLiveProbed: true,
+                  }));
+                }
+              })
+            : Promise.resolve(),
         ]);
       } finally {
         if (!isCancelled) setIsProbing(false);
@@ -610,7 +702,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       isCancelled = true;
       clearTimeout(deferTimer);
     };
-  }, [content, isSeries, focusedEpisodeIdx, currentEpisodes, primaryUrl, secondaryUrl, modalServer]);
+  }, [content, isSeries, focusedEpisodeIdx, currentEpisodes, primaryUrl, secondaryUrl, tertiaryUrl, modalServer]);
 
   // 2. Unified Available Languages Filter (Applies smoothly to BOTH Server 1 and Server 2 without forcing server jumps!)
   const availableLanguages = useMemo(() => {
@@ -703,7 +795,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
    */
   const getItemServerQualityMap = (
     ep: any | null,
-    serverId: 'server1' | 'server2',
+    serverId: 'server1' | 'server2' | 'server3',
     liveMetaForItem: ExtractedServerMeta | null = null
   ): Map<string, { id: string; url: string; sizeMb: number; bandwidth: number; label: string; badge: string }> => {
     const map = new Map<
@@ -712,6 +804,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     >();
 
     const isS2 = serverId === 'server2';
+    const isS3 = serverId === 'server3';
 
     let linksDict: Record<string, string> | undefined;
     let savedDlArr: any[] | undefined;
@@ -723,19 +816,26 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           ? ep.videoLinks[0]
           : null;
 
-      linksDict = isS2
+      linksDict = isS3
+        ? (ep as any)?.tertiaryServerQualityLinks ||
+          (ep as any)?.tertiaryQualityLinks ||
+          epPart0?.tertiaryServerQualityLinks ||
+          epPart0?.tertiaryQualityLinks
+        : isS2
         ? (ep as any)?.secondaryServerQualityLinks ||
           (ep as any)?.secondaryQualityLinks ||
           epPart0?.secondaryServerQualityLinks ||
           epPart0?.secondaryQualityLinks
         : ep?.qualityLinks || epPart0?.qualityLinks;
 
-      savedDlArr = isS2
+      savedDlArr = isS3
+        ? (ep as any)?.tertiaryDownloadQualities || epPart0?.tertiaryDownloadQualities
+        : isS2
         ? (ep as any)?.secondaryDownloadQualities || epPart0?.secondaryDownloadQualities
         : (ep as any)?.downloadQualities || epPart0?.downloadQualities;
 
       const urls = extractUrlsFromItem(ep, false);
-      singleFallbackUrl = isS2 ? urls.secondaryUrl : urls.primaryUrl;
+      singleFallbackUrl = isS3 ? urls.tertiaryUrl : isS2 ? urls.secondaryUrl : urls.primaryUrl;
     } else {
       const contentPart0 =
         Array.isArray((content as any)?.videoLinks) &&
@@ -750,7 +850,14 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           ? (content as any).movieParts[0]
           : null;
 
-      linksDict = isS2
+      linksDict = isS3
+        ? (content as any).tertiaryServerQualityLinks ||
+          content.tertiaryQualityLinks ||
+          contentPart0?.tertiaryServerQualityLinks ||
+          contentPart0?.tertiaryQualityLinks ||
+          moviePart0?.tertiaryServerQualityLinks ||
+          moviePart0?.tertiaryQualityLinks
+        : isS2
         ? (content as any).secondaryServerQualityLinks ||
           content.secondaryQualityLinks ||
           contentPart0?.secondaryServerQualityLinks ||
@@ -759,12 +866,14 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           moviePart0?.secondaryQualityLinks
         : content.qualityLinks || contentPart0?.qualityLinks || moviePart0?.qualityLinks;
 
-      savedDlArr = isS2
+      savedDlArr = isS3
+        ? (content as any)?.tertiaryDownloadQualities || contentPart0?.tertiaryDownloadQualities
+        : isS2
         ? (content as any)?.secondaryDownloadQualities || contentPart0?.secondaryDownloadQualities
         : (content as any)?.downloadQualities || contentPart0?.downloadQualities;
 
       const urls = extractUrlsFromItem(null, true);
-      singleFallbackUrl = isS2 ? urls.secondaryUrl : urls.primaryUrl;
+      singleFallbackUrl = isS3 ? urls.tertiaryUrl : isS2 ? urls.secondaryUrl : urls.primaryUrl;
     }
 
     const cleanedLinks = sanitizeQualityDict(linksDict, savedDlArr);
@@ -817,12 +926,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
             q?.label ||
             existing?.label ||
             `${qId} ${qId.includes('1080') ? 'Full HD' : qId.includes('720') ? 'HD' : 'Standard'}`,
-          badge: realMb > 0 ? 'Verified HLS • Real Size' : existing?.badge || 'Verified Stream',
+          badge: realMb > 0 ? 'Verified Stream • Real Size' : existing?.badge || 'Verified Stream',
         });
       }
     }
 
-    // 3. Merge live probed HLS manifest variants (only when applicable to this item)
+    // 3. Merge live probed manifest/direct variants (only when applicable to this item)
     if (liveMetaForItem && Array.isArray(liveMetaForItem.downloadQualities)) {
       const allowNewVariants = map.size === 0;
       for (const q of liveMetaForItem.downloadQualities) {
@@ -872,9 +981,23 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
             sizeMb: Number(q?.sizeMb) > 0 ? Math.round(Number(q.sizeMb)) : 0,
             bandwidth: Number(q?.bandwidth || 0),
             label: `${qId} Stream`,
-            badge: 'HLS Stream',
+            badge: isS3 ? 'Streamtape Direct' : 'HLS Stream',
           });
         }
+      } else if (isS3) {
+        const inferredQ = singleFallbackUrl.includes('1080')
+          ? '1080p'
+          : singleFallbackUrl.includes('480')
+          ? '480p'
+          : '720p';
+        map.set(inferredQ, {
+          id: inferredQ,
+          url: singleFallbackUrl,
+          sizeMb: 0,
+          bandwidth: 0,
+          label: `${inferredQ} Direct File`,
+          badge: 'Streamtape Direct',
+        });
       }
     }
 
@@ -883,15 +1006,17 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
   // 3. Movie Quality Options & Series Global Quality Pill Filter Options
   const { qualityOptions, crossServerQualityOptions, seriesGlobalQualities } = useMemo(() => {
+    const isServer3 = modalServer === 'server3';
     const isServer2 = modalServer === 'server2';
 
     if (isMovie) {
       const s1Map = hasServer1 ? getItemServerQualityMap(null, 'server1', server1Meta) : new Map();
       const s2Map = hasServer2 ? getItemServerQualityMap(null, 'server2', server2Meta) : new Map();
+      const s3Map = hasServer3 ? getItemServerQualityMap(null, 'server3', server3Meta) : new Map();
 
       const toOptions = (
         m: Map<string, { id: string; url: string; sizeMb: number; bandwidth: number; label: string; badge: string }>,
-        srv: 'server1' | 'server2'
+        srv: 'server1' | 'server2' | 'server3'
       ): QualityOptionItem[] =>
         Array.from(m.values())
           .map((v) => ({
@@ -909,11 +1034,10 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
       const s1Opts = toOptions(s1Map, 'server1');
       const s2Opts = toOptions(s2Map, 'server2');
+      const s3Opts = toOptions(s3Map, 'server3');
 
-      // Merge any qualities that exist on the other server (e.g. 1080p on Server 2 when Server 1 only has 720p/480p)
-      // so the user can select any available quality regardless of which server tab is active!
-      const primaryOpts = isServer2 ? s2Opts : s1Opts;
-      const otherOpts = isServer2 ? s1Opts : s2Opts;
+      const primaryOpts = isServer3 ? s3Opts : isServer2 ? s2Opts : s1Opts;
+      const otherOpts = isServer3 ? [...s1Opts, ...s2Opts] : isServer2 ? [...s1Opts, ...s3Opts] : [...s2Opts, ...s3Opts];
       const mergedMovieOpts = [...primaryOpts];
       for (const o of otherOpts) {
         if (!mergedMovieOpts.some((p) => p.id.toLowerCase() === o.id.toLowerCase())) {
@@ -929,8 +1053,6 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       };
     }
 
-    // For Series: Aggregate all available qualities across all episodes in the current season (on both Server 1 & Server 2)
-    // so the top Pill Filter Bar always shows every quality that exists in the season (e.g. 1080p, 720p, 480p, 360p).
     const allQualitiesSet = new Set<string>();
     const activeServerMap = new Map<string, QualityOptionItem>();
     const otherServerMap = new Map<string, QualityOptionItem>();
@@ -939,44 +1061,36 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       const isFocused = idx === focusedEpisodeIdx;
       const s1Map = getItemServerQualityMap(ep, 'server1', isFocused ? server1Meta : null);
       const s2Map = getItemServerQualityMap(ep, 'server2', isFocused ? server2Meta : null);
+      const s3Map = getItemServerQualityMap(ep, 'server3', isFocused ? server3Meta : null);
 
-      for (const [qId, val] of s1Map.entries()) {
-        allQualitiesSet.add(qId);
-        const targetMap = isServer2 ? otherServerMap : activeServerMap;
-        const existing = targetMap.get(qId);
-        if (!existing || (val.sizeMb > 0 && existing.epSizeMb === 0)) {
-          targetMap.set(qId, {
-            id: qId,
-            label: val.label,
-            badge: val.badge,
-            movieSizeMb: val.sizeMb,
-            epSizeMb: val.sizeMb,
-            bandwidth: val.bandwidth,
-            url: val.url,
-            isLive: true,
-            serverSource: 'server1',
-          });
+      const ingest = (
+        srcMap: Map<string, { id: string; url: string; sizeMb: number; bandwidth: number; label: string; badge: string }>,
+        srv: 'server1' | 'server2' | 'server3',
+        isActiveSrv: boolean
+      ) => {
+        for (const [qId, val] of srcMap.entries()) {
+          allQualitiesSet.add(qId);
+          const targetMap = isActiveSrv ? activeServerMap : otherServerMap;
+          const existing = targetMap.get(qId);
+          if (!existing || (val.sizeMb > 0 && existing.epSizeMb === 0)) {
+            targetMap.set(qId, {
+              id: qId,
+              label: val.label,
+              badge: val.badge,
+              movieSizeMb: val.sizeMb,
+              epSizeMb: val.sizeMb,
+              bandwidth: val.bandwidth,
+              url: val.url,
+              isLive: true,
+              serverSource: srv,
+            });
+          }
         }
-      }
+      };
 
-      for (const [qId, val] of s2Map.entries()) {
-        allQualitiesSet.add(qId);
-        const targetMap = isServer2 ? activeServerMap : otherServerMap;
-        const existing = targetMap.get(qId);
-        if (!existing || (val.sizeMb > 0 && existing.epSizeMb === 0)) {
-          targetMap.set(qId, {
-            id: qId,
-            label: val.label,
-            badge: val.badge,
-            movieSizeMb: val.sizeMb,
-            epSizeMb: val.sizeMb,
-            bandwidth: val.bandwidth,
-            url: val.url,
-            isLive: true,
-            serverSource: 'server2',
-          });
-        }
-      }
+      ingest(s1Map, 'server1', modalServer === 'server1');
+      ingest(s2Map, 'server2', modalServer === 'server2');
+      ingest(s3Map, 'server3', modalServer === 'server3');
     });
 
     if (allQualitiesSet.size === 0) {
@@ -1007,9 +1121,11 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     focusedEpisodeIdx,
     server1Meta,
     server2Meta,
+    server3Meta,
     modalServer,
     hasServer1,
     hasServer2,
+    hasServer3,
   ]);
 
   const [selectedQuality, setSelectedQuality] = useState<string>(() => {
@@ -1176,8 +1292,8 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
    */
   const episodeResolutionPlans = useMemo<EpisodeResolvedPlan[]>(() => {
     if (!isSeries) return [];
-    const primarySrv: 'server1' | 'server2' = modalServer;
-    const otherSrv: 'server1' | 'server2' = modalServer === 'server1' ? 'server2' : 'server1';
+    const primarySrv: 'server1' | 'server2' | 'server3' = modalServer;
+    const otherSrv: 'server1' | 'server2' | 'server3' = modalServer === 'server1' ? 'server2' : 'server1';
     const targetQ = activeQualityId;
     const targetQNum = parseInt(targetQ, 10) || 720;
 
@@ -1189,18 +1305,31 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
       const s1Map = getItemServerQualityMap(ep, 'server1', isFocused ? server1Meta : null);
       const s2Map = getItemServerQualityMap(ep, 'server2', isFocused ? server2Meta : null);
+      const s3Map = getItemServerQualityMap(ep, 'server3', isFocused ? server3Meta : null);
       const epUrls = extractUrlsFromItem(ep, false);
 
-      const langSupport = getServerLanguageSupport(ep, selectedLanguage);
-      const forceOtherForLang = langSupport.shouldPreferOtherServer(primarySrv);
+      const getMapFor = (srv: 'server1' | 'server2' | 'server3') =>
+        srv === 'server3' ? s3Map : srv === 'server2' ? s2Map : s1Map;
+      const getSingleFor = (srv: 'server1' | 'server2' | 'server3') =>
+        srv === 'server3' ? epUrls.tertiaryUrl : srv === 'server2' ? epUrls.secondaryUrl : epUrls.primaryUrl;
 
-      const effectiveFirstSrv: 'server1' | 'server2' = forceOtherForLang ? otherSrv : primarySrv;
-      const effectiveSecondSrv: 'server1' | 'server2' = forceOtherForLang ? primarySrv : otherSrv;
+      let effectiveOrder: Array<'server1' | 'server2' | 'server3'>;
+      if (primarySrv === 'server3') {
+        effectiveOrder = ['server3', 'server1', 'server2'];
+      } else {
+        const langSupport = getServerLanguageSupport(ep, selectedLanguage);
+        const forceOtherForLang = langSupport.shouldPreferOtherServer(primarySrv);
+        effectiveOrder = forceOtherForLang
+          ? [otherSrv, primarySrv, 'server3']
+          : [primarySrv, otherSrv, 'server3'];
+      }
 
-      const firstMap = effectiveFirstSrv === 'server1' ? s1Map : s2Map;
-      const secondMap = effectiveSecondSrv === 'server1' ? s1Map : s2Map;
-      const firstSingleUrl = effectiveFirstSrv === 'server1' ? epUrls.primaryUrl : epUrls.secondaryUrl;
-      const secondSingleUrl = effectiveSecondSrv === 'server1' ? epUrls.primaryUrl : epUrls.secondaryUrl;
+      const firstMap = getMapFor(effectiveOrder[0]);
+      const secondMap = getMapFor(effectiveOrder[1]);
+      const thirdMap = getMapFor(effectiveOrder[2]);
+      const firstSingleUrl = getSingleFor(effectiveOrder[0]);
+      const secondSingleUrl = getSingleFor(effectiveOrder[1]);
+      const thirdSingleUrl = getSingleFor(effectiveOrder[2]);
 
       const findExactInMap = (
         m: Map<string, { id: string; url: string; sizeMb: number; bandwidth: number; label: string; badge: string }>,
@@ -1220,98 +1349,78 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           (a, b) => (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0)
         );
         if (list.length === 0) return null;
-        // Prefer highest quality below targetQNum (e.g. if 1080p requested, pick 720p -> 480p -> 360p)
         const lowerList = list.filter((item) => (parseInt(item.id, 10) || 0) < targetQNum);
         return lowerList[0] || list[0];
       };
 
-      // Case 1: Exact quality match on the effective preferred server (either user's server, or auto-switched server for language!)
-      const exactFirst = findExactInMap(firstMap, targetQ);
-      if (exactFirst) {
-        const exactBackup = findExactInMap(secondMap, targetQ) || pickBestFallbackFromMap(secondMap);
-        const isAutoSwitched = effectiveFirstSrv !== primarySrv;
-        return {
-          epIndex: idx,
-          epNumber: epNum,
-          epTitle,
-          epId,
-          requestedQuality: targetQ,
-          resolvedQuality: exactFirst.id,
-          resolvedServer: effectiveFirstSrv,
-          language: selectedLanguage,
-          targetUrl: exactFirst.url,
-          backupUrl:
-            exactBackup?.url && exactBackup.url !== exactFirst.url ? exactBackup.url : undefined,
-          sizeMb: exactFirst.sizeMb,
-          status: isAutoSwitched ? 'cross_server_exact' : 'exact',
-          isFallbackQuality: false,
-          isCrossServerAuto: isAutoSwitched,
-        };
+      // Case 1: Exact quality match in ordered server priority
+      for (let sIdx = 0; sIdx < effectiveOrder.length; sIdx++) {
+        const srv = effectiveOrder[sIdx];
+        const m = getMapFor(srv);
+        const exact = findExactInMap(m, targetQ);
+        if (exact) {
+          const otherSrvId = effectiveOrder.find((o) => o !== srv && (findExactInMap(getMapFor(o), targetQ) || pickBestFallbackFromMap(getMapFor(o))));
+          const backupObj = otherSrvId ? (findExactInMap(getMapFor(otherSrvId), targetQ) || pickBestFallbackFromMap(getMapFor(otherSrvId))) : null;
+          const isAutoSwitched = srv !== primarySrv;
+          return {
+            epIndex: idx,
+            epNumber: epNum,
+            epTitle,
+            epId,
+            requestedQuality: targetQ,
+            resolvedQuality: exact.id,
+            resolvedServer: srv,
+            language: selectedLanguage,
+            targetUrl: exact.url,
+            backupUrl: backupObj?.url && backupObj.url !== exact.url ? backupObj.url : undefined,
+            sizeMb: exact.sizeMb,
+            status: isAutoSwitched ? 'cross_server_exact' : 'exact',
+            isFallbackQuality: false,
+            isCrossServerAuto: isAutoSwitched,
+          };
+        }
       }
 
-      // Case 2: Exact quality match is on the second server
-      const exactSecond = findExactInMap(secondMap, targetQ);
-      if (exactSecond) {
-        const fallbackFirst = pickBestFallbackFromMap(firstMap);
-        const isAutoSwitched = effectiveSecondSrv !== primarySrv;
+      // Case 2: Best fallback quality across ordered servers
+      const fallbackCandidates = effectiveOrder
+        .map((srv) => ({ srv, item: pickBestFallbackFromMap(getMapFor(srv)) }))
+        .filter((x): x is { srv: 'server1' | 'server2' | 'server3'; item: NonNullable<ReturnType<typeof pickBestFallbackFromMap>> } => Boolean(x.item));
+
+      if (fallbackCandidates.length > 0) {
+        const chosen = fallbackCandidates[0];
+        const backupCandidate = fallbackCandidates[1];
         return {
           epIndex: idx,
           epNumber: epNum,
           epTitle,
           epId,
           requestedQuality: targetQ,
-          resolvedQuality: exactSecond.id,
-          resolvedServer: effectiveSecondSrv,
+          resolvedQuality: chosen.item.id,
+          resolvedServer: chosen.srv,
           language: selectedLanguage,
-          targetUrl: exactSecond.url,
+          targetUrl: chosen.item.url,
           backupUrl:
-            fallbackFirst?.url && fallbackFirst.url !== exactSecond.url
-              ? fallbackFirst.url
+            backupCandidate?.item.url && backupCandidate.item.url !== chosen.item.url
+              ? backupCandidate.item.url
               : undefined,
-          sizeMb: exactSecond.sizeMb,
-          status: isAutoSwitched ? 'cross_server_exact' : 'exact',
-          isFallbackQuality: false,
-          isCrossServerAuto: isAutoSwitched,
-        };
-      }
-
-      // Case 3: Neither Server 1 nor Server 2 has `targetQ` in explicit quality maps.
-      const fallbackFirst = pickBestFallbackFromMap(firstMap);
-      const fallbackSecond = pickBestFallbackFromMap(secondMap);
-
-      if (fallbackFirst || fallbackSecond) {
-        const chosen = fallbackFirst || fallbackSecond!;
-        const chosenServer: 'server1' | 'server2' = fallbackFirst ? effectiveFirstSrv : effectiveSecondSrv;
-        const backupCandidate = fallbackFirst ? fallbackSecond : fallbackFirst;
-
-        return {
-          epIndex: idx,
-          epNumber: epNum,
-          epTitle,
-          epId,
-          requestedQuality: targetQ,
-          resolvedQuality: chosen.id,
-          resolvedServer: chosenServer,
-          language: selectedLanguage,
-          targetUrl: chosen.url,
-          backupUrl:
-            backupCandidate?.url && backupCandidate.url !== chosen.url
-              ? backupCandidate.url
-              : undefined,
-          sizeMb: chosen.sizeMb,
+          sizeMb: chosen.item.sizeMb,
           status: 'fallback_quality',
-          isFallbackQuality: chosen.id.toLowerCase() !== targetQ.toLowerCase(),
-          isCrossServerAuto: chosenServer !== primarySrv,
+          isFallbackQuality: chosen.item.id.toLowerCase() !== targetQ.toLowerCase(),
+          isCrossServerAuto: chosen.srv !== primarySrv,
         };
       }
 
-      // Case 4: Legacy single-URL episode (no explicit qualityLinks map configured)
-      if (firstSingleUrl || secondSingleUrl) {
-        const useFirst = Boolean(firstSingleUrl);
-        const resolvedSrv = useFirst ? effectiveFirstSrv : effectiveSecondSrv;
-        const tUrl = useFirst ? firstSingleUrl : secondSingleUrl;
-        const bUrl = useFirst ? secondSingleUrl : firstSingleUrl;
-        const isAutoSwitched = resolvedSrv !== primarySrv;
+      // Case 3: Legacy single-URL episode
+      const singlePairs: Array<{ srv: 'server1' | 'server2' | 'server3'; url: string }> = [
+        { srv: effectiveOrder[0], url: firstSingleUrl },
+        { srv: effectiveOrder[1], url: secondSingleUrl },
+        { srv: effectiveOrder[2], url: thirdSingleUrl },
+      ].filter((p) => Boolean(p.url));
+
+      if (singlePairs.length > 0) {
+        const primaryPair = singlePairs[0];
+        const backupPair = singlePairs[1];
+        const isAutoSwitched = primaryPair.srv !== primarySrv;
         return {
           epIndex: idx,
           epNumber: epNum,
@@ -1319,10 +1428,10 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           epId,
           requestedQuality: targetQ,
           resolvedQuality: targetQ,
-          resolvedServer: resolvedSrv,
+          resolvedServer: primaryPair.srv,
           language: selectedLanguage,
-          targetUrl: tUrl,
-          backupUrl: bUrl && bUrl !== tUrl ? bUrl : undefined,
+          targetUrl: primaryPair.url,
+          backupUrl: backupPair && backupPair.url !== primaryPair.url ? backupPair.url : undefined,
           sizeMb: 0,
           status: isAutoSwitched ? 'cross_server_exact' : 'exact',
           isFallbackQuality: false,
@@ -1355,6 +1464,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     focusedEpisodeIdx,
     server1Meta,
     server2Meta,
+    server3Meta,
     availableLanguages,
   ]);
 
@@ -1391,47 +1501,63 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     }
   };
 
-  // Check if content or episodes support HLS mode
+  // Check if content or episodes support HLS / Server 3 downloading
   const isHlsMode = useMemo(() => {
     if (content.isSmartHls) return true;
-    const isHlsLink = (u?: string) =>
+    const isDownloadableLink = (u?: string) =>
       Boolean(
         u &&
           (u.includes('.m3u8') ||
             u.includes('m3u8') ||
+            u.includes('.mp4') ||
+            u.includes('.mkv') ||
             SmartStreamService.isExtractableSource(u, true))
       );
-    if (isHlsLink(primaryUrl) || isHlsLink(secondaryUrl)) return true;
-    if (isHlsLink(content.videoUrl) || isHlsLink(content.secondaryVideoUrl)) return true;
+    if (isDownloadableLink(primaryUrl) || isDownloadableLink(secondaryUrl) || isDownloadableLink(tertiaryUrl)) return true;
+    if (
+      isDownloadableLink(content.videoUrl) ||
+      isDownloadableLink(content.secondaryVideoUrl) ||
+      isDownloadableLink(content.tertiaryVideoUrl) ||
+      isDownloadableLink(content.tertiaryServerUrl)
+    )
+      return true;
     if (
       currentEpisodes.some((ep) => {
         const urls = extractUrlsFromItem(ep, false);
-        return ep.isSmartHls || isHlsLink(urls.primaryUrl) || isHlsLink(urls.secondaryUrl);
+        return (
+          ep.isSmartHls ||
+          isDownloadableLink(urls.primaryUrl) ||
+          isDownloadableLink(urls.secondaryUrl) ||
+          isDownloadableLink(urls.tertiaryUrl)
+        );
       })
     ) {
       return true;
     }
     return false;
-  }, [content, currentEpisodes, primaryUrl, secondaryUrl]);
+  }, [content, currentEpisodes, primaryUrl, secondaryUrl, tertiaryUrl]);
 
   // Movie download URL resolver (with automatic cross-server quality & language routing!)
   const resolveMoviePlan = (
     activeQuality: string,
-    userServer: 'server1' | 'server2',
+    userServer: 'server1' | 'server2' | 'server3',
     targetLang: string
-  ): { targetVideoUrl: string; backupVideoUrl?: string; resolvedServer: 'server1' | 'server2' } => {
-    const otherServer: 'server1' | 'server2' = userServer === 'server1' ? 'server2' : 'server1';
-    const langSupport = getServerLanguageSupport(null, targetLang);
-    const preferOtherForLang = langSupport.shouldPreferOtherServer(userServer);
-
-    const firstServer: 'server1' | 'server2' = preferOtherForLang ? otherServer : userServer;
-    const secondServer: 'server1' | 'server2' = preferOtherForLang ? userServer : otherServer;
-
-    const firstMap = getItemServerQualityMap(null, firstServer, firstServer === 'server2' ? server2Meta : server1Meta);
-    const secondMap = getItemServerQualityMap(null, secondServer, secondServer === 'server2' ? server2Meta : server1Meta);
+  ): { targetVideoUrl: string; backupVideoUrl?: string; resolvedServer: 'server1' | 'server2' | 'server3' } => {
     const urls = extractUrlsFromItem(null, true);
-    const firstSingle = firstServer === 'server2' ? urls.secondaryUrl : urls.primaryUrl;
-    const secondSingle = secondServer === 'server2' ? urls.secondaryUrl : urls.primaryUrl;
+    let orderedServers: Array<'server1' | 'server2' | 'server3'>;
+    if (userServer === 'server3') {
+      orderedServers = ['server3', 'server1', 'server2'];
+    } else {
+      const otherServer: 'server1' | 'server2' = userServer === 'server1' ? 'server2' : 'server1';
+      const langSupport = getServerLanguageSupport(null, targetLang);
+      const preferOtherForLang = langSupport.shouldPreferOtherServer(userServer);
+      orderedServers = preferOtherForLang ? [otherServer, userServer, 'server3'] : [userServer, otherServer, 'server3'];
+    }
+
+    const getMap = (s: 'server1' | 'server2' | 'server3') =>
+      getItemServerQualityMap(null, s, s === 'server3' ? server3Meta : s === 'server2' ? server2Meta : server1Meta);
+    const getSingle = (s: 'server1' | 'server2' | 'server3') =>
+      s === 'server3' ? urls.tertiaryUrl : s === 'server2' ? urls.secondaryUrl : urls.primaryUrl;
 
     const findExact = (m: Map<string, { url: string }>, q: string) => {
       for (const [k, v] of m.entries()) {
@@ -1440,44 +1566,40 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       return '';
     };
 
-    const exactFirst = findExact(firstMap, activeQuality);
-    const exactSecond = findExact(secondMap, activeQuality);
-
-    // 1. Preferred server (accounting for language) has the requested quality
-    if (exactFirst) {
-      const backup = exactSecond || Array.from(secondMap.values())[0]?.url || secondSingle;
-      return {
-        targetVideoUrl: exactFirst,
-        backupVideoUrl: backup && backup !== exactFirst ? backup : undefined,
-        resolvedServer: firstServer,
-      };
+    for (const srv of orderedServers) {
+      const exact = findExact(getMap(srv), activeQuality);
+      if (exact) {
+        const backup = orderedServers
+          .filter((o) => o !== srv)
+          .map((o) => findExact(getMap(o), activeQuality) || Array.from(getMap(o).values())[0]?.url || getSingle(o))
+          .find((u) => Boolean(u && u !== exact));
+        return {
+          targetVideoUrl: exact,
+          backupVideoUrl: backup,
+          resolvedServer: srv,
+        };
+      }
     }
 
-    // 2. Second server has the requested quality (e.g. user selected 1080p which only exists on Server 2)
-    if (exactSecond) {
-      const backup = Array.from(firstMap.values())[0]?.url || firstSingle;
-      return {
-        targetVideoUrl: exactSecond,
-        backupVideoUrl: backup && backup !== exactSecond ? backup : undefined,
-        resolvedServer: secondServer,
-      };
-    }
-
-    // 3. Fallback to first available entry or single URL on preferred server
-    const fallbackFirst = Array.from(firstMap.values())[0]?.url || firstSingle;
-    const fallbackSecond = Array.from(secondMap.values())[0]?.url || secondSingle;
-    if (fallbackFirst) {
-      return {
-        targetVideoUrl: fallbackFirst,
-        backupVideoUrl: fallbackSecond && fallbackSecond !== fallbackFirst ? fallbackSecond : undefined,
-        resolvedServer: firstServer,
-      };
+    for (const srv of orderedServers) {
+      const fallback = Array.from(getMap(srv).values())[0]?.url || getSingle(srv);
+      if (fallback) {
+        const backup = orderedServers
+          .filter((o) => o !== srv)
+          .map((o) => Array.from(getMap(o).values())[0]?.url || getSingle(o))
+          .find((u) => Boolean(u && u !== fallback));
+        return {
+          targetVideoUrl: fallback,
+          backupVideoUrl: backup,
+          resolvedServer: srv,
+        };
+      }
     }
 
     return {
-      targetVideoUrl: fallbackSecond || '',
+      targetVideoUrl: '',
       backupVideoUrl: undefined,
-      resolvedServer: secondServer,
+      resolvedServer: userServer,
     };
   };
 
@@ -1625,7 +1747,9 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     // 2. Fallback to live probed HLS duration or active video player stream duration
     if (parsedSec <= 10) {
       const liveProbedDur =
-        (modalServer === 'server2'
+        (modalServer === 'server3'
+          ? Number(server3Meta?.duration || server1Meta?.duration || server2Meta?.duration)
+          : modalServer === 'server2'
           ? Number(server2Meta?.duration || server1Meta?.duration)
           : Number(server1Meta?.duration || server2Meta?.duration)) || 0;
 
@@ -1719,12 +1843,14 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
               <div className="flex flex-wrap items-center gap-2 mt-2">
                 <span
                   className={`px-2.5 py-1 rounded-lg text-xs font-extrabold border ${
-                    modalServer === 'server2'
+                    modalServer === 'server3'
+                      ? 'bg-gradient-to-r from-[#E11D48] to-[#9F1239] text-white border-rose-400/50'
+                      : modalServer === 'server2'
                       ? 'bg-gradient-to-r from-[#F59E0B] to-[#D97706] text-black border-amber-300/60'
                       : 'bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] text-white border-purple-400/50'
                   }`}
                 >
-                  {modalServer === 'server2' ? 'Server 2' : 'Server 1'}
+                  {modalServer === 'server3' ? 'Server 3' : modalServer === 'server2' ? 'Server 2' : 'Server 1'}
                 </span>
                 <span className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-500/30 text-xs font-bold text-sky-300">
                   {selectedLanguage}
@@ -1769,7 +1895,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                         S{(selectedSeasonIdx + 1).toString().padStart(2, '0')} E{plan.epNumber.toString().padStart(2, '0')} • {plan.epTitle}
                       </div>
                       <div className="text-xs text-zinc-400 mt-0.5">
-                        {plan.resolvedQuality.toUpperCase()} • {plan.language} • {plan.resolvedServer === 'server2' ? 'Server 2' : 'Server 1'}
+                        {plan.resolvedQuality.toUpperCase()} • {plan.language} • {plan.resolvedServer === 'server3' ? 'Server 3' : plan.resolvedServer === 'server2' ? 'Server 2' : 'Server 1'}
                       </div>
                     </div>
                     <button
@@ -1895,19 +2021,21 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                   </button>
                 )}
 
-                {/* 3. Server Selector Box (Dedicated Purple for Server 1, Gold for Server 2) */}
+                {/* 3. Server Selector Box (Purple for Server 1, Gold for Server 2, Crimson for Server 3) */}
                 <button
                   type="button"
                   onClick={() =>
                     setOpenResourceDropdown((prev) => (prev === 'server' ? null : 'server'))
                   }
                   className={`shrink-0 inline-flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border text-xs font-extrabold transition cursor-pointer ${
-                    modalServer === 'server2'
+                    modalServer === 'server3'
+                      ? 'bg-gradient-to-r from-[#E11D48] to-[#9F1239] border-rose-400/50 text-white shadow-sm shadow-rose-950/40'
+                      : modalServer === 'server2'
                       ? 'bg-gradient-to-r from-[#F59E0B] to-[#D97706] border-amber-300/60 text-black shadow-sm shadow-amber-950/40'
                       : 'bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] border-purple-400/50 text-white shadow-sm shadow-purple-950/40'
                   }`}
                 >
-                  <span>{modalServer === 'server2' ? 'Server 2' : 'Server 1'}</span>
+                  <span>{modalServer === 'server3' ? 'Server 3' : modalServer === 'server2' ? 'Server 2' : 'Server 1'}</span>
                   <ChevronDown
                     className={`w-3.5 h-3.5 transition-transform ${
                       modalServer === 'server2' ? 'text-black' : 'text-white'
@@ -2002,6 +2130,23 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                     }`}
                   >
                     Server 2
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!hasServer3}
+                    onClick={() => {
+                      setModalServer('server3');
+                      setOpenResourceDropdown(null);
+                    }}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border transition cursor-pointer ${
+                      modalServer === 'server3'
+                        ? 'bg-gradient-to-r from-[#E11D48] to-[#9F1239] border-rose-300 text-white ring-2 ring-rose-400/50 shadow-md'
+                        : hasServer3
+                        ? 'bg-gradient-to-r from-[#E11D48]/25 to-[#9F1239]/25 border-rose-500/40 text-rose-200 hover:brightness-110'
+                        : 'bg-[#14151b] border-white/5 text-zinc-600 cursor-not-allowed'
+                    }`}
+                  >
+                    Server 3
                   </button>
                 </div>
               )}
