@@ -296,6 +296,24 @@ class MaxPlayNativeBridge(
                                         put("engine", "KOTLIN_SNIFFER_DIRECT")
                                         put("sourceUrl", cleanSource)
                                         put("referer", ref)
+                                        if (qualityHint.isNotBlank()) {
+                                            val sizeMb = optInt("sizeMb", 950)
+                                            val sizeBytes = optLong("sizeBytes", 0L)
+                                            val cdnUrl = optString("cdnUrl", m3u8Url)
+                                            val mimeType = optString("mimeType", "video/mp4")
+                                            put("qualities", org.json.JSONArray().put(qualityHint))
+                                            put("qualityLinks", JSONObject().put(qualityHint, cleanSource))
+                                            put("downloadQualities", org.json.JSONArray().put(JSONObject().apply {
+                                                put("id", qualityHint)
+                                                put("label", "$qualityHint ${if (qualityHint.contains("1080")) "Full HD" else if (qualityHint.contains("720")) "HD" else "Standard"}")
+                                                put("sizeMb", sizeMb)
+                                                put("sizeBytes", sizeBytes)
+                                                put("url", cleanSource)
+                                                put("resolvedUrl", m3u8Url)
+                                                put("cdnUrl", cdnUrl)
+                                                put("mimeType", mimeType)
+                                            }))
+                                        }
                                     }
                                     finishWithResult(enrichedDirect)
                                     return@execute

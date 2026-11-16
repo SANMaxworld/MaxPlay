@@ -6668,15 +6668,26 @@
           });
 
           if (nativeData && nativeData.ok && (nativeData.m3u8Url || nativeData.directUrl)) {
+            const rawPrimary = nativeData.m3u8Url || nativeData.directUrl;
+            const rawDirect = nativeData.directUrl || rawPrimary;
+            const isDirectStreamtape = Boolean(
+              nativeData.isDirectVideo ||
+              (nativeData.provider && String(nativeData.provider).toUpperCase() === 'STREAMTAPE') ||
+              String(rawPrimary).toLowerCase().includes('tapecontent.net') ||
+              String(rawPrimary).toLowerCase().includes('/get_video')
+            );
+            const wrappedPlayUrl = isDirectStreamtape && !String(rawPrimary).includes('/api/stream-proxy')
+              ? `/api/stream-proxy?url=${encodeURIComponent(rawPrimary)}${rawDirect && rawDirect !== rawPrimary ? `&fallbackUrl=${encodeURIComponent(rawDirect)}` : ''}&referer=${encodeURIComponent(nativeData.referer || 'https://streamtape.com/')}`
+              : rawPrimary;
             return {
               ok: true,
               engine: nativeData.engine || 'KOTLIN_NATIVE',
               provider: nativeData.provider || '',
-              isDirectVideo: Boolean(nativeData.isDirectVideo),
+              isDirectVideo: isDirectStreamtape,
               mimeType: nativeData.mimeType || '',
-              cdnUrl: nativeData.cdnUrl || '',
+              cdnUrl: nativeData.cdnUrl || rawPrimary,
               sourceUrl: cleanUrl,
-              m3u8Url: nativeData.m3u8Url || nativeData.directUrl,
+              m3u8Url: wrappedPlayUrl,
               qualities: Array.isArray(nativeData.qualities) ? nativeData.qualities : (forcedQuality ? [forcedQuality] : []),
               qualityLinks: nativeData.qualityLinks || (forcedQuality ? { [forcedQuality]: cleanUrl } : {}),
               downloadQualities: Array.isArray(nativeData.downloadQualities) ? nativeData.downloadQualities.map(dq => ({
@@ -7319,6 +7330,15 @@
             `;}).join('')
             : '';
 
+          window._adminPreviewRegistry = window._adminPreviewRegistry || {};
+          const s2MovieSource = s2BoxMap['1080p'] || s2BoxMap['720p'] || s2BoxMap['480p'] || s2BoxMap['360p'] || rawUrl;
+          const s2MovieQuality = s2BoxMap['1080p'] ? '1080p' : s2BoxMap['720p'] ? '720p' : s2BoxMap['480p'] ? '480p' : s2BoxMap['360p'] ? '360p' : '';
+          window._adminPreviewRegistry['s2-movie-preview-box'] = {
+            streamUrl: data.m3u8Url,
+            sourceUrl: s2MovieSource,
+            quality: s2MovieQuality
+          };
+
           statusEl.innerHTML = `
             <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); border-radius:10px; padding:12px; margin-top:6px;">
               <div style="color:#FBBF24; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
@@ -7338,13 +7358,14 @@
               ` : ''}
               <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(245,158,11,0.25); display:flex; flex-direction:column; gap:6px;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <button type="button" class="btn-secondary" style="font-size:11px; padding:4px 10px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:5px;" onclick="window.toggleAdminStreamPreview('s2-movie-preview-box', '${data.m3u8Url}')">
+                  <button type="button" class="btn-secondary" style="font-size:11px; padding:4px 10px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:5px;" onclick="window.toggleAdminStreamPreview('s2-movie-preview-box')">
                     <i class="fa-solid fa-play"></i> Test Play S2 Stream
                   </button>
                   <span style="font-size:10px; color:#aaa;">Inbuilt HLS Proxy • Zero CORS</span>
                 </div>
                 <div id="s2-movie-preview-box" style="display:none; margin-top:6px;">
                   <video controls style="width:100%; max-height:240px; border-radius:8px; background:#000;" playsinline></video>
+                  <div class="admin-preview-status" style="font-size:11px; color:#aaa; margin-top:5px;"></div>
                 </div>
               </div>
             </div>
@@ -7451,6 +7472,16 @@
             `;}).join('')
             : '';
 
+          window._adminPreviewRegistry = window._adminPreviewRegistry || {};
+          const s2EpSource = s2BoxMap['1080p'] || s2BoxMap['720p'] || s2BoxMap['480p'] || s2BoxMap['360p'] || rawUrl;
+          const s2EpQuality = s2BoxMap['1080p'] ? '1080p' : s2BoxMap['720p'] ? '720p' : s2BoxMap['480p'] ? '480p' : s2BoxMap['360p'] ? '360p' : '';
+          const s2EpBoxId = `s2-ep-preview-box-${epIdx}`;
+          window._adminPreviewRegistry[s2EpBoxId] = {
+            streamUrl: data.m3u8Url,
+            sourceUrl: s2EpSource,
+            quality: s2EpQuality
+          };
+
           if (statusEl) {
             statusEl.innerHTML = `
               <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); border-radius:8px; padding:8px 10px; margin-top:6px;">
@@ -7468,11 +7499,12 @@
                   </div>
                 ` : ''}
                 <div style="padding-top:6px; border-top:1px solid rgba(245,158,11,0.25);">
-                  <button type="button" class="btn-secondary" style="font-size:10px; padding:3px 8px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:4px;" onclick="window.toggleAdminStreamPreview('s2-ep-preview-box-${epIdx}', '${data.m3u8Url}')">
+                  <button type="button" class="btn-secondary" style="font-size:10px; padding:3px 8px; height:auto; color:#FBBF24; border-color:rgba(245,158,11,0.5); display:inline-flex; align-items:center; gap:4px;" onclick="window.toggleAdminStreamPreview('${s2EpBoxId}')">
                     <i class="fa-solid fa-play"></i> Test Play S2 Stream
                   </button>
-                  <div id="s2-ep-preview-box-${epIdx}" style="display:none; margin-top:6px;">
+                  <div id="${s2EpBoxId}" style="display:none; margin-top:6px;">
                     <video controls style="width:100%; max-height:200px; border-radius:6px; background:#000;" playsinline></video>
+                    <div class="admin-preview-status" style="font-size:10px; color:#aaa; margin-top:4px;"></div>
                   </div>
                 </div>
               </div>
@@ -7559,7 +7591,15 @@
             `;}).join('')
             : '';
 
-          const safePreviewUrl = String(data.m3u8Url).replace(/'/g, "\\'");
+          window._adminPreviewRegistry = window._adminPreviewRegistry || {};
+          const s3MovieSource = s3BoxMap['1080p'] || s3BoxMap['720p'] || s3BoxMap['480p'] || s3BoxMap['360p'] || rawUrl;
+          const s3MovieQuality = s3BoxMap['1080p'] ? '1080p' : s3BoxMap['720p'] ? '720p' : s3BoxMap['480p'] ? '480p' : s3BoxMap['360p'] ? '360p' : '';
+          window._adminPreviewRegistry['s3-movie-preview-box'] = {
+            streamUrl: data.m3u8Url,
+            sourceUrl: s3MovieSource,
+            quality: s3MovieQuality
+          };
+
           statusEl.innerHTML = `
             <div style="background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.35); border-radius:10px; padding:12px; margin-top:6px;">
               <div style="color:#FB7185; font-weight:800; font-size:12px; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
@@ -7579,13 +7619,14 @@
               ` : ''}
               <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(244,63,94,0.25); display:flex; flex-direction:column; gap:6px;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <button type="button" class="btn-secondary" style="font-size:11px; padding:4px 10px; height:auto; color:#FB7185; border-color:rgba(244,63,94,0.5); display:inline-flex; align-items:center; gap:5px;" onclick="window.toggleAdminStreamPreview('s3-movie-preview-box', '${safePreviewUrl}')">
+                  <button type="button" class="btn-secondary" style="font-size:11px; padding:4px 10px; height:auto; color:#FB7185; border-color:rgba(244,63,94,0.5); display:inline-flex; align-items:center; gap:5px;" onclick="window.toggleAdminStreamPreview('s3-movie-preview-box')">
                     <i class="fa-solid fa-play"></i> Test Play S3 Stream
                   </button>
                   <span style="font-size:10px; color:#aaa;">Direct Range Stream Proxy • IP-Bound Ready</span>
                 </div>
                 <div id="s3-movie-preview-box" style="display:none; margin-top:6px;">
                   <video controls style="width:100%; max-height:240px; border-radius:8px; background:#000;" playsinline></video>
+                  <div class="admin-preview-status" style="font-size:11px; color:#aaa; margin-top:5px;"></div>
                 </div>
               </div>
             </div>
@@ -7685,7 +7726,16 @@
             `;}).join('')
             : '';
 
-          const safePreviewUrl = String(data.m3u8Url).replace(/'/g, "\\'");
+          window._adminPreviewRegistry = window._adminPreviewRegistry || {};
+          const s3EpSource = s3BoxMap['1080p'] || s3BoxMap['720p'] || s3BoxMap['480p'] || s3BoxMap['360p'] || rawUrl;
+          const s3EpQuality = s3BoxMap['1080p'] ? '1080p' : s3BoxMap['720p'] ? '720p' : s3BoxMap['480p'] ? '480p' : s3BoxMap['360p'] ? '360p' : '';
+          const s3EpBoxId = `s3-ep-preview-box-${epIdx}`;
+          window._adminPreviewRegistry[s3EpBoxId] = {
+            streamUrl: data.m3u8Url,
+            sourceUrl: s3EpSource,
+            quality: s3EpQuality
+          };
+
           if (statusEl) {
             statusEl.innerHTML = `
               <div style="background:rgba(244,63,94,0.1); border:1px solid rgba(244,63,94,0.35); border-radius:8px; padding:8px 10px; margin-top:6px;">
@@ -7703,11 +7753,12 @@
                   </div>
                 ` : ''}
                 <div style="padding-top:6px; border-top:1px solid rgba(244,63,94,0.25);">
-                  <button type="button" class="btn-secondary" style="font-size:10px; padding:3px 8px; height:auto; color:#FB7185; border-color:rgba(244,63,94,0.5); display:inline-flex; align-items:center; gap:4px;" onclick="window.toggleAdminStreamPreview('s3-ep-preview-box-${epIdx}', '${safePreviewUrl}')">
+                  <button type="button" class="btn-secondary" style="font-size:10px; padding:3px 8px; height:auto; color:#FB7185; border-color:rgba(244,63,94,0.5); display:inline-flex; align-items:center; gap:4px;" onclick="window.toggleAdminStreamPreview('${s3EpBoxId}')">
                     <i class="fa-solid fa-play"></i> Test Play S3 Stream
                   </button>
-                  <div id="s3-ep-preview-box-${epIdx}" style="display:none; margin-top:6px;">
+                  <div id="${s3EpBoxId}" style="display:none; margin-top:6px;">
                     <video controls style="width:100%; max-height:200px; border-radius:6px; background:#000;" playsinline></video>
+                    <div class="admin-preview-status" style="font-size:10px; color:#aaa; margin-top:4px;"></div>
                   </div>
                 </div>
               </div>
@@ -7918,52 +7969,124 @@
       showToast('Server 3 links cleared', 'info');
     };
 
-    window.toggleAdminStreamPreview = function(containerId, streamUrl) {
+    window.toggleAdminStreamPreview = function(containerId, explicitStreamUrl) {
       const container = document.getElementById(containerId);
       if (!container) return;
+      const vid = container.querySelector('video');
+      const statusLine = container.querySelector('.admin-preview-status');
+
       if (container.style.display === 'block') {
         container.style.display = 'none';
-        const vid = container.querySelector('video');
         if (vid) {
+          vid.onplaying = null;
+          vid.oncanplay = null;
+          vid.onerror = null;
           vid.pause();
           vid.removeAttribute('src');
           vid.load();
         }
+        if (statusLine) statusLine.innerHTML = '';
         if (window._adminPreviewHlsInstances && window._adminPreviewHlsInstances[containerId]) {
           window._adminPreviewHlsInstances[containerId].destroy();
           delete window._adminPreviewHlsInstances[containerId];
         }
         return;
       }
+
+      const regEntry = (window._adminPreviewRegistry && window._adminPreviewRegistry[containerId]) || {};
+      let streamUrl = explicitStreamUrl || regEntry.streamUrl || '';
+      if (!streamUrl) {
+        if (statusLine) statusLine.innerHTML = '<span style="color:#F87171;">No playable preview URL found. Click Verify first.</span>';
+        container.style.display = 'block';
+        return;
+      }
+
       container.style.display = 'block';
-      const vid = container.querySelector('video');
       if (!vid) return;
 
-      if (!window._adminPreviewHlsInstances) window._adminPreviewHlsInstances = {};
-      if (window._adminPreviewHlsInstances[containerId]) {
-        window._adminPreviewHlsInstances[containerId].destroy();
-        delete window._adminPreviewHlsInstances[containerId];
-      }
+      const setPreviewStatus = (html) => {
+        if (statusLine) statusLine.innerHTML = html;
+      };
 
-      const lowerUrl = (streamUrl || '').toLowerCase();
-      const isDirectNativeVideo =
-        lowerUrl.includes('/api/stream-proxy') ||
-        lowerUrl.includes('/get_video') ||
-        lowerUrl.includes('tapecontent.net') ||
-        (!lowerUrl.includes('.m3u8') && !lowerUrl.includes('/proxy/m3u8'));
+      const startPlaybackOnVideo = (urlToPlay, allowAutoRefresh) => {
+        if (!window._adminPreviewHlsInstances) window._adminPreviewHlsInstances = {};
+        if (window._adminPreviewHlsInstances[containerId]) {
+          window._adminPreviewHlsInstances[containerId].destroy();
+          delete window._adminPreviewHlsInstances[containerId];
+        }
 
-      if (!isDirectNativeVideo && window.Hls && window.Hls.isSupported()) {
-        const hls = new window.Hls();
-        window._adminPreviewHlsInstances[containerId] = hls;
-        hls.loadSource(streamUrl);
-        hls.attachMedia(vid);
-        hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-          vid.play().catch(e => console.log('Autoplay blocked:', e));
-        });
-      } else {
-        vid.src = streamUrl;
-        vid.play().catch(e => console.log('Autoplay blocked:', e));
-      }
+        vid.pause();
+        vid.muted = false;
+        vid.preload = 'auto';
+        vid.playsInline = true;
+        setPreviewStatus('<span style="color:#38BDF8;"><i class="fa-solid fa-spinner fa-spin"></i> Loading stream preview...</span>');
+
+        const lowerUrl = (urlToPlay || '').toLowerCase();
+        const isDirectNativeVideo =
+          lowerUrl.includes('/api/stream-proxy') ||
+          lowerUrl.includes('/get_video') ||
+          lowerUrl.includes('tapecontent.net') ||
+          (!lowerUrl.includes('.m3u8') && !lowerUrl.includes('/proxy/m3u8'));
+
+        vid.onplaying = () => {
+          const resLabel = vid.videoWidth && vid.videoHeight ? ` (${vid.videoWidth}×${vid.videoHeight})` : '';
+          setPreviewStatus(`<span style="color:#34D399; font-weight:700;"><i class="fa-solid fa-circle-play"></i> Playing live stream${resLabel}${vid.muted ? ' — Muted (tap speaker icon to unmute)' : ''}</span>`);
+        };
+        vid.oncanplay = () => {
+          if (vid.paused) {
+            attemptSafePlay();
+          }
+        };
+        vid.onerror = async () => {
+          if (allowAutoRefresh && regEntry.sourceUrl && typeof window.probeSingleQualityBoxSmart === 'function') {
+            setPreviewStatus('<span style="color:#FBBF24;"><i class="fa-solid fa-rotate"></i> Stream token expired or blocked — auto-refreshing fresh link...</span>');
+            try {
+              const refreshed = await window.probeSingleQualityBoxSmart(regEntry.sourceUrl, regEntry.quality || '', 0);
+              if (refreshed && refreshed.ok && refreshed.m3u8Url) {
+                regEntry.streamUrl = refreshed.m3u8Url;
+                if (window._adminPreviewRegistry) window._adminPreviewRegistry[containerId] = regEntry;
+                startPlaybackOnVideo(refreshed.m3u8Url, false);
+                return;
+              }
+            } catch {}
+          }
+          const code = vid.error ? vid.error.code : 'unknown';
+          const msg = (vid.error && vid.error.message) ? vid.error.message : 'Stream could not be decoded or server timed out';
+          setPreviewStatus(`<span style="color:#F87171;"><i class="fa-solid fa-triangle-exclamation"></i> Preview failed (Code ${code}): ${msg}</span>`);
+        };
+
+        const attemptSafePlay = () => {
+          vid.play().catch((err) => {
+            if (err && err.name === 'NotAllowedError' && !vid.muted) {
+              vid.muted = true;
+              vid.play().then(() => {
+                setPreviewStatus('<span style="color:#FBBF24;"><i class="fa-solid fa-volume-xmark"></i> Playing muted due to browser autoplay rule — unmute in player bar</span>');
+              }).catch(() => {});
+            }
+          });
+        };
+
+        if (!isDirectNativeVideo && window.Hls && window.Hls.isSupported()) {
+          const hls = new window.Hls();
+          window._adminPreviewHlsInstances[containerId] = hls;
+          hls.loadSource(urlToPlay);
+          hls.attachMedia(vid);
+          hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+            attemptSafePlay();
+          });
+          hls.on(window.Hls.Events.ERROR, (_ev, data) => {
+            if (data && data.fatal) {
+              setPreviewStatus(`<span style="color:#F87171;">HLS Preview Error: ${data.details || data.type}</span>`);
+            }
+          });
+        } else {
+          vid.src = urlToPlay;
+          vid.load();
+          attemptSafePlay();
+        }
+      };
+
+      startPlaybackOnVideo(streamUrl, true);
     };
 
     window.clearEpisodeServer1 = function(epIdx, btn) {

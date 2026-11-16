@@ -259,13 +259,35 @@ class StreamtapeExtractor(
         }
     }
 
-    private fun resolveUserAgent(): String {
-        return try {
-            mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
-                ?: InbuiltStreamScraper.DEFAULT_USER_AGENT
-        } catch (_: Exception) {
-            InbuiltStreamScraper.DEFAULT_USER_AGENT
+    @Volatile
+    private var cachedMainUa: String? = null
+
+    init {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            try {
+                cachedMainUa = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
+            } catch (_: Exception) {}
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    cachedMainUa = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
+                } catch (_: Exception) {}
+            }
         }
+    }
+
+    private fun resolveUserAgent(): String {
+        cachedMainUa?.takeIf { it.isNotBlank() }?.let { return it }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            try {
+                val ua = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
+                if (ua != null) {
+                    cachedMainUa = ua
+                    return ua
+                }
+            } catch (_: Exception) {}
+        }
+        return InbuiltStreamScraper.DEFAULT_USER_AGENT
     }
 
     /**

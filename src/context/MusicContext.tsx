@@ -37,6 +37,11 @@ import {
   sortMusicTracks,
 } from '../utils/musicUtils';
 import { NativeBridgeService } from '../services/nativeBridgeService';
+import {
+  canRecoverAudioPlayback,
+  hasActiveAudioEffects,
+  shouldResumeAudioContext,
+} from '../utils/musicPlaybackUtils';
 
 const MUSIC_STORAGE_KEYS = {
   FAVORITES: 'maxplay_music_favorites_v1',
@@ -487,6 +492,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     gainNode: GainNode;
   } | null>(null);
 
+  const isIntendedPlayingRef = useRef<boolean>(false);
+  const lastGoodPositionRef = useRef<number>(0);
+  const stallRecoveryCountRef = useRef<number>(0);
+  const lastNativeFxKeyRef = useRef<string>('');
+  const lastCtxResumeAttemptMsRef = useRef<number>(0);
+
   // Persist user preferences
   useEffect(() => {
     try {
@@ -754,7 +765,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return allRawTracks.find((t) => t.id === raw.id) || raw;
   }, [queue, currentIndex, allRawTracks]);
 
-  // Initialize hidden <audio> element once
+  // Initialize hidden <audio> element once with stall/error recovery & AudioContext resume safeguards
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const audio = new Audio();
@@ -763,12 +774,56 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.volume = 1.0;
     audioRef.current = audio;
 
+    const resumeWebAudioIfNeeded = () => {
+      const ctx = eqAudioGraphRef.current?.ctx;
+      if (!ctx || !shouldResumeAudioContext(ctx.state, isIntendedPlayingRef.current)) return;
+      const now = performance.now();
+      if (now - lastCtxResumeAttemptMsRef.current < 400) return;
+      lastCtxResumeAttemptMsRef.current = now;
+      ctx.resume().catch(() => {});
+    };
+
+    let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleMidSongRecovery = () => {
+      if (
+        !canRecoverAudioPlayback(isIntendedPlayingRef.current, stallRecoveryCountRef.current, 2) ||
+        !audio.currentSrc ||
+        audio.ended
+      ) {
+        return;
+      }
+      stallRecoveryCountRef.current += 1;
+      const resumeAt = lastGoodPositionRef.current > 0.25 ? lastGoodPositionRef.current : audio.currentTime || 0;
+      if (recoveryTimer) clearTimeout(recoveryTimer);
+      recoveryTimer = setTimeout(() => {
+        if (!isIntendedPlayingRef.current || !audio.currentSrc || audio.ended) return;
+        try {
+          audio.muted = false;
+          audio.volume = 1.0;
+          if (audio.error || audio.readyState === 0) {
+            audio.load();
+          }
+          if (resumeAt > 0.25) {
+            try {
+              audio.currentTime = resumeAt;
+            } catch {}
+          }
+          audio.play().catch(() => {});
+        } catch {}
+      }, 280);
+    };
+
     // Throttle timeupdate state updates to ~250ms so scrolling MusicHomeScreen stays at a locked 60fps
     const onTimeUpdate = () => {
+      const cur = audio.currentTime || 0;
+      if (cur > 0) {
+        lastGoodPositionRef.current = cur;
+      }
+      resumeWebAudioIfNeeded();
       const now = performance.now();
-      if (now - lastTimeUpdateMsRef.current >= 250 || (audio.currentTime || 0) < 0.3) {
+      if (now - lastTimeUpdateMsRef.current >= 250 || cur < 0.3) {
         lastTimeUpdateMsRef.current = now;
-        setCurrentTime(audio.currentTime || 0);
+        setCurrentTime(cur);
       }
     };
     const onLoadedMetadata = () => {
@@ -777,6 +832,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onPlay = () => {
+      isIntendedPlayingRef.current = true;
+      audio.muted = false;
+      audio.volume = 1.0;
+      resumeWebAudioIfNeeded();
       setIsPlaying(true);
       // Pause any playing video when music starts
       try {
@@ -785,17 +844,44 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       } catch {}
     };
+    const onPlaying = () => {
+      stallRecoveryCountRef.current = 0;
+      audio.muted = false;
+      audio.volume = 1.0;
+      resumeWebAudioIfNeeded();
+    };
     const onPause = () => {
       setIsPlaying(false);
+    };
+    const onStalled = () => {
+      if (isIntendedPlayingRef.current && audio.paused && !audio.ended) {
+        scheduleMidSongRecovery();
+      }
+    };
+    const onAudioError = () => {
+      scheduleMidSongRecovery();
+    };
+    const handleVisibilityOrFocus = () => {
+      if (!isIntendedPlayingRef.current) return;
+      resumeWebAudioIfNeeded();
+      if (audio.paused && !audio.ended && audio.currentSrc) {
+        audio.play().catch(() => {});
+      }
     };
 
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('loadedmetadata', onLoadedMetadata);
     audio.addEventListener('play', onPlay);
+    audio.addEventListener('playing', onPlaying);
     audio.addEventListener('pause', onPause);
+    audio.addEventListener('stalled', onStalled);
+    audio.addEventListener('error', onAudioError);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
 
     // Pause music automatically whenever a video starts playing in MaxPlay
     const handleVideoPlaying = () => {
+      isIntendedPlayingRef.current = false;
       if (!audio.paused) {
         audio.pause();
       }
@@ -803,11 +889,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     window.addEventListener('MAXPLAY_VIDEO_PLAYING', handleVideoPlaying);
 
     return () => {
+      if (recoveryTimer) clearTimeout(recoveryTimer);
+      isIntendedPlayingRef.current = false;
       audio.pause();
       audio.removeEventListener('timeupdate', onTimeUpdate);
       audio.removeEventListener('loadedmetadata', onLoadedMetadata);
       audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('playing', onPlaying);
       audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('stalled', onStalled);
+      audio.removeEventListener('error', onAudioError);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
       window.removeEventListener('MAXPLAY_VIDEO_PLAYING', handleVideoPlaying);
     };
   }, []);
@@ -832,6 +925,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (!track || !audio) return;
 
       const fastUrl = normalizeFastAudioPlaybackUrl(track.playbackUrl);
+      lastGoodPositionRef.current = 0;
+      stallRecoveryCountRef.current = 0;
       audio.muted = false;
       audio.volume = 1.0;
       if (audio.src !== fastUrl) {
@@ -843,7 +938,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } catch {}
 
       if (autoStart) {
+        isIntendedPlayingRef.current = true;
         setIsPlaying(true);
+        if (eqAudioGraphRef.current?.ctx && eqAudioGraphRef.current.ctx.state !== 'running') {
+          eqAudioGraphRef.current.ctx.resume().catch(() => {});
+        }
         const playPromise = audio.play();
         if (playPromise && typeof playPromise.then === 'function') {
           playPromise
@@ -860,10 +959,15 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     setIsPlaying(true);
                     recordTrackPlayed(track.id);
                   })
-                  .catch(() => setIsPlaying(false));
+                  .catch(() => {
+                    isIntendedPlayingRef.current = false;
+                    setIsPlaying(false);
+                  });
               }, 30);
             });
         }
+      } else {
+        isIntendedPlayingRef.current = false;
       }
 
       setCurrentIndex(idx);
@@ -879,6 +983,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!audio) return;
     const onEnded = () => {
       if (sleepTimerMode === 'end_of_song') {
+        isIntendedPlayingRef.current = false;
         setSleepTimerMode('off');
         setSleepTimerRemainingSec(null);
         setIsPlaying(false);
@@ -888,6 +993,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (nextIdx >= 0 && nextIdx < queue.length) {
         loadAndPlayTrackAtIndex(queue, nextIdx, true);
       } else {
+        isIntendedPlayingRef.current = false;
         setIsPlaying(false);
       }
     };
@@ -905,6 +1011,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setSleepTimerRemainingSec((prev) => {
         if (prev === null) return null;
         if (prev <= 1) {
+          isIntendedPlayingRef.current = false;
           audioRef.current?.pause();
           setIsPlaying(false);
           setSleepTimerMode('off');
@@ -955,17 +1062,27 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const audio = audioRef.current;
     if (!audio || !currentTrack) return;
     if (audio.paused) {
+      isIntendedPlayingRef.current = true;
+      audio.muted = false;
+      audio.volume = 1.0;
+      if (eqAudioGraphRef.current?.ctx && eqAudioGraphRef.current.ctx.state !== 'running') {
+        eqAudioGraphRef.current.ctx.resume().catch(() => {});
+      }
       audio
         .play()
         .then(() => setIsPlaying(true))
-        .catch(() => {});
+        .catch(() => {
+          isIntendedPlayingRef.current = false;
+        });
     } else {
+      isIntendedPlayingRef.current = false;
       audio.pause();
       setIsPlaying(false);
     }
   }, [currentTrack]);
 
   const pauseMusic = useCallback(() => {
+    isIntendedPlayingRef.current = false;
     audioRef.current?.pause();
     setIsPlaying(false);
   }, []);
@@ -1161,7 +1278,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return null;
     }
     if (eqAudioGraphRef.current) {
-      if (eqAudioGraphRef.current.ctx.state === 'suspended') {
+      if (eqAudioGraphRef.current.ctx.state !== 'running') {
         eqAudioGraphRef.current.ctx.resume().catch(() => {});
       }
       return eqAudioGraphRef.current;
@@ -1204,6 +1321,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       immersiveFilter.connect(gainNode);
       gainNode.connect(ctx.destination);
 
+      // Keep AudioContext running cleanly if browser suspends/interrupts mid-song
+      ctx.addEventListener('statechange', () => {
+        if (shouldResumeAudioContext(ctx.state, isIntendedPlayingRef.current)) {
+          ctx.resume().catch(() => {});
+        }
+      });
+
       eqAudioGraphRef.current = { ctx, bands, bassFilter, immersiveFilter, gainNode };
       return eqAudioGraphRef.current;
     } catch {
@@ -1218,25 +1342,37 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       audioRef.current.volume = 1.0;
     }
 
-    // 1. Native Android hardware Equalizer + BassBoost + LoudnessEnhancer (for 100%/200%/300% boost)
+    const effectsActive = hasActiveAudioEffects(equalizer, volumeBoostPct);
+
+    // 1. Native Android hardware Equalizer + BassBoost + LoudnessEnhancer (deduplicated so play/pause never churns AudioFlinger)
     if (NativeBridgeService.isRunningInKotlinApp()) {
-      NativeBridgeService.applyNativeAudioEffects({
+      const fxKey = JSON.stringify({
         enabled: equalizer.enabled,
         bands: equalizer.bands,
         bassLevel: equalizer.bassLevel,
         immersiveLevel: equalizer.immersiveLevel,
         volumeBoostPct,
       });
+      if (fxKey !== lastNativeFxKeyRef.current) {
+        lastNativeFxKeyRef.current = fxKey;
+        NativeBridgeService.applyNativeAudioEffects({
+          enabled: equalizer.enabled,
+          bands: equalizer.bands,
+          bassLevel: equalizer.bassLevel,
+          immersiveLevel: equalizer.immersiveLevel,
+          volumeBoostPct,
+        });
+      }
       return;
     }
 
-    // 2. Web Audio API graph in standard browser
-    if (equalizer.enabled || volumeBoostPct > 100) {
+    // 2. Web Audio API graph in standard browser (only create lazily when effects actually modify audio!)
+    if (effectsActive) {
       ensureEqualizerGraph();
     }
     const graph = eqAudioGraphRef.current;
     if (!graph) return;
-    if (graph.ctx.state === 'suspended') {
+    if (graph.ctx.state !== 'running' && isIntendedPlayingRef.current) {
       graph.ctx.resume().catch(() => {});
     }
     const active = equalizer.enabled;
@@ -1246,7 +1382,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     graph.bassFilter.gain.value = active ? (equalizer.bassLevel / 100) * 10 : 0;
     graph.immersiveFilter.gain.value = active ? (equalizer.immersiveLevel / 100) * 8 : 0;
     graph.gainNode.gain.value = Math.max(1, (volumeBoostPct || 100) / 100);
-  }, [equalizer, volumeBoostPct, isPlaying, ensureEqualizerGraph]);
+  }, [equalizer, volumeBoostPct, ensureEqualizerGraph]);
 
   const setEqualizerEnabled = useCallback((enabled: boolean) => {
     setEqualizer((prev) => ({ ...prev, enabled }));
@@ -1324,6 +1460,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     (idx: number) => {
       if (idx < 0 || idx >= queue.length) return;
       if (queue.length === 1) {
+        isIntendedPlayingRef.current = false;
         audioRef.current?.pause();
         setQueue([]);
         setCurrentIndex(-1);
@@ -1367,6 +1504,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const clearQueue = useCallback(() => {
+    isIntendedPlayingRef.current = false;
     audioRef.current?.pause();
     setQueue([]);
     setCurrentIndex(-1);

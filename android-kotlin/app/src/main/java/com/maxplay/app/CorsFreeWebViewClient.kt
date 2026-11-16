@@ -240,12 +240,16 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 )
             }
             val targetUrl = uri.getQueryParameter("url")
+            val fallbackTargetUrl = uri.getQueryParameter("fallbackUrl")
             val explicitReferer = uri.getQueryParameter("referer")
             if (!targetUrl.isNullOrBlank()) {
                 if (!explicitReferer.isNullOrBlank()) {
                     registerStreamReferer(targetUrl, explicitReferer)
+                    if (!fallbackTargetUrl.isNullOrBlank()) {
+                        registerStreamReferer(fallbackTargetUrl, explicitReferer)
+                    }
                 }
-                return proxyExternalUrlWithOkHttp(targetUrl, request, explicitReferer)
+                return proxyExternalUrlWithOkHttp(targetUrl, request, explicitReferer, fallbackTargetUrl)
             }
         }
 
@@ -413,7 +417,8 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
     private fun proxyExternalUrlWithOkHttp(
         targetUrl: String,
         request: WebResourceRequest,
-        explicitReferer: String? = null
+        explicitReferer: String? = null,
+        fallbackUrl: String? = null
     ): WebResourceResponse? {
         return try {
             val parsedTarget = android.net.Uri.parse(targetUrl)
@@ -450,9 +455,9 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                     pathOnly.endsWith(".mkv") ||
                     pathOnly.endsWith(".webm")
 
-            fun executeUpstreamRequest(includeOrigin: Boolean, includeReferer: Boolean): okhttp3.Response {
+            fun executeUpstreamRequest(fetchUrl: String, includeOrigin: Boolean, includeReferer: Boolean): okhttp3.Response {
                 val b = Request.Builder()
-                    .url(targetUrl)
+                    .url(fetchUrl)
                     .header("User-Agent", customUa)
                     .header("Accept", "*/*")
                 if (includeReferer && customReferer.isNotBlank()) {
@@ -468,14 +473,20 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 return streamCdnHttpClient.newCall(b.build()).execute()
             }
 
-            var response = executeUpstreamRequest(includeOrigin = true, includeReferer = true)
+            var response = executeUpstreamRequest(targetUrl, includeOrigin = true, includeReferer = true)
             if (response.code == 401 || response.code == 403) {
                 try { response.close() } catch (_: Exception) {}
-                response = executeUpstreamRequest(includeOrigin = false, includeReferer = true)
+                response = executeUpstreamRequest(targetUrl, includeOrigin = false, includeReferer = true)
             }
             if ((response.code == 401 || response.code == 403) && isDirectProgressiveMedia) {
                 try { response.close() } catch (_: Exception) {}
-                response = executeUpstreamRequest(includeOrigin = false, includeReferer = false)
+                response = executeUpstreamRequest(targetUrl, includeOrigin = false, includeReferer = false)
+            }
+            if (response.code >= 400 && !fallbackUrl.isNullOrBlank() &&
+                (fallbackUrl.startsWith("http://") || fallbackUrl.startsWith("https://"))
+            ) {
+                try { response.close() } catch (_: Exception) {}
+                response = executeUpstreamRequest(fallbackUrl, includeOrigin = false, includeReferer = true)
             }
 
             val statusCode = response.code
@@ -546,11 +557,15 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             }
             val encoding = if (isLikelyPlaylist) "UTF-8" else null
 
+            val reasonPhrase = response.message.ifEmpty {
+                if (statusCode == 206) "Partial Content" else "OK"
+            }
+
             WebResourceResponse(
                 mimeType,
                 encoding,
                 statusCode,
-                response.message.ifEmpty { "OK" },
+                reasonPhrase,
                 responseHeaders,
                 bodyStream
             )

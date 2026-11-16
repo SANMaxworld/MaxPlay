@@ -159,7 +159,6 @@ interface InlinePlayerProps {
   onDiscoveredAudioTracks?: (tracks: string[]) => void;
   onDiscoveredQualities?: (qualities: string[]) => void;
   onRequestCrossServerLanguageSwitch?: (lang: string) => void;
-  onRequestServerFailover?: (failedServer: 'server1' | 'server2' | 'server3') => boolean;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -192,7 +191,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   onDiscoveredAudioTracks,
   onDiscoveredQualities,
   onRequestCrossServerLanguageSwitch,
-  onRequestServerFailover,
 }) => {
   const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -1173,14 +1171,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       .then(async (res) => {
         if (!isMounted) return;
         const isExtractable = SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls);
-        // If first extraction returned an embed fallback for a Voe/Filemoon/Byse stream:
-        // First check if we can immediately fail over to an active backup server (Server 2 / Server 3)
-        // so the user never waits on a dead provider!
+        // If first extraction returned an embed fallback for an extractable stream, retry once cleanly without switching servers
         let finalRes = res;
         if (res.isEmbed && isExtractable) {
-          if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
-            return;
-          }
           try {
             SmartStreamService.clearClientCache(activeVideoUrl);
             const retryRes = await SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: true });
@@ -1194,13 +1187,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           setEmbedFallbackUrl(finalRes.streamUrl);
           setResolvedStreamUrl('');
         } else if (finalRes.isEmbed && isExtractable) {
-          if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
-            return;
-          }
-          // Never force an iframe for extractable Voe/Filemoon/Byse sources — keep player in native HLS mode
+          // Keep user on their selected server and show Retry prompt instead of auto-switching servers
           setEmbedFallbackUrl('');
           setIsLoading(false);
-          setPlaybackError('Stream is temporarily busy. Tap Retry to reload.');
+          setPlaybackError('Stream is temporarily busy on this server. Tap Retry to reload.');
         } else {
           setResolvedStreamUrl(finalRes.streamUrl);
           setEmbedFallbackUrl('');
@@ -1210,11 +1200,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       .catch((err) => {
         if (!isMounted) return;
         console.warn('Smart stream extraction error:', err);
-        // If targeted quality link failed to extract, try stepping down to a weaker quality link automatically!
+        // If targeted quality link failed to extract, try stepping down to a weaker quality link on the SAME server
         if (tryStepDownToWeakerQuality()) {
-          return;
-        }
-        if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
           return;
         }
         setIsResolvingStream(false);
@@ -1642,9 +1629,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                 networkStruggleCountRef.current += 1;
                 hls.startLoad();
               } else {
-                if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
-                  return;
-                }
                 setIsLoading(false);
                 setPlaybackError('Video stream connection temporarily lost. Please tap Retry.');
               }
@@ -2459,23 +2443,14 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                       setResolvedStreamUrl(fresh.streamUrl);
                     }
                   } else if (fresh && fresh.isEmbed && fresh.streamUrl) {
-                    if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
-                      return;
-                    }
                     setEmbedFallbackUrl(fresh.streamUrl);
                     setResolvedStreamUrl('');
                   } else {
-                    if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
-                      return;
-                    }
                     setPlaybackError('Stream link expired. Please tap Retry.');
                   }
                 })
                 .catch((refreshErr) => {
                   console.warn('[InlinePlayer] Stream auto-refresh failed:', refreshErr);
-                  if (onRequestServerFailover && onRequestServerFailover(selectedServer)) {
-                    return;
-                  }
                   setPlaybackError('Failed to refresh expired stream. Please tap Retry.');
                 })
                 .finally(() => {

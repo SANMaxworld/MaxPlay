@@ -1805,10 +1805,12 @@ class MainActivity : AppCompatActivity() {
     private var nativeEqualizer: android.media.audiofx.Equalizer? = null
     private var nativeBassBoost: android.media.audiofx.BassBoost? = null
     private var nativeLoudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
+    private var lastAppliedAudioFxKey: String = ""
 
     /**
      * Applies hardware-accelerated Android Equalizer, BassBoost, and LoudnessEnhancer (100% / 200% / 300% Volume Boost)
      * directly on Android's output mix without ever silencing or CORS-tainting the WebView <audio> element.
+     * Session-0 audiofx objects are only attached when non-neutral effects are actually requested and deduplicated.
      */
     fun applyNativeMusicAudioEffects(
         enabled: Boolean,
@@ -1818,33 +1820,48 @@ class MainActivity : AppCompatActivity() {
         volumeBoostPct: Int
     ): Boolean {
         return try {
+            val fxKey = "$enabled|${bandsDb.joinToString(",")}|$bassLevel|$immersiveLevel|$volumeBoostPct"
+            if (fxKey == lastAppliedAudioFxKey) {
+                return true
+            }
+            lastAppliedAudioFxKey = fxKey
+
+            val wantsEq = enabled && bandsDb.any { kotlin.math.abs(it) > 0.05 }
+            val wantsBass = enabled && bassLevel > 0
+            val extraGainMb = when {
+                volumeBoostPct >= 300 -> 1800
+                volumeBoostPct >= 200 -> 1000
+                enabled && immersiveLevel > 0 -> (immersiveLevel.coerceIn(0, 100) * 6)
+                else -> 0
+            }
+            val wantsLoudness = extraGainMb > 0
+
             runOnUiThread {
                 try {
-                    if (nativeEqualizer == null) {
+                    if (wantsEq && nativeEqualizer == null) {
                         try {
                             nativeEqualizer = android.media.audiofx.Equalizer(0, 0)
                         } catch (_: Exception) {}
                     }
-                    if (nativeBassBoost == null) {
+                    if (wantsBass && nativeBassBoost == null) {
                         try {
                             nativeBassBoost = android.media.audiofx.BassBoost(0, 0)
                         } catch (_: Exception) {}
                     }
-                    if (nativeLoudnessEnhancer == null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                    if (wantsLoudness && nativeLoudnessEnhancer == null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
                         try {
                             nativeLoudnessEnhancer = android.media.audiofx.LoudnessEnhancer(0)
                         } catch (_: Exception) {}
                     }
 
                     nativeEqualizer?.let { eq ->
-                        eq.enabled = enabled
-                        if (enabled) {
+                        eq.enabled = wantsEq
+                        if (wantsEq) {
                             val numBands = eq.numberOfBands.toInt()
                             val range = eq.bandLevelRange
                             val minLevel = range.getOrNull(0)?.toInt() ?: -1200
                             val maxLevel = range.getOrNull(1)?.toInt() ?: 1200
                             for (b in 0 until minOf(numBands, bandsDb.size)) {
-                                // Convert dB (-12..+12) to millibels (-1200..+1200)
                                 val targetMb = (bandsDb[b] * 100.0).toInt().coerceIn(minLevel, maxLevel).toShort()
                                 try {
                                     eq.setBandLevel(b.toShort(), targetMb)
@@ -1854,9 +1871,8 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     nativeBassBoost?.let { bb ->
-                        val activeBass = enabled && bassLevel > 0
-                        bb.enabled = activeBass
-                        if (activeBass && bb.strengthSupported) {
+                        bb.enabled = wantsBass
+                        if (wantsBass && bb.strengthSupported) {
                             val strength = (bassLevel.coerceIn(0, 100) * 10).toShort()
                             try {
                                 bb.setStrength(strength)
@@ -1865,14 +1881,8 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     nativeLoudnessEnhancer?.let { le ->
-                        val extraGainMb = when {
-                            volumeBoostPct >= 300 -> 1800
-                            volumeBoostPct >= 200 -> 1000
-                            enabled && immersiveLevel > 0 -> (immersiveLevel.coerceIn(0, 100) * 6)
-                            else -> 0
-                        }
-                        le.enabled = extraGainMb > 0
-                        if (extraGainMb > 0) {
+                        le.enabled = wantsLoudness
+                        if (wantsLoudness) {
                             try {
                                 le.setTargetGain(extraGainMb)
                             } catch (_: Exception) {}

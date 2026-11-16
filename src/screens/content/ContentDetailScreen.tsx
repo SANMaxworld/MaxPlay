@@ -40,6 +40,12 @@ import { downloadManager } from '../../services/DownloadManager';
 import { SmartStreamService } from '../../services/smartStreamService';
 import { ClientHlsDownloader } from '../../services/clientHlsDownloader';
 import { NativeBridgeService } from '../../services/nativeBridgeService';
+import {
+  extractValidQualityLinksMap,
+  hasAnyValidLinkInSources,
+  isValidStreamUrl,
+  resolveServerWhenMissingOrCorrupt,
+} from '../../utils/serverSelection';
 import { useAuthContext } from '../../context/AuthContext';
 import { 
   subscribeToMyList, 
@@ -686,20 +692,12 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [s2DiscoveredQualities, setS2DiscoveredQualities] = useState<string[]>([]);
   const [s3DiscoveredQualities, setS3DiscoveredQualities] = useState<string[]>([]);
   const lastUserSelectedLangRef = useRef<string>('');
-  const failedServersRef = useRef<Set<string>>(new Set());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
   // Remembered Server Selection helper (persists per-title and globally)
   const handleSelectServer = (srv: 'server1' | 'server2' | 'server3') => {
     saveProgressNow(playbackPosition, false, true);
-    if (content?.id) {
-      failedServersRef.current.forEach((k) => {
-        if (k.startsWith(`${content.id}::`) && k.endsWith(`::${srv}`)) {
-          failedServersRef.current.delete(k);
-        }
-      });
-    }
     setSelectedServer(srv);
     try {
       if (content?.id) {
@@ -709,42 +707,62 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     } catch {}
   };
 
-  // Auto-detect and restore remembered server (or auto-switch if only one server has links)
+  // Auto-detect and restore remembered server; ONLY switch automatically when the selected server link is missing or corrupt
   useEffect(() => {
     if (!content) return;
     const ep0 = content.episodesList?.[0] || content.seasonsData?.[0]?.episodes?.[0];
     const hasS1 = Boolean(
-      content.videoUrl ||
-      (content.qualityLinks && Object.keys(content.qualityLinks).length > 0) ||
-      (content.videoSources && Object.keys(content.videoSources).length > 0) ||
-      ep0?.videoUrl ||
-      (ep0?.qualityLinks && Object.keys(ep0.qualityLinks).length > 0) ||
-      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'string' ? Boolean(p) : Boolean(p?.videoUrl || (p?.videoSources && Object.keys(p.videoSources).length > 0) || (p?.qualityLinks && Object.keys(p.qualityLinks).length > 0))))
+      isValidStreamUrl(content.videoUrl) ||
+      Object.keys(extractValidQualityLinksMap(content.qualityLinks)).length > 0 ||
+      hasAnyValidLinkInSources(content.videoSources) ||
+      isValidStreamUrl(ep0?.videoUrl) ||
+      Object.keys(extractValidQualityLinksMap(ep0?.qualityLinks)).length > 0 ||
+      hasAnyValidLinkInSources((ep0 as any)?.videoSources) ||
+      (content.videoLinks && content.videoLinks.some((p: any) =>
+        typeof p === 'string'
+          ? isValidStreamUrl(p)
+          : Boolean(
+              isValidStreamUrl(p?.videoUrl) ||
+              hasAnyValidLinkInSources(p?.videoSources) ||
+              Object.keys(extractValidQualityLinksMap(p?.qualityLinks)).length > 0
+            )
+      ))
     );
     const hasS2 = Boolean(
-      content.secondaryVideoUrl ||
-      (content as any).secondaryServerUrl ||
-      (content as any).secondaryUrl ||
-      (content.secondaryQualityLinks && Object.keys(content.secondaryQualityLinks).length > 0) ||
-      ((content as any).secondaryServerQualityLinks && Object.keys((content as any).secondaryServerQualityLinks).length > 0) ||
-      (ep0 as any)?.secondaryServerUrl ||
-      (ep0 as any)?.secondaryVideoUrl ||
-      ((ep0 as any)?.secondaryServerQualityLinks && Object.keys((ep0 as any).secondaryServerQualityLinks).length > 0) ||
-      ((ep0 as any)?.secondaryQualityLinks && Object.keys((ep0 as any).secondaryQualityLinks).length > 0) ||
-      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.secondaryVideoUrl || p?.secondaryServerUrl || p?.secondaryUrl)))
+      isValidStreamUrl(content.secondaryVideoUrl) ||
+      isValidStreamUrl((content as any).secondaryServerUrl) ||
+      isValidStreamUrl((content as any).secondaryUrl) ||
+      Object.keys(extractValidQualityLinksMap(content.secondaryQualityLinks, (content as any).secondaryServerQualityLinks)).length > 0 ||
+      isValidStreamUrl((ep0 as any)?.secondaryServerUrl) ||
+      isValidStreamUrl((ep0 as any)?.secondaryVideoUrl) ||
+      isValidStreamUrl((ep0 as any)?.secondaryUrl) ||
+      Object.keys(extractValidQualityLinksMap((ep0 as any)?.secondaryServerQualityLinks, (ep0 as any)?.secondaryQualityLinks)).length > 0 ||
+      (content.videoLinks && content.videoLinks.some((p: any) =>
+        typeof p === 'object' &&
+        Boolean(
+          isValidStreamUrl(p?.secondaryVideoUrl) ||
+          isValidStreamUrl(p?.secondaryServerUrl) ||
+          isValidStreamUrl(p?.secondaryUrl)
+        )
+      ))
     );
     const hasS3 = Boolean(
-      content.tertiaryVideoUrl ||
-      content.tertiaryServerUrl ||
-      (content as any).tertiaryUrl ||
-      (content.tertiaryQualityLinks && Object.keys(content.tertiaryQualityLinks).length > 0) ||
-      (content.tertiaryServerQualityLinks && Object.keys(content.tertiaryServerQualityLinks).length > 0) ||
-      (ep0 as any)?.tertiaryServerUrl ||
-      (ep0 as any)?.tertiaryVideoUrl ||
-      (ep0 as any)?.tertiaryUrl ||
-      ((ep0 as any)?.tertiaryServerQualityLinks && Object.keys((ep0 as any).tertiaryServerQualityLinks).length > 0) ||
-      ((ep0 as any)?.tertiaryQualityLinks && Object.keys((ep0 as any).tertiaryQualityLinks).length > 0) ||
-      (content.videoLinks && content.videoLinks.some((p: any) => typeof p === 'object' && Boolean(p?.tertiaryVideoUrl || p?.tertiaryServerUrl || p?.tertiaryUrl)))
+      isValidStreamUrl(content.tertiaryVideoUrl) ||
+      isValidStreamUrl(content.tertiaryServerUrl) ||
+      isValidStreamUrl((content as any).tertiaryUrl) ||
+      Object.keys(extractValidQualityLinksMap(content.tertiaryQualityLinks, content.tertiaryServerQualityLinks)).length > 0 ||
+      isValidStreamUrl((ep0 as any)?.tertiaryServerUrl) ||
+      isValidStreamUrl((ep0 as any)?.tertiaryVideoUrl) ||
+      isValidStreamUrl((ep0 as any)?.tertiaryUrl) ||
+      Object.keys(extractValidQualityLinksMap((ep0 as any)?.tertiaryServerQualityLinks, (ep0 as any)?.tertiaryQualityLinks)).length > 0 ||
+      (content.videoLinks && content.videoLinks.some((p: any) =>
+        typeof p === 'object' &&
+        Boolean(
+          isValidStreamUrl(p?.tertiaryVideoUrl) ||
+          isValidStreamUrl(p?.tertiaryServerUrl) ||
+          isValidStreamUrl(p?.tertiaryUrl)
+        )
+      ))
     );
 
     let desiredServer: 'server1' | 'server2' | 'server3' = selectedServer;
@@ -760,19 +778,12 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       }
     } catch {}
 
-    if (desiredServer === 'server3' && hasS3) {
-      setSelectedServer('server3');
-    } else if (desiredServer === 'server2' && hasS2) {
-      setSelectedServer('server2');
-    } else if (desiredServer === 'server1' && hasS1) {
-      setSelectedServer('server1');
-    } else if (hasS1) {
-      setSelectedServer('server1');
-    } else if (hasS2) {
-      setSelectedServer('server2');
-    } else if (hasS3) {
-      setSelectedServer('server3');
-    }
+    const resolvedServer = resolveServerWhenMissingOrCorrupt(desiredServer, {
+      server1: hasS1,
+      server2: hasS2,
+      server3: hasS3,
+    });
+    setSelectedServer(resolvedServer);
   }, [content?.id]);
 
   // Report Modal States
@@ -1702,51 +1713,51 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   }
 
   if (!offlineVideoUrl) {
-    if (selectedServer === 'server3') {
-      if (tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0) {
-        const smartS3 = SmartStreamService.selectSourceUrlForQuality(
-          tertiaryServerUrl,
-          tertiaryServerQualityLinks,
-          activeQuality
-        );
-        playerQualityLinks = smartS3.cleanQualityLinks;
-        playerVideoUrl = smartS3.chosenUrl || tertiaryServerUrl;
-        playerVideoSources = tertiaryVideoSources || {};
-      } else if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
-        const smartS2 = SmartStreamService.selectSourceUrlForQuality(
-          secondaryServerUrl,
-          secondaryServerQualityLinks,
-          activeQuality
-        );
-        playerQualityLinks = smartS2.cleanQualityLinks;
-        playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
-        playerVideoSources = secondaryVideoSources || {};
-      }
-    } else if (selectedServer === 'server2') {
-      if (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0) {
-        const smartS2 = SmartStreamService.selectSourceUrlForQuality(
-          secondaryServerUrl,
-          secondaryServerQualityLinks,
-          activeQuality
-        );
-        playerQualityLinks = smartS2.cleanQualityLinks;
-        playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
-        playerVideoSources = secondaryVideoSources || {};
-      } else if (tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0) {
-        const smartS3 = SmartStreamService.selectSourceUrlForQuality(
-          tertiaryServerUrl,
-          tertiaryServerQualityLinks,
-          activeQuality
-        );
-        playerQualityLinks = smartS3.cleanQualityLinks;
-        playerVideoUrl = smartS3.chosenUrl || tertiaryServerUrl;
-        playerVideoSources = tertiaryVideoSources || {};
-      }
-    } else if (selectedServer === 'server1') {
-      if (playerQualityLinks && typeof playerQualityLinks === 'object' && Object.keys(playerQualityLinks).length > 0) {
+    const cleanS1QualityLinks = extractValidQualityLinksMap(playerQualityLinks);
+    const cleanS2QualityLinks = extractValidQualityLinksMap(secondaryServerQualityLinks);
+    const cleanS3QualityLinks = extractValidQualityLinksMap(tertiaryServerQualityLinks);
+    const hasValidS1 =
+      isValidStreamUrl(playerVideoUrl) ||
+      Object.keys(cleanS1QualityLinks).length > 0 ||
+      hasAnyValidLinkInSources(playerVideoSources);
+    const hasValidS2 =
+      isValidStreamUrl(secondaryServerUrl) ||
+      Object.keys(cleanS2QualityLinks).length > 0 ||
+      hasAnyValidLinkInSources(secondaryVideoSources);
+    const hasValidS3 =
+      isValidStreamUrl(tertiaryServerUrl) ||
+      Object.keys(cleanS3QualityLinks).length > 0 ||
+      hasAnyValidLinkInSources(tertiaryVideoSources);
+
+    const activeEffectiveServer = resolveServerWhenMissingOrCorrupt(selectedServer, {
+      server1: hasValidS1,
+      server2: hasValidS2,
+      server3: hasValidS3,
+    });
+
+    if (activeEffectiveServer === 'server3' && hasValidS3) {
+      const smartS3 = SmartStreamService.selectSourceUrlForQuality(
+        isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '',
+        cleanS3QualityLinks,
+        activeQuality
+      );
+      playerQualityLinks = smartS3.cleanQualityLinks;
+      playerVideoUrl = smartS3.chosenUrl || (isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '');
+      playerVideoSources = tertiaryVideoSources || {};
+    } else if (activeEffectiveServer === 'server2' && hasValidS2) {
+      const smartS2 = SmartStreamService.selectSourceUrlForQuality(
+        isValidStreamUrl(secondaryServerUrl) ? secondaryServerUrl : '',
+        cleanS2QualityLinks,
+        activeQuality
+      );
+      playerQualityLinks = smartS2.cleanQualityLinks;
+      playerVideoUrl = smartS2.chosenUrl || (isValidStreamUrl(secondaryServerUrl) ? secondaryServerUrl : '');
+      playerVideoSources = secondaryVideoSources || {};
+    } else if (activeEffectiveServer === 'server1' && hasValidS1) {
+      if (Object.keys(cleanS1QualityLinks).length > 0) {
         const smartS1 = SmartStreamService.selectSourceUrlForQuality(
-          playerVideoUrl,
-          playerQualityLinks,
+          isValidStreamUrl(playerVideoUrl) ? playerVideoUrl : '',
+          cleanS1QualityLinks,
           activeQuality
         );
         playerQualityLinks = smartS1.cleanQualityLinks;
@@ -1754,24 +1765,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           playerVideoUrl = smartS1.chosenUrl;
           primaryServerUrl = smartS1.chosenUrl;
         }
-      } else if (!playerVideoUrl && (secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0)) {
-        // Automatic fallback if only Server 2 link was filled
-        const smartS2 = SmartStreamService.selectSourceUrlForQuality(
-          secondaryServerUrl,
-          secondaryServerQualityLinks,
-          activeQuality
-        );
-        playerQualityLinks = smartS2.cleanQualityLinks;
-        playerVideoUrl = smartS2.chosenUrl || secondaryServerUrl;
-      } else if (!playerVideoUrl && (tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0)) {
-        // Automatic fallback if only Server 3 link was filled
-        const smartS3 = SmartStreamService.selectSourceUrlForQuality(
-          tertiaryServerUrl,
-          tertiaryServerQualityLinks,
-          activeQuality
-        );
-        playerQualityLinks = smartS3.cleanQualityLinks;
-        playerVideoUrl = smartS3.chosenUrl || tertiaryServerUrl;
+      } else if (!isValidStreamUrl(playerVideoUrl)) {
+        playerVideoUrl = '';
       }
     }
   }
@@ -3131,36 +3126,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               activeQuality={activeQuality}
               selectedServer={selectedServer}
               crossServerQualities={crossServerQualities}
-              onRequestServerFailover={(failedSrv) => {
-                if (!content?.id) return false;
-                failedServersRef.current.add(`${content.id}::${currentPartKey}::${failedSrv}`);
-                const hasS1 = Boolean(s1ProbeTargetUrl);
-                const hasS2 = Boolean(s2ProbeTargetUrl);
-                const hasS3 = Boolean(s3ProbeTargetUrl);
-                const candidates: Array<{ srv: 'server1' | 'server2' | 'server3'; available: boolean; label: string }> =
-                  failedSrv === 'server1'
-                    ? [
-                        { srv: 'server2', available: hasS2, label: 'Server 2' },
-                        { srv: 'server3', available: hasS3, label: 'Server 3' },
-                      ]
-                    : failedSrv === 'server2'
-                    ? [
-                        { srv: 'server3', available: hasS3, label: 'Server 3' },
-                        { srv: 'server1', available: hasS1, label: 'Server 1' },
-                      ]
-                    : [
-                        { srv: 'server2', available: hasS2, label: 'Server 2' },
-                        { srv: 'server1', available: hasS1, label: 'Server 1' },
-                      ];
-                const next = candidates.find(
-                  (c) => c.available && !failedServersRef.current.has(`${content.id}::${currentPartKey}::${c.srv}`)
-                );
-                if (!next) return false;
-                handleSelectServer(next.srv);
-                setToastMessage(`Switched to ${next.label} for faster playback`);
-                setTimeout(() => setToastMessage(null), 2600);
-                return true;
-              }}
               onLanguageChange={handleUnifiedLanguageSelect}
               onRequestCrossServerLanguageSwitch={(missingLang) => {
                 const hasS1 = Boolean(primaryServerUrl || Object.keys(primaryServerQualityLinks || {}).length > 0);
