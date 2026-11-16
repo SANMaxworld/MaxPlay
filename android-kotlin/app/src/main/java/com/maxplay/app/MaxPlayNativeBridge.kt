@@ -976,6 +976,44 @@ class MaxPlayNativeBridge(
     }
 
     @JavascriptInterface
+    fun downloadDirectFileToDisk(
+        storageKey: String,
+        fileUrl: String,
+        refererUrl: String,
+        callbackId: String
+    ) {
+        InbuiltStreamScraper.backgroundExecutor.execute {
+            val safeCallbackId = JSONObject.quote(callbackId)
+            val res = MaxPlayOfflineVault.downloadDirectFileToDisk(
+                context = activity.applicationContext,
+                storageKey = storageKey,
+                fileUrl = fileUrl,
+                refererUrl = refererUrl,
+                onProgress = { downloaded, total, speedBps ->
+                    val progJson = JSONObject().apply {
+                        put("downloadedBytes", downloaded)
+                        put("totalBytes", total)
+                        put("speedBps", speedBps)
+                    }.toString()
+                    val jsProgress = "window.__onMaxPlayDirectDownloadProgress && window.__onMaxPlayDirectDownloadProgress($safeCallbackId, JSON.parse(${JSONObject.quote(progJson)}));"
+                    activity.runOnUiThread {
+                        try {
+                            webView.evaluateJavascript(jsProgress, null)
+                        } catch (_: Exception) {}
+                    }
+                }
+            )
+            val escapedJson = JSONObject.quote(res.toString())
+            val jsDone = "window.__onMaxPlayDirectDownloadComplete && window.__onMaxPlayDirectDownloadComplete($safeCallbackId, JSON.parse($escapedJson));"
+            activity.runOnUiThread {
+                try {
+                    webView.evaluateJavascript(jsDone, null)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    @JavascriptInterface
     fun saveOfflineManifest(
         storageKey: String,
         totalSegments: Int,

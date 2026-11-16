@@ -59,6 +59,12 @@ interface MaxPlayKotlinBridge {
     refererUrl: string,
     callbackId: string
   ) => void;
+  downloadDirectFileToDisk?: (
+    storageKey: string,
+    fileUrl: string,
+    refererUrl: string,
+    callbackId: string
+  ) => void;
   saveOfflineManifest?: (
     storageKey: string,
     totalSegments: number,
@@ -188,6 +194,20 @@ declare global {
     onMaxPlaySnifferResult?: (callbackId: string, resultJson: string) => void;
     __maxplaySegmentCallbacks?: Record<string, (res: any) => void>;
     __onMaxPlaySegmentComplete?: (callbackId: string, res: any) => void;
+    __maxplayDirectDownloadCallbacks?: Record<
+      string,
+      {
+        onProgress?: (downloadedBytes: number, totalBytes: number, speedBps: number) => void;
+        onComplete: (res: any) => void;
+      }
+    >;
+    __onMaxPlayDirectDownloadProgress?: (
+      callbackId: string,
+      downloadedBytes: number,
+      totalBytes: number,
+      speedBps: number
+    ) => void;
+    __onMaxPlayDirectDownloadComplete?: (callbackId: string, res: any) => void;
     __onMaxPlayPipModeChanged?: (isInPip: boolean) => void;
     __onMaxPlayVoiceResult?: (spokenText: string) => void;
     __onMaxPlayTransferProgress?: (callbackId: string, pct: number, msg: string) => void;
@@ -213,6 +233,26 @@ if (typeof window !== 'undefined') {
     if (cb) {
       delete window.__maxplaySegmentCallbacks![callbackId];
       cb(res);
+    }
+  };
+
+  window.__maxplayDirectDownloadCallbacks = window.__maxplayDirectDownloadCallbacks || {};
+  window.__onMaxPlayDirectDownloadProgress = (
+    callbackId: string,
+    downloadedBytes: number,
+    totalBytes: number,
+    speedBps: number
+  ) => {
+    const entry = window.__maxplayDirectDownloadCallbacks?.[callbackId];
+    if (entry?.onProgress) {
+      entry.onProgress(downloadedBytes, totalBytes, speedBps);
+    }
+  };
+  window.__onMaxPlayDirectDownloadComplete = (callbackId: string, res: any) => {
+    const entry = window.__maxplayDirectDownloadCallbacks?.[callbackId];
+    if (entry) {
+      delete window.__maxplayDirectDownloadCallbacks![callbackId];
+      entry.onComplete(res);
     }
   };
 }
@@ -381,6 +421,83 @@ export class NativeBridgeService {
   }
 
   /**
+   * Returns true if the Kotlin APK supports streaming / multi-range direct MP4/MKV disk downloads.
+   */
+  public static supportsDirectFileVault(): boolean {
+    try {
+      return Boolean(
+        this.supportsNativeOfflineVault() &&
+          typeof window.MaxPlayNative?.downloadDirectFileToDisk === 'function'
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Downloads a large direct MP4/MKV file (e.g. Server 3 Streamtape) to native disk via Kotlin OkHttp
+   * using parallel Range streams + live progress callbacks and an inactivity watchdog (no fixed 45s cap).
+   */
+  public static downloadDirectFileToDiskNative(
+    storageKey: string,
+    fileUrl: string,
+    refererUrl: string = '',
+    onProgress?: (downloadedBytes: number, totalBytes: number, speedBps: number) => void
+  ): Promise<{ ok: boolean; bytes?: number; error?: string }> {
+    return new Promise((resolve) => {
+      if (!this.supportsDirectFileVault()) {
+        resolve({ ok: false, error: 'Native direct file vault not supported' });
+        return;
+      }
+
+      const callbackId = `direct_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const resetWatchdog = () => {
+        if (inactivityTimer) clearTimeout(inactivityTimer);
+        // 90s inactivity limit (resets on every progress tick while downloading!)
+        inactivityTimer = setTimeout(() => {
+          if (window.__maxplayDirectDownloadCallbacks?.[callbackId]) {
+            delete window.__maxplayDirectDownloadCallbacks[callbackId];
+            resolve({ ok: false, error: 'Direct download inactivity timeout' });
+          }
+        }, 90000);
+      };
+
+      resetWatchdog();
+
+      window.__maxplayDirectDownloadCallbacks = window.__maxplayDirectDownloadCallbacks || {};
+      window.__maxplayDirectDownloadCallbacks[callbackId] = {
+        onProgress: (downloadedBytes: number, totalBytes: number, speedBps: number) => {
+          resetWatchdog();
+          if (onProgress) onProgress(downloadedBytes, totalBytes, speedBps);
+        },
+        onComplete: (res: any) => {
+          if (inactivityTimer) clearTimeout(inactivityTimer);
+          if (res && res.ok) {
+            resolve({ ok: true, bytes: Number(res.bytes || 0) });
+          } else {
+            resolve({ ok: false, error: res?.error || 'Direct file download failed' });
+          }
+        },
+      };
+
+      try {
+        window.MaxPlayNative!.downloadDirectFileToDisk!(
+          storageKey,
+          fileUrl,
+          refererUrl,
+          callbackId
+        );
+      } catch (e: any) {
+        if (inactivityTimer) clearTimeout(inactivityTimer);
+        delete window.__maxplayDirectDownloadCallbacks[callbackId];
+        resolve({ ok: false, error: e?.message || 'Bridge exception' });
+      }
+    });
+  }
+
+  /**
    * Downloads a single HLS segment (.ts) directly to Android internal storage disk via Kotlin OkHttp.
    * Automatically reuses existing segment on disk if already downloaded (0ms checkpoint resume).
    */
@@ -403,7 +520,7 @@ export class NativeBridgeService {
           delete window.__maxplaySegmentCallbacks[callbackId];
           resolve({ ok: false, error: 'Segment timeout' });
         }
-      }, 45000);
+      }, 120000);
 
       window.__maxplaySegmentCallbacks = window.__maxplaySegmentCallbacks || {};
       window.__maxplaySegmentCallbacks[callbackId] = (res: any) => {

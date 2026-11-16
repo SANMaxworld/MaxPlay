@@ -16,6 +16,7 @@
 
 import { NativeBridgeService } from './nativeBridgeService';
 import { SmartStreamService } from './smartStreamService';
+import { buildDirectStreamProxyUrl, isDirectProgressiveStreamUrl } from '../utils/streamHelpers';
 
 const DB_NAME = 'maxplay_offline_chunks_v1';
 const STORE_NAME = 'chunks';
@@ -857,75 +858,131 @@ export class ClientHlsDownloader {
         (cleanLower.includes('get_video') || cleanLower.includes('tapecontent')
           ? 'https://streamtape.com/'
           : '');
-      const isDirectMp4 =
-        (cleanLower.includes('.mp4') ||
-          cleanLower.includes('.mkv') ||
-          cleanLower.includes('get_video') ||
-          cleanLower.includes('tapecontent.net')) &&
-        !cleanLower.includes('.m3u8');
+      const isDirectMp4 = isDirectProgressiveStreamUrl(cleanUrl);
 
       if (isDirectMp4) {
         if (useNativeDisk) {
-          const segRes = await NativeBridgeService.downloadSegmentToDiskNative(
-            storageKey,
-            0,
-            cleanUrl,
-            effectiveReferer
-          );
-          if (!segRes.ok) {
-            throw new Error(segRes.error || 'Direct native file download failed');
+          let finalBytes = 0;
+          if (NativeBridgeService.supportsDirectFileVault()) {
+            const directRes = await NativeBridgeService.downloadDirectFileToDiskNative(
+              storageKey,
+              cleanUrl,
+              effectiveReferer,
+              (dlBytes, totalBytes, speedBps) => {
+                const totalEst = totalBytes > 0 ? totalBytes : Math.max(dlBytes * 1.15, 50 * 1024 * 1024);
+                onProgress({
+                  progress: Math.min(99, Math.round((dlBytes / totalEst) * 100)),
+                  downloadedBytes: dlBytes,
+                  totalEstimatedBytes: totalEst,
+                  completedSegments: 0,
+                  totalSegments: 1,
+                  speedBps,
+                });
+              }
+            );
+            if (!directRes.ok) {
+              throw new Error(directRes.error || 'Direct native file download failed');
+            }
+            finalBytes = directRes.bytes || 0;
+          } else {
+            const segRes = await NativeBridgeService.downloadSegmentToDiskNative(
+              storageKey,
+              0,
+              cleanUrl,
+              effectiveReferer
+            );
+            if (!segRes.ok) {
+              throw new Error(segRes.error || 'Direct native file download failed');
+            }
+            finalBytes = segRes.bytes || 0;
+            NativeBridgeService.saveOfflineManifestNative(storageKey, 1, 1440, true);
           }
-          const finalBytes = segRes.bytes || 0;
-          NativeBridgeService.saveOfflineManifestNative(storageKey, 1, 1440, true);
           onProgress({
             progress: 100,
             downloadedBytes: finalBytes,
             totalEstimatedBytes: finalBytes,
             completedSegments: 1,
             totalSegments: 1,
-            speedBps: finalBytes,
+            speedBps: finalBytes / Math.max(1, (Date.now() - startTime) / 1000),
           });
           return { totalBytes: finalBytes };
         }
 
-        const res = await fetch(wrapProxyUrl(cleanUrl, effectiveReferer), { signal });
+        const proxyStreamUrl = buildDirectStreamProxyUrl(cleanUrl, effectiveReferer, false);
+        const res = await fetch(proxyStreamUrl, { signal });
         if (!res.ok) throw new Error(`Direct download failed (${res.status})`);
         const contentLength = Number(res.headers.get('content-length') || 0);
+        const mimeType =
+          (res.headers.get('content-type') || '').split(';')[0].trim() ||
+          (cleanLower.includes('.mkv') ? 'video/x-matroska' : cleanLower.includes('.webm') ? 'video/webm' : 'video/mp4');
         const reader = res.body?.getReader();
-        const chunks: Uint8Array[] = [];
+
+        const CHUNK_TARGET_BYTES = 4 * 1024 * 1024; // 4 MB chunks in IndexedDB (prevents 1.3GB RAM crash)
+        let pendingParts: Uint8Array[] = [];
+        let pendingBytes = 0;
+        let chunkIdx = 0;
+        let lastProgressAt = 0;
+
+        const flushPendingToIdb = async () => {
+          if (pendingBytes <= 0) return;
+          const mergedChunk = new Uint8Array(pendingBytes);
+          let off = 0;
+          for (const p of pendingParts) {
+            mergedChunk.set(p, off);
+            off += p.byteLength;
+          }
+          pendingParts = [];
+          pendingBytes = 0;
+          await putChunk(`${storageKey}_chunk_${chunkIdx}`, mergedChunk.buffer);
+          chunkIdx++;
+        };
 
         if (reader) {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (value) {
-              chunks.push(value);
+            if (value && value.byteLength > 0) {
+              pendingParts.push(value);
+              pendingBytes += value.byteLength;
               downloadedBytes += value.byteLength;
-              const elapsedSec = Math.max(0.2, (Date.now() - startTime) / 1000);
-              const speedBps = downloadedBytes / elapsedSec;
-              const totalEst =
-                contentLength > 0 ? contentLength : Math.max(downloadedBytes * 1.2, 50 * 1024 * 1024);
-              onProgress({
-                progress: Math.min(99, Math.round((downloadedBytes / totalEst) * 100)),
-                downloadedBytes,
-                totalEstimatedBytes: totalEst,
-                completedSegments: 0,
-                totalSegments: 1,
-                speedBps,
-              });
+
+              if (pendingBytes >= CHUNK_TARGET_BYTES) {
+                await flushPendingToIdb();
+              }
+
+              const now = Date.now();
+              if (now - lastProgressAt >= 200) {
+                lastProgressAt = now;
+                const elapsedSec = Math.max(0.2, (now - startTime) / 1000);
+                const speedBps = downloadedBytes / elapsedSec;
+                const totalEst =
+                  contentLength > 0 ? contentLength : Math.max(downloadedBytes * 1.2, 50 * 1024 * 1024);
+                onProgress({
+                  progress: Math.min(99, Math.round((downloadedBytes / totalEst) * 100)),
+                  downloadedBytes,
+                  totalEstimatedBytes: totalEst,
+                  completedSegments: 0,
+                  totalSegments: 1,
+                  speedBps,
+                });
+              }
             }
           }
+          await flushPendingToIdb();
+        } else {
+          const buf = await res.arrayBuffer();
+          downloadedBytes = buf.byteLength;
+          await putChunk(`${storageKey}_chunk_0`, buf);
+          chunkIdx = 1;
         }
 
-        const merged = new Uint8Array(downloadedBytes);
-        let offset = 0;
-        for (const c of chunks) {
-          merged.set(c, offset);
-          offset += c.byteLength;
+        if (chunkIdx === 0 || downloadedBytes === 0) {
+          throw new Error('Direct download returned 0 bytes');
         }
 
-        await putChunk(`${storageKey}_chunk_0`, merged.buffer);
-        await putChunk(`${storageKey}_totalChunks`, 1);
+        await putChunk(`${storageKey}_totalChunks`, chunkIdx);
+        await putChunk(`${storageKey}_isSingleFile`, 1);
+        await putChunk(`${storageKey}_mimeType`, mimeType);
         onProgress({
           progress: 100,
           downloadedBytes,
@@ -1085,7 +1142,7 @@ export class ClientHlsDownloader {
                 }
               } else {
                 const segCtrl = new AbortController();
-                const segTimer = setTimeout(() => segCtrl.abort(), 18000);
+                const segTimer = setTimeout(() => segCtrl.abort(), 35000);
                 const onAbort = () => segCtrl.abort();
                 signal.addEventListener('abort', onAbort, { once: true });
                 try {

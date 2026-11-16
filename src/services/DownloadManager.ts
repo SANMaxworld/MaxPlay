@@ -1,6 +1,7 @@
 import { ClientHlsDownloader } from './clientHlsDownloader';
 import { SmartStreamService } from './smartStreamService';
 import { NativeBridgeService } from './nativeBridgeService';
+import { orderDownloadCandidateUrls } from '../utils/streamHelpers';
 
 export interface DownloadTask {
   taskId: string;
@@ -292,7 +293,7 @@ class DownloadManagerService {
   private async resolveStreamForTask(
     task: DownloadTask,
     forceRefresh: boolean = false,
-    preferSecondary: boolean = false
+    rotationIdx: number = 0
   ): Promise<{ streamUrl: string; refererUrl: string }> {
     const tryResolveUrl = async (rawUrl?: string): Promise<{ streamUrl: string; refererUrl: string } | null> => {
       if (!rawUrl || !rawUrl.trim()) return null;
@@ -347,15 +348,15 @@ class DownloadManagerService {
       return null;
     };
 
-    const candidatePool = Array.from(
-      new Set(
-        [task.videoUrl, task.secondaryVideoUrl, task.tertiaryVideoUrl]
-          .map((u) => (u || '').trim())
-          .filter(Boolean)
-      )
-    );
-    const firstUrl = preferSecondary && candidatePool.length > 1 ? candidatePool[1] : candidatePool[0];
-    const backupUrls = candidatePool.filter((u) => u !== firstUrl);
+    const candidatePool = orderDownloadCandidateUrls({
+      videoUrl: task.videoUrl,
+      secondaryVideoUrl: task.secondaryVideoUrl,
+      tertiaryVideoUrl: task.tertiaryVideoUrl,
+      selectedServer: task.selectedServer,
+      preferFallbackRotationIndex: rotationIdx,
+    });
+    const firstUrl = candidatePool[0];
+    const backupUrls = candidatePool.slice(1);
 
     const doesStreamSupportRequestedLang = async (
       rawSourceUrl: string | undefined,
@@ -461,7 +462,7 @@ class DownloadManagerService {
           const resolvedObj = await this.resolveStreamForTask(
             task,
             attempt > 0,
-            attempt === 2 && Boolean(task.secondaryVideoUrl)
+            attempt === 2 ? 1 : 0
           );
           resolvedStreamUrl = resolvedObj.streamUrl;
           resolvedRefererUrl = resolvedObj.refererUrl;

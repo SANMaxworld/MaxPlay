@@ -76,14 +76,75 @@ class InbuiltStreamScraper(
 
         val backgroundExecutor = Executors.newCachedThreadPool()
 
-        private val smartStreamDns = object : okhttp3.Dns {
+        private val sprintCdnWinnerCache = ConcurrentHashMap<String, Pair<String, Long>>()
+        private const val SPRINT_CDN_CACHE_TTL_MS = 5 * 60 * 1000L
+
+        private fun isSprintCdnHost(host: String): Boolean {
+            val lower = host.lowercase()
+            return lower.contains("sprintcdn") ||
+                lower.contains("owphbf") ||
+                lower.contains("r66nv9ed")
+        }
+
+        private fun raceSprintCdnIpv4(hostname: String, ipv4List: List<java.net.InetAddress>): String? {
+            if (ipv4List.size <= 1) return ipv4List.firstOrNull()?.hostAddress
+            val cached = sprintCdnWinnerCache[hostname]
+            val now = System.currentTimeMillis()
+            if (cached != null && now - cached.second < SPRINT_CDN_CACHE_TTL_MS) {
+                return cached.first
+            }
+
+            val winnerRef = AtomicReference<String?>(null)
+            val latch = CountDownLatch(1)
+            val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
+            val total = ipv4List.size
+
+            for (addr in ipv4List) {
+                backgroundExecutor.execute {
+                    var sock: java.net.Socket? = null
+                    try {
+                        sock = java.net.Socket()
+                        sock.connect(java.net.InetSocketAddress(addr, 443), 1500)
+                        val hostAddr = addr.hostAddress
+                        if (!hostAddr.isNullOrBlank() && winnerRef.compareAndSet(null, hostAddr)) {
+                            sprintCdnWinnerCache[hostname] = Pair(hostAddr, System.currentTimeMillis())
+                            latch.countDown()
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        try { sock?.close() } catch (_: Exception) {}
+                        if (completedCount.incrementAndGet() >= total) {
+                            latch.countDown()
+                        }
+                    }
+                }
+            }
+
+            try {
+                latch.await(1600, TimeUnit.MILLISECONDS)
+            } catch (_: Exception) {}
+            return winnerRef.get()
+        }
+
+        internal val smartStreamDns = object : okhttp3.Dns {
             override fun lookup(hostname: String): List<java.net.InetAddress> {
                 val all = okhttp3.Dns.SYSTEM.lookup(hostname)
                 if (all.size <= 1) return all
-                // Prefer IPv4 over IPv6 for stream CDNs to avoid mobile IPv6 blackholes without raw TCP socket scans
                 val ipv4List = all.filterIsInstance<java.net.Inet4Address>()
                 val ipv6List = all.filter { it !is java.net.Inet4Address }
-                return if (ipv4List.isNotEmpty()) (ipv4List + ipv6List) else all
+                if (ipv4List.isEmpty()) return all
+
+                if (ipv4List.size > 1 && isSprintCdnHost(hostname)) {
+                    val winningIp = raceSprintCdnIpv4(hostname, ipv4List)
+                    if (!winningIp.isNullOrBlank()) {
+                        val winnerAddr = ipv4List.firstOrNull { it.hostAddress == winningIp }
+                        if (winnerAddr != null) {
+                            val restIpv4 = ipv4List.filter { it != winnerAddr }
+                            return listOf(winnerAddr) + restIpv4 + ipv6List
+                        }
+                    }
+                }
+                return ipv4List + ipv6List
             }
         }
 

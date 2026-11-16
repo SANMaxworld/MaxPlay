@@ -60,6 +60,7 @@ interface EpisodeResolvedPlan {
   language: string;
   targetUrl: string;
   backupUrl?: string;
+  thirdBackupUrl?: string;
   sizeMb: number;
   status: 'exact' | 'cross_server_exact' | 'fallback_quality' | 'unavailable';
   isFallbackQuality: boolean;
@@ -1359,8 +1360,14 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         const m = getMapFor(srv);
         const exact = findExactInMap(m, targetQ);
         if (exact) {
-          const otherSrvId = effectiveOrder.find((o) => o !== srv && (findExactInMap(getMapFor(o), targetQ) || pickBestFallbackFromMap(getMapFor(o))));
-          const backupObj = otherSrvId ? (findExactInMap(getMapFor(otherSrvId), targetQ) || pickBestFallbackFromMap(getMapFor(otherSrvId))) : null;
+          const remainingUrls = effectiveOrder
+            .filter((o) => o !== srv)
+            .map((o) => {
+              const obj = findExactInMap(getMapFor(o), targetQ) || pickBestFallbackFromMap(getMapFor(o));
+              return obj?.url || getSingleFor(o);
+            })
+            .filter((u): u is string => Boolean(u && u !== exact.url));
+          const uniqueRemaining = Array.from(new Set(remainingUrls));
           const isAutoSwitched = srv !== primarySrv;
           return {
             epIndex: idx,
@@ -1372,7 +1379,8 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
             resolvedServer: srv,
             language: selectedLanguage,
             targetUrl: exact.url,
-            backupUrl: backupObj?.url && backupObj.url !== exact.url ? backupObj.url : undefined,
+            backupUrl: uniqueRemaining[0],
+            thirdBackupUrl: uniqueRemaining[1],
             sizeMb: exact.sizeMb,
             status: isAutoSwitched ? 'cross_server_exact' : 'exact',
             isFallbackQuality: false,
@@ -1388,7 +1396,14 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
       if (fallbackCandidates.length > 0) {
         const chosen = fallbackCandidates[0];
-        const backupCandidate = fallbackCandidates[1];
+        const remainingFallbackUrls = Array.from(
+          new Set(
+            [
+              ...fallbackCandidates.slice(1).map((c) => c.item.url),
+              ...effectiveOrder.filter((o) => o !== chosen.srv).map((o) => getSingleFor(o)),
+            ].filter((u): u is string => Boolean(u && u !== chosen.item.url))
+          )
+        );
         return {
           epIndex: idx,
           epNumber: epNum,
@@ -1399,10 +1414,8 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           resolvedServer: chosen.srv,
           language: selectedLanguage,
           targetUrl: chosen.item.url,
-          backupUrl:
-            backupCandidate?.item.url && backupCandidate.item.url !== chosen.item.url
-              ? backupCandidate.item.url
-              : undefined,
+          backupUrl: remainingFallbackUrls[0],
+          thirdBackupUrl: remainingFallbackUrls[1],
           sizeMb: chosen.item.sizeMb,
           status: 'fallback_quality',
           isFallbackQuality: chosen.item.id.toLowerCase() !== targetQ.toLowerCase(),
@@ -1420,6 +1433,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       if (singlePairs.length > 0) {
         const primaryPair = singlePairs[0];
         const backupPair = singlePairs[1];
+        const thirdPair = singlePairs[2];
         const isAutoSwitched = primaryPair.srv !== primarySrv;
         return {
           epIndex: idx,
@@ -1432,6 +1446,10 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           language: selectedLanguage,
           targetUrl: primaryPair.url,
           backupUrl: backupPair && backupPair.url !== primaryPair.url ? backupPair.url : undefined,
+          thirdBackupUrl:
+            thirdPair && thirdPair.url !== primaryPair.url && thirdPair.url !== backupPair?.url
+              ? thirdPair.url
+              : undefined,
           sizeMb: 0,
           status: isAutoSwitched ? 'cross_server_exact' : 'exact',
           isFallbackQuality: false,
@@ -1542,7 +1560,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     activeQuality: string,
     userServer: 'server1' | 'server2' | 'server3',
     targetLang: string
-  ): { targetVideoUrl: string; backupVideoUrl?: string; resolvedServer: 'server1' | 'server2' | 'server3' } => {
+  ): {
+    targetVideoUrl: string;
+    backupVideoUrl?: string;
+    thirdBackupUrl?: string;
+    resolvedServer: 'server1' | 'server2' | 'server3';
+  } => {
     const urls = extractUrlsFromItem(null, true);
     let orderedServers: Array<'server1' | 'server2' | 'server3'>;
     if (userServer === 'server3') {
@@ -1569,13 +1592,18 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     for (const srv of orderedServers) {
       const exact = findExact(getMap(srv), activeQuality);
       if (exact) {
-        const backup = orderedServers
-          .filter((o) => o !== srv)
-          .map((o) => findExact(getMap(o), activeQuality) || Array.from(getMap(o).values())[0]?.url || getSingle(o))
-          .find((u) => Boolean(u && u !== exact));
+        const backups = Array.from(
+          new Set(
+            orderedServers
+              .filter((o) => o !== srv)
+              .map((o) => findExact(getMap(o), activeQuality) || Array.from(getMap(o).values())[0]?.url || getSingle(o))
+              .filter((u): u is string => Boolean(u && u !== exact))
+          )
+        );
         return {
           targetVideoUrl: exact,
-          backupVideoUrl: backup,
+          backupVideoUrl: backups[0],
+          thirdBackupUrl: backups[1],
           resolvedServer: srv,
         };
       }
@@ -1584,13 +1612,18 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     for (const srv of orderedServers) {
       const fallback = Array.from(getMap(srv).values())[0]?.url || getSingle(srv);
       if (fallback) {
-        const backup = orderedServers
-          .filter((o) => o !== srv)
-          .map((o) => Array.from(getMap(o).values())[0]?.url || getSingle(o))
-          .find((u) => Boolean(u && u !== fallback));
+        const backups = Array.from(
+          new Set(
+            orderedServers
+              .filter((o) => o !== srv)
+              .map((o) => Array.from(getMap(o).values())[0]?.url || getSingle(o))
+              .filter((u): u is string => Boolean(u && u !== fallback))
+          )
+        );
         return {
           targetVideoUrl: fallback,
-          backupVideoUrl: backup,
+          backupVideoUrl: backups[0],
+          thirdBackupUrl: backups[1],
           resolvedServer: srv,
         };
       }
@@ -1599,6 +1632,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     return {
       targetVideoUrl: '',
       backupVideoUrl: undefined,
+      thirdBackupUrl: undefined,
       resolvedServer: userServer,
     };
   };
@@ -1671,6 +1705,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         videoUrl: targetVideoUrl,
         secondaryVideoUrl:
           backupVideoUrl && backupVideoUrl !== targetVideoUrl ? backupVideoUrl : undefined,
+        tertiaryVideoUrl:
+          moviePlan.thirdBackupUrl &&
+          moviePlan.thirdBackupUrl !== targetVideoUrl &&
+          moviePlan.thirdBackupUrl !== backupVideoUrl
+            ? moviePlan.thirdBackupUrl
+            : undefined,
         selectedServer: moviePlan.resolvedServer,
         estimatedBytes: estBytes,
       });
@@ -1704,6 +1744,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           videoUrl: plan.targetUrl,
           secondaryVideoUrl:
             plan.backupUrl && plan.backupUrl !== plan.targetUrl ? plan.backupUrl : undefined,
+          tertiaryVideoUrl:
+            plan.thirdBackupUrl &&
+            plan.thirdBackupUrl !== plan.targetUrl &&
+            plan.thirdBackupUrl !== plan.backupUrl
+              ? plan.thirdBackupUrl
+              : undefined,
           selectedServer: plan.resolvedServer,
           estimatedBytes: estBytes,
         });

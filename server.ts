@@ -714,19 +714,19 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       if (cached) {
         try {
-          responseData = await fetchViaSingleIp(cached, 2200, isPlaylistReq ? 5000 : 14000);
+          responseData = await fetchViaSingleIp(cached, 2400, isPlaylistReq ? 6000 : 30000);
         } catch {
           sprintCdnWorkingIpCache.delete(parsed.hostname);
           const fallbackIps = candidateIps.filter((ip) => ip !== cached);
           responseData = await Promise.any(
             (fallbackIps.length > 0 ? fallbackIps : candidateIps).map((ip) =>
-              fetchViaSingleIp(ip, 2500, isPlaylistReq ? 5000 : 14000)
+              fetchViaSingleIp(ip, 2600, isPlaylistReq ? 6000 : 30000)
             )
           );
         }
       } else {
         responseData = await Promise.any(
-          candidateIps.map((ip) => fetchViaSingleIp(ip, 2400, isPlaylistReq ? 5000 : 14000))
+          candidateIps.map((ip) => fetchViaSingleIp(ip, 2600, isPlaylistReq ? 6000 : 30000))
         );
       }
 
@@ -763,6 +763,157 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         arrayBuffer: async () => new ArrayBuffer(0)
       };
     }
+  }
+
+  // Zero-buffer streaming SprintCDN proxy: races IPv4s ONLY for connection/headers, then pipes bytes directly
+  async function streamSprintCdnToResponse(
+    targetUrl: string,
+    headers: Record<string, string>,
+    res: any,
+    req: any,
+    normalizeContentType?: (ct: string | null) => string
+  ): Promise<boolean> {
+    let parsed: URL;
+    try {
+      parsed = new URL(targetUrl);
+    } catch {
+      return false;
+    }
+
+    const candidateIps: string[] = [];
+    const cachedIp = sprintCdnWorkingIpCache.get(parsed.hostname);
+    if (cachedIp) candidateIps.push(cachedIp);
+    const resolved = await dns.promises.resolve4(parsed.hostname).catch(() => []);
+    for (const ip of resolved) {
+      if (!candidateIps.includes(ip)) candidateIps.push(ip);
+    }
+    if (candidateIps.length === 0) return false;
+
+    const openViaIp = (ip: string, headerTimeoutMs: number = 3000) =>
+      new Promise<{
+        ip: string;
+        status: number;
+        respHeaders: Record<string, string | string[] | undefined>;
+        incoming: import("http").IncomingMessage;
+        upstreamReq: import("http").ClientRequest;
+      }>((resolve, reject) => {
+        let settled = false;
+        const upstreamReq = https.request(
+          {
+            host: ip,
+            port: 443,
+            servername: parsed.hostname,
+            path: parsed.pathname + parsed.search,
+            method: req?.method === "HEAD" ? "HEAD" : "GET",
+            headers: {
+              "Host": parsed.hostname,
+              ...headers
+            }
+          },
+          (incoming) => {
+            clearTimeout(headerTimer);
+            const status = incoming.statusCode || 200;
+            if (status >= 500) {
+              incoming.destroy();
+              if (!settled) {
+                settled = true;
+                reject(new Error(`Upstream ${status} on ${ip}`));
+              }
+              return;
+            }
+            if (!settled) {
+              settled = true;
+              resolve({
+                ip,
+                status,
+                respHeaders: incoming.headers,
+                incoming,
+                upstreamReq
+              });
+            } else {
+              incoming.destroy();
+            }
+          }
+        );
+
+        const headerTimer = setTimeout(() => {
+          upstreamReq.destroy();
+          if (!settled) {
+            settled = true;
+            reject(new Error(`Header timeout on ${ip}`));
+          }
+        }, headerTimeoutMs);
+
+        upstreamReq.on("error", (err) => {
+          clearTimeout(headerTimer);
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
+        upstreamReq.end();
+      });
+
+    let winner: {
+      ip: string;
+      status: number;
+      respHeaders: Record<string, string | string[] | undefined>;
+      incoming: import("http").IncomingMessage;
+      upstreamReq: import("http").ClientRequest;
+    };
+
+    try {
+      if (cachedIp) {
+        try {
+          winner = await openViaIp(cachedIp, 2600);
+        } catch {
+          sprintCdnWorkingIpCache.delete(parsed.hostname);
+          const fallbackIps = candidateIps.filter((ip) => ip !== cachedIp);
+          winner = await Promise.any(
+            (fallbackIps.length > 0 ? fallbackIps : candidateIps).map((ip) => openViaIp(ip, 3000))
+          );
+        }
+      } else {
+        winner = await Promise.any(candidateIps.map((ip) => openViaIp(ip, 3000)));
+      }
+    } catch {
+      return false;
+    }
+
+    sprintCdnWorkingIpCache.set(parsed.hostname, winner.ip);
+    const getHdr = (name: string): string | null => {
+      const val = winner.respHeaders[name.toLowerCase()];
+      if (Array.isArray(val)) return val.join(", ");
+      return typeof val === "string" ? val : null;
+    };
+
+    const rawCt = getHdr("content-type");
+    const finalCt = normalizeContentType ? normalizeContentType(rawCt) : rawCt;
+    if (finalCt) res.setHeader("Content-Type", finalCt);
+    if (getHdr("content-length")) res.setHeader("Content-Length", getHdr("content-length")!);
+    if (getHdr("content-range")) res.setHeader("Content-Range", getHdr("content-range")!);
+    if (getHdr("accept-ranges")) res.setHeader("Accept-Ranges", getHdr("accept-ranges")!);
+
+    res.status(winner.status);
+    if (req?.method === "HEAD") {
+      try { winner.incoming.destroy(); } catch {}
+      res.end();
+      return true;
+    }
+
+    winner.incoming.setTimeout(35000, () => {
+      try { winner.incoming.destroy(); } catch {}
+      try { if (!res.writableEnded) res.end(); } catch {}
+    });
+    winner.incoming.on("error", () => {
+      try { if (!res.writableEnded) res.end(); } catch {}
+    });
+    req.on("close", () => {
+      try { winner.incoming.destroy(); } catch {}
+      try { winner.upstreamReq.destroy(); } catch {}
+    });
+    winner.incoming.pipe(res);
+    return true;
   }
 
   async function parseHlsManifestMetadata(
@@ -3098,6 +3249,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       };
 
       if (isSprintHost) {
+        const streamed = await streamSprintCdnToResponse(targetUrl, headers, res, req, normalizeSegmentMime);
+        if (streamed) return;
         const sprintRes = await resilientFetchSprintCdn(targetUrl, { headers });
         res.setHeader("Content-Type", normalizeSegmentMime(sprintRes.headers.get("content-type")));
         if (sprintRes.headers.get("content-length")) {
@@ -3111,10 +3264,20 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         return;
       }
 
-      const upstream = await fetch(targetUrl, {
-        headers,
-        signal: AbortSignal.timeout(20000)
-      });
+      const segHeaderCtrl = new AbortController();
+      const segHeaderTimer = setTimeout(() => segHeaderCtrl.abort(), 20000);
+      const onReqCloseSeg = () => segHeaderCtrl.abort();
+      req.on("close", onReqCloseSeg);
+
+      let upstream: Response;
+      try {
+        upstream = await fetch(targetUrl, {
+          headers,
+          signal: segHeaderCtrl.signal
+        });
+      } finally {
+        clearTimeout(segHeaderTimer);
+      }
 
       res.setHeader("Content-Type", normalizeSegmentMime(upstream.headers.get("content-type")));
       if (upstream.headers.get("content-length")) {
@@ -3158,8 +3321,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     res.sendStatus(204);
   });
 
-  // Lightweight CORS proxy for individual HLS segments & media requests (fast, <300ms, Vercel safe)
-  app.get(["/api/proxy", "/proxy"], async (req, res) => {
+  // Lightweight CORS proxy for HLS segments, playlists & media requests (streaming + Range + SprintCDN IPv4 racing)
+  const handleLightProxy = async (req: any, res: any) => {
     try {
       const targetUrl = (req.query.url as string || "").trim();
       if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
@@ -3167,62 +3330,119 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         return;
       }
       let referer = (req.query.referer as string || "").trim();
-      if (!referer) {
-        try {
-          const u = new URL(targetUrl);
-          const h = u.hostname.toLowerCase();
-          if (h.includes("sprintcdn") || h.includes("owphbf") || h.includes("r66nv9ed") || h.includes("filemoon") || h.includes("byse") || h.includes("n1mwq")) {
+      let isSprintHost = false;
+      try {
+        const u = new URL(targetUrl);
+        const h = u.hostname.toLowerCase();
+        isSprintHost = h.includes("sprintcdn") || h.includes("owphbf") || h.includes("r66nv9ed");
+        if (!referer) {
+          if (isSprintHost || h.includes("filemoon") || h.includes("byse") || h.includes("n1mwq")) {
             referer = "https://byseraguci.com/";
           } else if (h.includes("voe")) {
             referer = "https://voe.sx/";
+          } else if (isStreamtapeUrl(targetUrl)) {
+            referer = "https://streamtape.com/";
           } else {
             referer = `${u.origin}/`;
           }
-        } catch {
-          referer = "https://byseraguci.com/";
         }
+      } catch {
+        if (!referer) referer = "https://byseraguci.com/";
       }
       let originHeader = "";
       try {
         originHeader = new URL(referer).origin;
       } catch {}
 
-      const upstream = await resilientFetchSprintCdn(targetUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Referer": referer,
-          ...(originHeader ? { "Origin": originHeader } : {}),
-          "Accept": "*/*"
-        }
-      });
+      const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": referer,
+        ...(originHeader ? { "Origin": originHeader } : {}),
+        "Accept": "*/*"
+      };
+      if (req.headers.range) {
+        headers["Range"] = req.headers.range;
+      }
+
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "*");
+      res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Type");
+
+      if (isSprintHost) {
+        const streamed = await streamSprintCdnToResponse(targetUrl, headers, res, req);
+        if (streamed) return;
+      }
+
+      const hdrCtrl = new AbortController();
+      const hdrTimer = setTimeout(() => hdrCtrl.abort(), 20000);
+      req.on("close", () => {
+        clearTimeout(hdrTimer);
+      });
+
+      let upstream: Response;
+      try {
+        upstream = await fetch(targetUrl, {
+          method: req.method === "HEAD" ? "HEAD" : "GET",
+          headers,
+          redirect: "follow",
+          signal: hdrCtrl.signal
+        });
+      } finally {
+        clearTimeout(hdrTimer);
+      }
+
       if (upstream.headers.get("content-type")) {
         res.setHeader("Content-Type", upstream.headers.get("content-type")!);
       }
       if (upstream.headers.get("content-length")) {
         res.setHeader("Content-Length", upstream.headers.get("content-length")!);
       }
+      if (upstream.headers.get("content-range")) {
+        res.setHeader("Content-Range", upstream.headers.get("content-range")!);
+      }
       if (upstream.headers.get("accept-ranges")) {
         res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges")!);
       }
-      const arrayBuf = await upstream.arrayBuffer();
-      res.status(upstream.status).send(Buffer.from(arrayBuf));
+
+      res.status(upstream.status);
+      if (req.method === "HEAD") {
+        try { await upstream.body?.cancel(); } catch {}
+        res.end();
+        return;
+      }
+
+      if (upstream.body) {
+        const { Readable } = await import("stream");
+        const nodeStream = Readable.fromWeb(upstream.body as any);
+        nodeStream.on("error", () => {
+          try { if (!res.writableEnded) res.end(); } catch {}
+        });
+        req.on("close", () => {
+          try { nodeStream.destroy(); } catch {}
+        });
+        nodeStream.pipe(res);
+      } else {
+        const arrayBuf = await upstream.arrayBuffer();
+        res.send(Buffer.from(arrayBuf));
+      }
     } catch (err: any) {
       if (!res.headersSent) {
         res.status(500).json({ error: err.message || "Proxy request failed" });
       }
     }
-  });
+  };
+  app.get(["/api/proxy", "/proxy"], handleLightProxy);
+  app.head(["/api/proxy", "/proxy"], handleLightProxy);
   app.options(["/api/proxy", "/proxy"], (_req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Type");
     res.sendStatus(204);
   });
 
-  // Streaming Direct MP4/MKV Proxy with HTTP 206 Range Seeking & Streamtape CDN Redirects
+  // Streaming Direct MP4/MKV Proxy with HTTP 206 Range Seeking & Streamtape CDN Redirects (Zero whole-body timeout)
   const handleStreamProxy = async (req: any, res: any) => {
     try {
       const targetUrl = (req.query.url as string || "").trim();
@@ -3269,12 +3489,37 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
 
       const isHeadReq = req.method === "HEAD";
-      const upstream = await fetch(targetUrl, {
-        method: isHeadReq ? "HEAD" : "GET",
-        headers,
-        redirect: "follow",
-        signal: AbortSignal.timeout(30000)
-      });
+      const fetchWithHeaderTimeout = async (reqHeaders: Record<string, string>) => {
+        const headerCtrl = new AbortController();
+        const headerTimer = setTimeout(() => headerCtrl.abort(), 25000);
+        try {
+          return await fetch(targetUrl, {
+            method: isHeadReq ? "HEAD" : "GET",
+            headers: reqHeaders,
+            redirect: "follow",
+            signal: headerCtrl.signal
+          });
+        } finally {
+          clearTimeout(headerTimer);
+        }
+      };
+
+      let upstream = await fetchWithHeaderTimeout(headers);
+      if ((upstream.status === 401 || upstream.status === 403) && headers["Origin"]) {
+        try { await upstream.body?.cancel(); } catch {}
+        const noOriginHeaders = { ...headers };
+        delete noOriginHeaders["Origin"];
+        upstream = await fetchWithHeaderTimeout(noOriginHeaders);
+      }
+      if (upstream.status === 401 || upstream.status === 403) {
+        try { await upstream.body?.cancel(); } catch {}
+        const minimalHeaders: Record<string, string> = {
+          "User-Agent": defaultByseUa,
+          "Accept": "*/*",
+          ...(req.headers.range ? { "Range": req.headers.range } : {})
+        };
+        upstream = await fetchWithHeaderTimeout(minimalHeaders);
+      }
 
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");

@@ -450,19 +450,34 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                     pathOnly.endsWith(".mkv") ||
                     pathOnly.endsWith(".webm")
 
-            val okReqBuilder = Request.Builder()
-                .url(targetUrl)
-                .header("User-Agent", customUa)
-                .header("Accept", "*/*")
-                .header("Referer", customReferer)
-                .header("Origin", customOrigin)
-
-            val rangeHdr = request.requestHeaders?.get("Range") ?: request.requestHeaders?.get("range")
-            if (!rangeHdr.isNullOrBlank()) {
-                okReqBuilder.header("Range", rangeHdr)
+            fun executeUpstreamRequest(includeOrigin: Boolean, includeReferer: Boolean): okhttp3.Response {
+                val b = Request.Builder()
+                    .url(targetUrl)
+                    .header("User-Agent", customUa)
+                    .header("Accept", "*/*")
+                if (includeReferer && customReferer.isNotBlank()) {
+                    b.header("Referer", customReferer)
+                }
+                if (includeOrigin && customOrigin.isNotBlank()) {
+                    b.header("Origin", customOrigin)
+                }
+                val rangeHdr = request.requestHeaders?.get("Range") ?: request.requestHeaders?.get("range")
+                if (!rangeHdr.isNullOrBlank()) {
+                    b.header("Range", rangeHdr)
+                }
+                return streamCdnHttpClient.newCall(b.build()).execute()
             }
 
-            val response = streamCdnHttpClient.newCall(okReqBuilder.build()).execute()
+            var response = executeUpstreamRequest(includeOrigin = true, includeReferer = true)
+            if (response.code == 401 || response.code == 403) {
+                try { response.close() } catch (_: Exception) {}
+                response = executeUpstreamRequest(includeOrigin = false, includeReferer = true)
+            }
+            if ((response.code == 401 || response.code == 403) && isDirectProgressiveMedia) {
+                try { response.close() } catch (_: Exception) {}
+                response = executeUpstreamRequest(includeOrigin = false, includeReferer = false)
+            }
+
             val statusCode = response.code
             val finalResolvedUrl = response.request.url.toString()
             registerStreamReferer(finalResolvedUrl, customReferer, customUa)
@@ -486,12 +501,23 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             val responseHeaders = buildCorsHeaders(mimeType).toMutableMap()
             response.header("Content-Length")?.let { responseHeaders["Content-Length"] = it }
             response.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
-            response.header("Accept-Ranges")?.let { responseHeaders["Accept-Ranges"] = it }
+            val acceptRanges = response.header("Accept-Ranges")
+            if (!acceptRanges.isNullOrBlank()) {
+                responseHeaders["Accept-Ranges"] = acceptRanges
+            } else if (isDirectProgressiveMedia) {
+                responseHeaders["Accept-Ranges"] = "bytes"
+            }
 
             val rawStream = response.body?.byteStream()
             val bodyStream = if (rawStream != null) {
-                java.io.BufferedInputStream(rawStream, 256 * 1024)
+                object : java.io.BufferedInputStream(rawStream, 256 * 1024) {
+                    override fun close() {
+                        try { super.close() } catch (_: Exception) {}
+                        try { response.close() } catch (_: Exception) {}
+                    }
+                }
             } else {
+                try { response.close() } catch (_: Exception) {}
                 ByteArrayInputStream(ByteArray(0))
             }
             val encoding = if (isLikelyPlaylist) "UTF-8" else null

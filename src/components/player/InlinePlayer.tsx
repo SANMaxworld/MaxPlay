@@ -1294,20 +1294,21 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         lowLatencyMode: false,
         startFragPrefetch: true,
         backBufferLength: 30,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
+        maxBufferLength: 24,
+        maxMaxBufferLength: 48,
         maxBufferSize: 60 * 1000 * 1000,
         maxBufferHole: 0.5,
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.1,
-        nudgeMaxRetry: 6,
-        fragLoadingTimeOut: 25000,
+        nudgeMaxRetry: 8,
+        abrEwmaDefaultEstimate: 2500000,
+        fragLoadingTimeOut: 40000,
         fragLoadingMaxRetry: 8,
-        fragLoadingRetryDelay: 350,
-        manifestLoadingTimeOut: 15000,
+        fragLoadingRetryDelay: 400,
+        manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 5,
         manifestLoadingRetryDelay: 350,
-        levelLoadingTimeOut: 15000,
+        levelLoadingTimeOut: 20000,
         levelLoadingMaxRetry: 5,
         levelLoadingRetryDelay: 350,
       });
@@ -1394,7 +1395,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         if (autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current) {
           wasPlayingBeforeSwitchRef.current = false;
           setHasStarted(true);
-          video.play().catch((e) => console.warn('Autoplay blocked:', e));
+          video.play().catch((e) => {
+            if (e?.name !== 'AbortError') console.warn('Autoplay blocked:', e);
+          });
         }
       });
 
@@ -1619,11 +1622,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         }
       });
     } else {
-      // Native HTML5 playback
+      // Native HTML5 playback (used for Server 3 Streamtape progressive MP4 & direct MP4/MKV streams)
+      let cancelled = false;
+      let stallTimer: ReturnType<typeof setTimeout> | null = null;
+      let nativeStallRetried = false;
+
+      video.preload = 'auto';
       video.src = resolvedStreamUrl;
       video.playbackRate = playbackRate;
 
       const performNativeSeek = () => {
+        if (cancelled) return;
         if (targetSeekTimeRef.current > 0 && videoRef.current) {
           try {
             videoRef.current.currentTime = targetSeekTimeRef.current;
@@ -1632,6 +1641,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           }
         }
         setTimeout(() => {
+          if (cancelled) return;
           isInitialSeekDoneRef.current = true;
           isSwitchingSourceRef.current = false;
           targetSeekTimeRef.current = 0;
@@ -1641,20 +1651,71 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       };
 
       const onCanPlay = () => {
+        if (cancelled) return;
+        if (stallTimer) {
+          clearTimeout(stallTimer);
+          stallTimer = null;
+        }
         setIsLoading(false);
         const shouldResume = autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current;
         performNativeSeek();
 
         if (shouldResume) {
-          video.play().catch(e => {
-            console.warn('Native autoplay blocked:', e);
+          setHasStarted(true);
+          video.play().catch((e) => {
+            if (e?.name !== 'AbortError') {
+              console.warn('Native autoplay blocked:', e);
+            }
           });
         }
       };
 
-      video.addEventListener('loadedmetadata', performNativeSeek, { once: true });
-      video.addEventListener('canplay', onCanPlay, { once: true });
+      const onCanPlayThrough = () => {
+        if (cancelled) return;
+        if (stallTimer) {
+          clearTimeout(stallTimer);
+          stallTimer = null;
+        }
+        setIsLoading(false);
+      };
+
+      const onStalled = () => {
+        if (cancelled || nativeStallRetried || video.paused) return;
+        if (stallTimer) clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => {
+          if (cancelled || nativeStallRetried || video.paused || video.readyState >= 3) return;
+          nativeStallRetried = true;
+          const resumeAt = video.currentTime || 0;
+          if (resumeAt > 0.5) {
+            targetSeekTimeRef.current = resumeAt;
+            savedSwitchTimeRef.current = resumeAt;
+            isInitialSeekDoneRef.current = false;
+          }
+          wasPlayingBeforeSwitchRef.current = true;
+          try {
+            video.load();
+          } catch {}
+        }, 12000);
+      };
+
+      video.addEventListener('loadedmetadata', performNativeSeek);
+      video.addEventListener('canplay', onCanPlay);
+      video.addEventListener('canplaythrough', onCanPlayThrough);
+      video.addEventListener('stalled', onStalled);
       video.load();
+
+      return () => {
+        cancelled = true;
+        if (stallTimer) clearTimeout(stallTimer);
+        video.removeEventListener('loadedmetadata', performNativeSeek);
+        video.removeEventListener('canplay', onCanPlay);
+        video.removeEventListener('canplaythrough', onCanPlayThrough);
+        video.removeEventListener('stalled', onStalled);
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+      };
     }
 
     return () => {
