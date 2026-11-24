@@ -41,6 +41,7 @@ export interface ContentItem {
   isPremium?: boolean;
   mature?: boolean;
   duration?: number; // seconds
+  verifiedDuration?: string;
   seasons?: number;
   episodes?: number;
   hasExternalSeasons?: boolean;
@@ -102,6 +103,7 @@ export interface Episode {
   episodeNumber: number;
   title: string;
   duration: number; // seconds
+  verifiedDuration?: string;
   thumbnailUrl: string;
   videoUrl: string;
   secondaryVideoUrl?: string;

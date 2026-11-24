@@ -25,6 +25,7 @@ import { MiniMusicPlayer } from '../components/music/MiniMusicPlayer';
 import { FullScreenMusicPlayer } from '../components/music/FullScreenMusicPlayer';
 import { MusicEqualizerModal } from '../components/music/MusicEqualizerModal';
 import { MusicHomeScreen } from '../screens/music/MusicHomeScreen';
+import { GlobalErrorBoundary } from '../components/common/GlobalErrorBoundary';
 import { motion, AnimatePresence } from 'motion/react';
 import { WifiOff, X, Download, ShieldAlert, ArrowUp, Bell } from 'lucide-react';
 
@@ -621,14 +622,22 @@ export const RootNavigator: React.FC = () => {
 
   // Handle Main App Tab Navigator
   return (
-    <MusicProvider>
-      <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
+    <GlobalErrorBoundary fallbackTitle="MaxPlay View Error">
+      <MusicProvider>
+        <div className="relative h-full w-full bg-[#0A0A0A] overflow-hidden">
         {/* Account Suspended Overlay Modal */}
         <SuspendedAccountModal />
 
-        {/* Persistent Active Tab Screens */}
+        {/* Persistent Active Tab Screens (GPU-accelerated layer caching eliminates layout reflow lag) */}
         <div className={`absolute inset-0 ${isCurrentDetailOpen ? 'pb-0 md:pb-0 md:pl-0' : 'pb-[calc(58px+max(env(safe-area-inset-bottom,0px),8px))] md:pb-0 md:pl-[80px]'}`}>
-          <div className={`h-full w-full ${activeTab === 'home' ? 'block' : 'hidden'}`}>
+          <div
+            className={`h-full w-full absolute inset-0 ${
+              activeTab === 'home'
+                ? 'opacity-100 pointer-events-auto visible z-10'
+                : 'opacity-0 pointer-events-none invisible z-0'
+            }`}
+            style={{ willChange: 'opacity' }}
+          >
             <HomeStack
               onSelectContent={(content) => {
                 console.log('Selected Content:', content);
@@ -639,7 +648,14 @@ export const RootNavigator: React.FC = () => {
             />
           </div>
 
-          <div className={`h-full w-full ${activeTab === 'downloads' ? 'block' : 'hidden'}`}>
+          <div
+            className={`h-full w-full absolute inset-0 ${
+              activeTab === 'downloads'
+                ? 'opacity-100 pointer-events-auto visible z-10'
+                : 'opacity-0 pointer-events-none invisible z-0'
+            }`}
+            style={{ willChange: 'opacity' }}
+          >
             <DownloadsScreen
               onPlayContent={(contentId) => {
                 const item = contentList.find((c) => c.id === contentId);
@@ -652,7 +668,14 @@ export const RootNavigator: React.FC = () => {
             />
           </div>
 
-          <div className={`h-full w-full ${activeTab === 'search' ? 'block' : 'hidden'}`}>
+          <div
+            className={`h-full w-full absolute inset-0 ${
+              activeTab === 'search'
+                ? 'opacity-100 pointer-events-auto visible z-10'
+                : 'opacity-0 pointer-events-none invisible z-0'
+            }`}
+            style={{ willChange: 'opacity' }}
+          >
             <SearchStack
               onSelectContent={(content) => {
                 console.log('Selected Content:', content);
@@ -661,11 +684,25 @@ export const RootNavigator: React.FC = () => {
             />
           </div>
 
-          <div className={`h-full w-full ${activeTab === 'music' ? 'block' : 'hidden'}`}>
+          <div
+            className={`h-full w-full absolute inset-0 ${
+              activeTab === 'music'
+                ? 'opacity-100 pointer-events-auto visible z-10'
+                : 'opacity-0 pointer-events-none invisible z-0'
+            }`}
+            style={{ willChange: 'opacity' }}
+          >
             <MusicHomeScreen onDetailOpenChange={handleMusicDetailChange} />
           </div>
 
-          <div className={`h-full w-full ${activeTab === 'anime' ? 'block' : 'hidden'}`}>
+          <div
+            className={`h-full w-full absolute inset-0 ${
+              activeTab === 'anime'
+                ? 'opacity-100 pointer-events-auto visible z-10'
+                : 'opacity-0 pointer-events-none invisible z-0'
+            }`}
+            style={{ willChange: 'opacity' }}
+          >
             <AnimeStack
               onOpenSearch={() => setActiveTab('search')}
               onSelectContent={(content) => {
@@ -675,7 +712,14 @@ export const RootNavigator: React.FC = () => {
             />
           </div>
 
-          <div className={`h-full w-full ${activeTab === 'me' ? 'block' : 'hidden'}`}>
+          <div
+            className={`h-full w-full absolute inset-0 ${
+              activeTab === 'me'
+                ? 'opacity-100 pointer-events-auto visible z-10'
+                : 'opacity-0 pointer-events-none invisible z-0'
+            }`}
+            style={{ willChange: 'opacity' }}
+          >
             <MeStack
               onLogout={logout}
               onPlayContent={(contentId) => {
@@ -815,7 +859,8 @@ export const RootNavigator: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
-      </div>
-    </MusicProvider>
+        </div>
+      </MusicProvider>
+    </GlobalErrorBoundary>
   );
 };

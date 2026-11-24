@@ -51,7 +51,9 @@ export class SmartStreamService {
       lower.includes("strtape.") ||
       lower.includes("shavetape.") ||
       lower.includes("streamta.pe") ||
-      lower.includes("tapecontent.net")
+      lower.includes("tapecontent.net") ||
+      lower.includes("strcloud.") ||
+      lower.includes("streamadblockplus.")
     ) {
       if (
         lower.includes("/get_video") ||
@@ -109,6 +111,9 @@ export class SmartStreamService {
       lower.includes("strtape.") ||
       lower.includes("shavetape.") ||
       lower.includes("streamta.pe") ||
+      lower.includes("animesalt.") ||
+      lower.includes("ravok.buzz") ||
+      lower.includes("as-cdn") ||
       /https?:\/\/[^\/]+\/(?:e|d|v|bkg)\/[a-z0-9_-]{6,}/i.test(lower)
     ) {
       return true;
@@ -254,6 +259,21 @@ export class SmartStreamService {
     }
 
     if (
+      isKotlinApp &&
+      trimmed.includes("/api/stream-proxy?url=")
+    ) {
+      const idx = trimmed.indexOf("/api/stream-proxy?url=");
+      const queryPart = trimmed.substring(idx + "/api/stream-proxy?url=".length);
+      const rawTarget = queryPart.split("&")[0];
+      try {
+        const decoded = decodeURIComponent(rawTarget);
+        if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+          return decoded;
+        }
+      } catch {}
+    }
+
+    if (
       trimmed.includes("/api/stream-proxy?url=") &&
       !trimmed.startsWith("/")
     ) {
@@ -345,8 +365,9 @@ export class SmartStreamService {
         }
       }
 
-      // Ensure Streamtape / Tapecontent direct MP4 streams are ALWAYS wrapped in /api/stream-proxy (both Web and Kotlin APK)
-      if (data?.m3u8Url && !data.m3u8Url.includes("/api/stream-proxy")) {
+      // In Web Browser, ensure Streamtape / Tapecontent direct MP4 streams are wrapped in /api/stream-proxy.
+      // In Kotlin APK, unwrap to direct URL so Chromium handles progressive streaming natively!
+      if (!isKotlinApp && data?.m3u8Url && !data.m3u8Url.includes("/api/stream-proxy")) {
         const lowerM3u8 = data.m3u8Url.toLowerCase();
         if (
           lowerM3u8.includes("streamtape.com/get_video") ||
@@ -354,6 +375,11 @@ export class SmartStreamService {
         ) {
           const ref = data.meta?.referer || "https://streamtape.com/";
           data.m3u8Url = `/api/stream-proxy?url=${encodeURIComponent(data.m3u8Url)}&referer=${encodeURIComponent(ref)}`;
+        }
+      } else if (isKotlinApp && data?.m3u8Url && data.m3u8Url.includes("/api/stream-proxy?url=")) {
+        const unwrapped = this.sanitizeStreamUrl(data.m3u8Url);
+        if (unwrapped) {
+          data.m3u8Url = unwrapped;
         }
       }
 
@@ -365,9 +391,11 @@ export class SmartStreamService {
           lowerM3u8.includes("owphbf") ||
           lowerM3u8.includes("r66nv9ed") ||
           lowerM3u8.includes("byse") ||
-          lowerM3u8.includes("filemoon")
+          lowerM3u8.includes("filemoon") ||
+          lowerM3u8.includes("ravok.buzz") ||
+          lowerM3u8.includes("as-cdn")
         ) {
-          const ref = data.meta?.referer || this.resolveEmbedReferer(cleanUrl) || "https://byseraguci.com/";
+          const ref = data.meta?.referer || this.resolveEmbedReferer(cleanUrl) || "https://animesalt.cx/";
           data.m3u8Url = `/proxy/m3u8?url=${encodeURIComponent(data.m3u8Url)}&referer=${encodeURIComponent(ref)}`;
         }
       }
@@ -498,6 +526,15 @@ export class SmartStreamService {
 
     const lower = trimmed.toLowerCase();
     if (
+      lower.includes("ravok.buzz") ||
+      lower.includes("as-cdn")
+    ) {
+      return "https://ravok.buzz/";
+    }
+    if (lower.includes("animesalt.")) {
+      return "https://animesalt.cx/";
+    }
+    if (
       lower.includes("sprintcdn") ||
       lower.includes("owphbf") ||
       lower.includes("r66nv9ed") ||
@@ -599,6 +636,85 @@ export class SmartStreamService {
     if (!trimmed || !this.isExtractableSource(trimmed)) return;
     if (this.getClientCache(trimmed) || this.inFlightMap.has(trimmed)) return;
     this.resolveStream(trimmed, { forceRefresh: false }).catch(() => {});
+  }
+
+  /**
+   * Zero-Delay Card Tap Pre-Extractor: fires the primary server's stream extraction the VERY millisecond
+   * a user taps a movie/series/anime card (before Details Screen even finishes mounting/animating!).
+   * Because resolveStream deduplicates via inFlightMap, InlinePlayer joins this exact running Promise!
+   */
+  public static prefetchContentItem(item: any): void {
+    try {
+      if (!item || typeof item !== "object" || item.isCollection) return;
+      const isMovie = item.type === "movie";
+      let targetObj: any = item;
+      if (!isMovie) {
+        const firstSeasonEp = item.seasonsData?.[0]?.episodes?.[0];
+        const firstEpList = item.episodesList?.[0];
+        if (firstSeasonEp) targetObj = firstSeasonEp;
+        else if (firstEpList) targetObj = firstEpList;
+      } else if (Array.isArray(item.parts) && item.parts.length > 0) {
+        targetObj = item.parts[0];
+      }
+
+      let preferredQ = "720p";
+      try {
+        const savedPref = localStorage.getItem("maxplay_preferred_quality") || localStorage.getItem("maxplay_video_quality");
+        if (savedPref && savedPref.trim()) preferredQ = savedPref.trim();
+      } catch {}
+
+      // Robustly extract qualityLinks and fallbackUrl across both modern videoSources and legacy qualityLinks
+      let activeQualityLinks: Record<string, string> = {};
+      let fallbackUrl = targetObj?.videoUrl || targetObj?.streamUrl || item?.videoUrl || "";
+
+      const vSources = targetObj?.videoSources || item?.videoSources;
+      if (vSources && typeof vSources === "object" && Object.keys(vSources).length > 0) {
+        let savedLang = "";
+        try {
+          savedLang = localStorage.getItem("maxplay_preferred_language") || "";
+        } catch {}
+        const langKey =
+          (savedLang && Object.keys(vSources).find((k) => k.toLowerCase() === savedLang.toLowerCase())) ||
+          (vSources["Default"] ? "Default" : Object.keys(vSources)[0]);
+        const langVal = vSources[langKey];
+        if (langVal && typeof langVal === "object") {
+          activeQualityLinks = { ...(targetObj?.qualityLinks || item?.qualityLinks || {}), ...langVal };
+        } else if (typeof langVal === "string" && langVal.trim().length > 0) {
+          fallbackUrl = langVal.trim();
+        }
+      }
+
+      if (Object.keys(activeQualityLinks).length === 0) {
+        activeQualityLinks = targetObj?.qualityLinks || item?.qualityLinks || {};
+      }
+
+      const pickUrl = (rawUrl?: string, qLinks?: Record<string, string>) => {
+        const res = this.selectSourceUrlForQuality(rawUrl || "", qLinks || undefined, preferredQ);
+        const chosen = res.chosenUrl || res.url || "";
+        return chosen && this.isExtractableSource(chosen) ? chosen : "";
+      };
+
+      const candidate =
+        pickUrl(fallbackUrl, activeQualityLinks) ||
+        pickUrl(targetObj?.tertiaryVideoUrl || item?.tertiaryVideoUrl, targetObj?.tertiaryQualityLinks || item?.tertiaryQualityLinks) ||
+        pickUrl(targetObj?.secondaryVideoUrl || item?.secondaryVideoUrl, targetObj?.secondaryQualityLinks || item?.secondaryQualityLinks) ||
+        (this.isExtractableSource(fallbackUrl) ? fallbackUrl : "");
+
+      if (candidate) {
+        this.prefetchStream(candidate);
+      }
+
+      // Pre-warm remaining alternate qualities in the background (e.g. 1080p if user starts on 720p)
+      if (activeQualityLinks && typeof activeQualityLinks === "object") {
+        Object.values(activeQualityLinks).forEach((altUrl) => {
+          if (typeof altUrl === "string" && altUrl !== candidate && this.isExtractableSource(altUrl)) {
+            setTimeout(() => {
+              this.prefetchStream(altUrl);
+            }, 600);
+          }
+        });
+      }
+    } catch {}
   }
 
   /**
@@ -1204,30 +1320,51 @@ export class SmartStreamService {
         !lower.includes("streamtape.") &&
         !lower.includes("strtape.") &&
         !lower.includes("shavetape.") &&
-        !lower.includes("streamta.pe")
+        !lower.includes("streamta.pe") &&
+        !lower.includes("strcloud.") &&
+        !lower.includes("streamadblockplus.")
       ) {
         return { ok: false };
       }
 
       const isKotlinApp = NativeBridgeService.isRunningInKotlinApp();
-      const refererUrl = "https://streamtape.com/";
+      const refererUrl = "https://streamta.pe/";
       let html = "";
 
-      if (isKotlinApp) {
-        html = await NativeBridgeService.fetchTextCorsFree(trimmed, { Referer: refererUrl }).catch(() => "");
+      const fileIdMatch = trimmed.match(/\/(?:v|e)\/([a-zA-Z0-9_-]+)/i);
+      const fileId = fileIdMatch ? fileIdMatch[1] : null;
+
+      const candidatesToTry: string[] = [];
+      if (fileId) {
+        candidatesToTry.push(`https://streamta.pe/v/${fileId}`);
+        candidatesToTry.push(`https://strcloud.link/v/${fileId}`);
+        candidatesToTry.push(`https://strtape.tech/v/${fileId}`);
+        candidatesToTry.push(`https://streamadblockplus.com/v/${fileId}`);
+      } else {
+        candidatesToTry.push(trimmed.replace(/streamtape\.com/i, "streamta.pe"));
       }
-      if (!html) {
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(trimmed)}&referer=${encodeURIComponent(refererUrl)}`;
-        const resp = await fetch(proxyUrl).catch(() => null);
-        if (resp && resp.ok) {
-          html = await resp.text().catch(() => "");
+
+      for (const targetUrl of candidatesToTry) {
+        const mirrorReferer = targetUrl.includes("streamta.pe") ? "https://streamta.pe/" : refererUrl;
+        if (isKotlinApp) {
+          html = await NativeBridgeService.fetchTextCorsFree(targetUrl, { Referer: mirrorReferer }).catch(() => "");
+        }
+        if (!html) {
+          const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(mirrorReferer)}`;
+          const resp = await fetch(proxyUrl).catch(() => null);
+          if (resp && resp.ok) {
+            html = await resp.text().catch(() => "");
+          }
+        }
+        if (html && (html.includes("get_video") || html.includes("token="))) {
+          break;
         }
       }
       if (!html) return { ok: false };
 
-      // Find all getElementById('robotlink'|'ideoolink'|'botlink').innerHTML = ... assignments
-      // Streamtape places a fake token trap first and the real token calculation last!
-      const assignRegex = /getElementById\s*\(\s*['"](?:robotlink|ideoolink|botlink)['"]\s*\)\.innerHTML\s*=\s*([^;]+);/gi;
+      // Find all getElementById('ideoooolink'|'captchalink'|'norobotlink'|'robotlink'|'ideoolink'|'botlink').innerHTML = ... assignments
+      // Streamtape places fake token traps first and the real token calculation last!
+      const assignRegex = /getElementById\s*\(\s*['"](?:ideoooolink|captchalink|norobotlink|robotlink|ideoolink|botlink)['"]\s*\)\.innerHTML\s*=\s*([^;]+);/gi;
       const expressions: string[] = [];
       let match: RegExpExecArray | null;
       while ((match = assignRegex.exec(html)) !== null) {
@@ -1248,9 +1385,13 @@ export class SmartStreamService {
       if (resolvedGetVideo.startsWith("//")) {
         resolvedGetVideo = `https:${resolvedGetVideo}`;
       } else if (resolvedGetVideo.startsWith("/")) {
-        resolvedGetVideo = `https://streamtape.com${resolvedGetVideo}`;
+        resolvedGetVideo = `https://streamta.pe${resolvedGetVideo}`;
       } else if (!/^https?:\/\//i.test(resolvedGetVideo)) {
         resolvedGetVideo = `https://${resolvedGetVideo.replace(/^\/+/, "")}`;
+      }
+
+      if (resolvedGetVideo.includes("streamtape.com/get_video")) {
+        resolvedGetVideo = resolvedGetVideo.replace(/streamtape\.com\/get_video/i, "streamta.pe/get_video");
       }
 
       if (!resolvedGetVideo.includes("stream=1")) {
@@ -1342,18 +1483,27 @@ export class SmartStreamService {
       lowerUrl.includes("streamtape.") ||
       lowerUrl.includes("strtape.") ||
       lowerUrl.includes("shavetape.") ||
-      lowerUrl.includes("streamta.pe");
+      lowerUrl.includes("streamta.pe") ||
+      lowerUrl.includes("strcloud.") ||
+      lowerUrl.includes("streamadblockplus.");
+    const isAnimeSalt =
+      lowerUrl.includes("animesalt.") ||
+      lowerUrl.includes("ravok.buzz") ||
+      lowerUrl.includes("as-cdn");
 
-    // 1.1 Priority Tier (Android APK): Only run Native Kotlin Scraper on non-Streamtape & non-Byse links
-    // (with a strict 3.5s cap so dead VOE Server 1 links fail over to Server 2 in < 3.5s, and Streamtape/Byse never block on the 16.5s WebView sniffer!)
-    if (isKotlinApp && !isStreamtape && !isByseOrFilemoon) {
+    // 1.1 Priority Tier (Android APK): Run high-speed Native Kotlin Scraper directly on device (Zero CORS)
+    // for ALL servers (Server 1 VOE, Server 2 Streamtape, Server 3 Byse/Filemoon, and AnimeSalt).
+    // Uses a generous timeout on cold start so Kotlin's native 4-thread PoW + fast mirror scraper completes
+    // instead of getting abandoned prematurely into slow single-threaded JS fallback.
+    if (isKotlinApp) {
       try {
+        const nativeTimeoutMs = 10000;
         const nativeRes = await Promise.race([
           NativeBridgeService.extractStreamNative(trimmed),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), nativeTimeoutMs)),
         ]);
         if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
-          const ttlMs = 170 * 60 * 1000;
+          const ttlMs = isStreamtape ? 30 * 60 * 1000 : (isAnimeSalt ? 20 * 60 * 1000 : 170 * 60 * 1000);
           const expiresAt = Date.now() + ttlMs;
           const refHeader = nativeRes.headers?.Referer || nativeRes.headers?.referer || this.resolveEmbedReferer(trimmed);
           this.registerStreamHostReferer(nativeRes.m3u8Url, refHeader);
@@ -1382,8 +1532,8 @@ export class SmartStreamService {
       }
     }
 
-    // 2. Call backend proxy endpoint (/api/extract-stream has 0ms in-memory PoW/playback cache for Byse & IP-matched /api/stream-proxy for Streamtape)
-    try {
+    // 2. Call backend proxy endpoint (skip inside local Android APK where /api/extract-stream is an offline stub returning ok:false)
+    if (!isKotlinApp) try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), isByseOrFilemoon || isStreamtape ? 15000 : 8000);
 
@@ -1412,7 +1562,7 @@ export class SmartStreamService {
         // CRITICAL: For Streamtape / direct MP4 streams, ALWAYS use result.m3u8Url (/api/stream-proxy?url=...)
         // even inside the Kotlin Android APK so the playback IP matches the server extraction IP and Referer is attached!
         const chosenM3u8 = isDirectMp4Stream
-          ? result.m3u8Url
+          ? (isKotlinApp && result.rawM3u8Url ? result.rawM3u8Url : result.m3u8Url)
           : isKotlinApp
           ? (result.rawM3u8Url || result.m3u8Url)
           : result.m3u8Url;
@@ -1456,9 +1606,11 @@ export class SmartStreamService {
             const ttlMs = 25 * 60 * 1000;
             const expiresAt = Date.now() + ttlMs;
             const refUrl = clientSt.meta?.referer || "https://streamtape.com/";
-            const chosenUrl = clientSt.m3u8Url.includes("/api/stream-proxy")
+            const chosenUrl = isKotlinApp
               ? clientSt.m3u8Url
-              : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`;
+              : (clientSt.m3u8Url.includes("/api/stream-proxy")
+                  ? clientSt.m3u8Url
+                  : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`);
             const meta: CachedStreamMetadata = {
               ...(clientSt.meta || {}),
               rawM3u8Url: clientSt.m3u8Url,
@@ -1525,9 +1677,11 @@ export class SmartStreamService {
         const ttlMs = 25 * 60 * 1000;
         const expiresAt = Date.now() + ttlMs;
         const refUrl = clientSt.meta?.referer || "https://streamtape.com/";
-        const chosenUrl = clientSt.m3u8Url.includes("/api/stream-proxy")
+        const chosenUrl = isKotlinApp
           ? clientSt.m3u8Url
-          : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`;
+          : (clientSt.m3u8Url.includes("/api/stream-proxy")
+              ? clientSt.m3u8Url
+              : `/api/stream-proxy?url=${encodeURIComponent(clientSt.m3u8Url)}&referer=${encodeURIComponent(refUrl)}`);
         const meta: CachedStreamMetadata = {
           ...(clientSt.meta || {}),
           rawM3u8Url: clientSt.m3u8Url,
@@ -1776,8 +1930,11 @@ export class SmartStreamService {
       }
     } catch {}
 
-    // 2. Smart Network & RAM Detection
-    let priorityOrder = ["720p", "1080p", "480p", "360p"];
+    // 2. Smart Network & RAM Detection (Fast-Start Auto Strategy)
+    // NOTE: Android WebView routinely reports navigator.connection.downlink === 10 even on average mobile/Wi-Fi.
+    // On multi-quality separate-URL cards, starting Auto on 720p HD avoids heavy 1080p cold-start stalls while
+    // keeping crisp HD quality immediately (users can still explicitly pick 1080p in Quality Selector or Settings).
+    let priorityOrder = ["720p", "480p", "1080p", "360p"];
     try {
       const nav = typeof navigator !== "undefined" ? (navigator as any) : null;
       const conn = nav?.connection || nav?.mozConnection || nav?.webkitConnection;
@@ -1795,12 +1952,12 @@ export class SmartStreamService {
       ) {
         // Weak network: start with 480p or 360p for instant playback
         priorityOrder = ["480p", "360p", "720p", "1080p"];
-      } else if (deviceRamGb <= 4 || (downlink >= 2.5 && downlink <= 6.5)) {
-        // 4GB RAM phone or normal 4G: start with 720p or 480p for smooth lag-free playback
+      } else if (deviceRamGb <= 4) {
+        // 4GB RAM phone: prioritize lightweight HD 720p -> 480p for lag-free playback
+        priorityOrder = ["720p", "480p", "360p", "1080p"];
+      } else {
+        // Normal/Fast Wi-Fi / 4G / 5G: start crisp 720p HD first for ultra-fast startup & instant seeking
         priorityOrder = ["720p", "480p", "1080p", "360p"];
-      } else if (downlink > 6.5) {
-        // Fast Wi-Fi / 5G: start with 1080p or 720p
-        priorityOrder = ["1080p", "720p", "480p", "360p"];
       }
     } catch {}
 

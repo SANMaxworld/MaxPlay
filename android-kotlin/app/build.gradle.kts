@@ -18,6 +18,15 @@ android {
         manifestPlaceholders["appLabel"] = if (isAdminApp) "MaxPlay Admin" else "MaxPlay"
     }
 
+    // Security: NEVER package admin.html, server.cjs, or sourcemaps inside the regular User APK!
+    androidResources {
+        ignoreAssetsPattern = if (isAdminApp) {
+            "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:server.cjs:server.cjs.map:*.map"
+        } else {
+            "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:admin.html:server.cjs:server.cjs.map:*.map"
+        }
+    }
+
     signingConfigs {
         create("release") {
             val keystoreFile = file("release.keystore")

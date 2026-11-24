@@ -145,10 +145,11 @@ export const HeroBannerCarousel: React.FC<HeroBannerCarouselProps> = React.memo(
     });
   }, [safeBanners]);
 
-  // Auto-advance timer with clean slide direction
+  // Auto-advance timer with clean slide direction (pauses automatically when Detail screen or video player is active to prevent background GPU/RAM lag!)
   useEffect(() => {
     if (safeBannersCount <= 1) return;
     const timer = setInterval(() => {
+      if (document.hidden || (window as any).__maxplayIsHomeTopVisible === false) return;
       setDirection(1);
       setPage((prev) => prev + 1);
     }, 6000);

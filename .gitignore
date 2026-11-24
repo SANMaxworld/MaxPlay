@@ -11,3 +11,10 @@ firebase_applet_config.xml
 public/assets/aistudio/
 android-kotlin/app/src/main/assets/webapp/*
 !android-kotlin/app/src/main/assets/webapp/.gitkeep
+
+# Android build cache and local config
+android-kotlin/.gradle/
+android-kotlin/local.properties
+android-kotlin/app/build/
+android-kotlin/.idea/
+*.iml

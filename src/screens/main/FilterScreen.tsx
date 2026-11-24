@@ -313,7 +313,7 @@ export const FilterScreen: React.FC<FilterScreenProps> = ({
           <span>Showing {filteredData.length} items</span>
         </div>
 
-        <NativeBanner />
+        <NativeBanner screen="filter" />
 
         {/* Results Grid */}
         {loading ? (

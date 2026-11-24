@@ -230,7 +230,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
         <h2 className="text-lg font-bold text-white">Settings</h2>
       </div>
 
-      <NativeBanner />
+      <NativeBanner screen="settings" />
 
       {/* SECTION 1: Your app and preferences */}
       <div className="mt-4 flex flex-col gap-2">

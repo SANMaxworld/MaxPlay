@@ -223,7 +223,7 @@ class DownloadManagerService {
       initialBytes + 5 * 1024 * 1024
     );
 
-    const hasActiveDownload = this.activeTaskIds.size > 0;
+    const hasActiveDownload = this.activeTaskIds.size >= this.maxConcurrentDownloads;
 
     const newTask: DownloadTask = {
       taskId: `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -258,32 +258,58 @@ class DownloadManagerService {
     return newTask;
   }
 
+  private maxConcurrentDownloads: number = (() => {
+    try {
+      const saved = Number(localStorage.getItem('maxplay_max_concurrent_downloads'));
+      return saved >= 1 && saved <= 3 ? saved : 1;
+    } catch {
+      return 1;
+    }
+  })();
+
+  public getMaxConcurrentDownloads(): number {
+    return this.maxConcurrentDownloads;
+  }
+
+  public setMaxConcurrentDownloads(limit: number): void {
+    const clamped = Math.max(1, Math.min(3, limit));
+    this.maxConcurrentDownloads = clamped;
+    try {
+      localStorage.setItem('maxplay_max_concurrent_downloads', String(clamped));
+    } catch {}
+    this.processQueue();
+  }
+
   /**
-   * Ensures strictly 1 download runs at a time, automatically starting the next 'queued' task
-   * as soon as the active download completes or is paused/cancelled.
+   * Schedules downloads based on user concurrency setting (1, 2, or 3 concurrent downloads).
+   * Automatically starts queued tasks as soon as an active worker completes.
    */
   private processQueue() {
-    if (this.isProcessingQueue || this.activeTaskIds.size > 0) return;
+    if (this.isProcessingQueue) return;
+    this.isProcessingQueue = true;
 
-    const nextTask =
-      this.tasks.find(
-        (t) => t.status === 'downloading' && !this.activeTaskIds.has(t.taskId)
-      ) ||
-      this.tasks.find(
-        (t) => t.status === 'queued' && !this.activeTaskIds.has(t.taskId)
-      );
+    while (this.activeTaskIds.size < this.maxConcurrentDownloads) {
+      const nextTask =
+        this.tasks.find(
+          (t) => t.status === 'downloading' && !this.activeTaskIds.has(t.taskId)
+        ) ||
+        this.tasks.find(
+          (t) => t.status === 'queued' && !this.activeTaskIds.has(t.taskId)
+        );
 
-    if (!nextTask) {
-      NativeBridgeService.setBackgroundDownloadState(false);
-      return;
+      if (!nextTask) {
+        if (this.activeTaskIds.size === 0) {
+          NativeBridgeService.setBackgroundDownloadState(false);
+        }
+        break;
+      }
+
+      nextTask.status = 'downloading';
+      this.saveState();
+      this.executeTask(nextTask);
     }
 
-    this.isProcessingQueue = true;
-    nextTask.status = 'downloading';
-    this.saveState();
     this.isProcessingQueue = false;
-
-    this.executeTask(nextTask);
   }
 
   /**
@@ -601,7 +627,7 @@ class DownloadManagerService {
       this.saveState();
     } else {
       // Resume from 'paused' or 'failed' (automatically continues from disk segment checkpoint!)
-      const hasActive = this.activeTaskIds.size > 0;
+      const hasActive = this.activeTaskIds.size >= this.maxConcurrentDownloads;
       task.status = hasActive ? 'queued' : 'downloading';
       task.downloadSpeedMb = 0;
       this.saveState();

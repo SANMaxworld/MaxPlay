@@ -243,7 +243,7 @@ export const MyCommentsScreen: React.FC<MyCommentsScreenProps> = ({
         </button>
       </div>
 
-      <NativeBanner />
+      <NativeBanner screen="settings" />
 
       {/* CONTENT LISTING */}
       <div className="mt-4 flex flex-col gap-4">

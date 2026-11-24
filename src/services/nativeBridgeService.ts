@@ -39,6 +39,7 @@ interface MaxPlayKotlinBridge {
   fetchUrlCorsFreeAsync?: (targetUrl: string, headersJson: string, callbackId: string) => void;
   fetchBytesBase64CorsFree?: (targetUrl: string, headersJson: string) => string;
   setLandscapeOrientation?: (locked: boolean) => void;
+  triggerHapticFeedback?: (patternType?: string) => void;
   setBrightness?: (percent: number) => void;
   getBrightness?: () => number;
   setVolume?: (percent: number) => void;
@@ -65,6 +66,7 @@ interface MaxPlayKotlinBridge {
     refererUrl: string,
     callbackId: string
   ) => void;
+  cancelDirectDownload?: (storageKey: string) => void;
   saveOfflineManifest?: (
     storageKey: string,
     totalSegments: number,
@@ -239,13 +241,21 @@ if (typeof window !== 'undefined') {
   window.__maxplayDirectDownloadCallbacks = window.__maxplayDirectDownloadCallbacks || {};
   window.__onMaxPlayDirectDownloadProgress = (
     callbackId: string,
-    downloadedBytes: number,
-    totalBytes: number,
-    speedBps: number
+    downloadedBytes: any,
+    totalBytes?: number,
+    speedBps?: number
   ) => {
+    let dl = downloadedBytes;
+    let tot = totalBytes;
+    let spd = speedBps;
+    if (typeof downloadedBytes === 'object' && downloadedBytes !== null) {
+      dl = downloadedBytes.downloadedBytes;
+      tot = downloadedBytes.totalBytes;
+      spd = downloadedBytes.speedBps;
+    }
     const entry = window.__maxplayDirectDownloadCallbacks?.[callbackId];
     if (entry?.onProgress) {
-      entry.onProgress(downloadedBytes, totalBytes, speedBps);
+      entry.onProgress(Number(dl) || 0, Number(tot) || 0, Number(spd) || 0);
     }
   };
   window.__onMaxPlayDirectDownloadComplete = (callbackId: string, res: any) => {
@@ -278,6 +288,26 @@ export class NativeBridgeService {
    */
   public static isAndroidWebView(): boolean {
     return this.isRunningInKotlinApp();
+  }
+
+  /**
+   * Triggers a subtle tactile haptic vibration tick on the user's phone
+   * for responsive native feel (e.g. on episode click, seek, volume boost, download).
+   */
+  public static triggerHaptic(type: 'light' | 'medium' | 'heavy' | 'double' = 'light'): void {
+    try {
+      const bridge = (window as any).MaxPlayNative;
+      if (bridge && typeof bridge.triggerHapticFeedback === 'function') {
+        bridge.triggerHapticFeedback(type);
+        return;
+      }
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        if (type === 'double') navigator.vibrate([15, 60, 15]);
+        else if (type === 'heavy') navigator.vibrate(45);
+        else if (type === 'medium') navigator.vibrate(26);
+        else navigator.vibrate(12);
+      }
+    } catch {}
   }
 
   /**
@@ -459,6 +489,7 @@ export class NativeBridgeService {
         inactivityTimer = setTimeout(() => {
           if (window.__maxplayDirectDownloadCallbacks?.[callbackId]) {
             delete window.__maxplayDirectDownloadCallbacks[callbackId];
+            this.cancelDirectDownloadNative(storageKey);
             resolve({ ok: false, error: 'Direct download inactivity timeout' });
           }
         }, 90000);
@@ -475,7 +506,7 @@ export class NativeBridgeService {
         onComplete: (res: any) => {
           if (inactivityTimer) clearTimeout(inactivityTimer);
           if (res && res.ok) {
-            resolve({ ok: true, bytes: Number(res.bytes || 0) });
+            resolve({ ok: true, bytes: Number(res.bytes ?? res.totalBytes ?? 0) });
           } else {
             resolve({ ok: false, error: res?.error || 'Direct file download failed' });
           }
@@ -495,6 +526,18 @@ export class NativeBridgeService {
         resolve({ ok: false, error: e?.message || 'Bridge exception' });
       }
     });
+  }
+
+  /**
+   * Immediately cancels any active Kotlin direct file download workers for the given storageKey
+   * so pausing/cancelling/retrying never leaves zombie HTTP threads writing to the same .part file.
+   */
+  public static cancelDirectDownloadNative(storageKey: string): void {
+    try {
+      if (this.isRunningInKotlinApp() && typeof window.MaxPlayNative?.cancelDirectDownload === 'function') {
+        window.MaxPlayNative.cancelDirectDownload(storageKey);
+      }
+    } catch {}
   }
 
   /**
@@ -888,19 +931,21 @@ export class NativeBridgeService {
           lowerMaster.split('?')[0].endsWith('.mp4') ||
           lowerMaster.split('?')[0].endsWith('.mkv');
 
-        const parseCapMs = requestedDurationSec > 0 ? 1200 : 250;
-        const meta = isDirectMp4Master
-          ? fallbackMeta
-          : await Promise.race([
-              this.parseHlsManifestOnDevice(
-                masterUrl,
-                customHeaders,
-                requestedDurationSec,
-                scrapeData.byseMeta,
-                requestedDurationSec <= 0
-              ),
-              new Promise<typeof fallbackMeta>((resolve) => setTimeout(() => resolve(fallbackMeta), parseCapMs)),
-            ]);
+        // Fast-path for live playback (requestedDurationSec <= 0): return immediately without blocking on a redundant master .m3u8 fetch!
+        // hls.js fetches the exact same master manifest right away and emits discovered qualities & audio tracks.
+        const meta =
+          isDirectMp4Master || requestedDurationSec <= 0
+            ? fallbackMeta
+            : await Promise.race([
+                this.parseHlsManifestOnDevice(
+                  masterUrl,
+                  customHeaders,
+                  requestedDurationSec,
+                  scrapeData.byseMeta,
+                  false
+                ),
+                new Promise<typeof fallbackMeta>((resolve) => setTimeout(() => resolve(fallbackMeta), 1200)),
+              ]);
 
         return {
           ok: true,
@@ -1719,6 +1764,25 @@ export class NativeBridgeService {
       }
     } catch {}
     return false;
+  }
+
+  /**
+   * Opens any URL in external Chrome / default browser (Android Intent in APK, window.open in web).
+   */
+  public static openExternalUrl(url: string): boolean {
+    if (!url) return false;
+    try {
+      if (this.isRunningInKotlinApp() && typeof (window as any).MaxPlayNative?.openExternalUrl === 'function') {
+        return Boolean((window as any).MaxPlayNative.openExternalUrl(url));
+      }
+    } catch {}
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return true;
+    } catch {
+      window.location.href = url;
+      return true;
+    }
   }
 
   private static activeWakeLock: any = null;

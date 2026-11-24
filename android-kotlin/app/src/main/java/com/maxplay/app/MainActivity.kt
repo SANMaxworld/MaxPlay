@@ -43,12 +43,31 @@ class MainActivity : AppCompatActivity() {
     var autoPipEnabled: Boolean = true
     @Volatile
     var isVideoCurrentlyPlaying: Boolean = false
+    @Volatile
+    var isMusicCurrentlyPlaying: Boolean = false
     private var popunderDialog: android.app.Dialog? = null
     private var popunderWebView: WebView? = null
+    private var pipReceiverRegistered: Boolean = false
+
+    private val pipActionReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            if (intent?.action == ACTION_PIP_PLAY_PAUSE) {
+                runOnUiThread {
+                    try {
+                        webView.evaluateJavascript(
+                            "window.__maxplayPipTogglePlayPause && window.__maxplayPipTogglePlayPause();",
+                            null
+                        )
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
 
     fun getScraperContainer(): ViewGroup = rootContainer
 
     companion object {
+        const val ACTION_PIP_PLAY_PAUSE = "com.maxplay.app.ACTION_PIP_PLAY_PAUSE"
         // Primary entry: HTTPS virtual origin mapped to assets/webapp/ inside APK (avoids file:// ES module & path block!)
         const val LOCAL_BUNDLE_URL = "https://appassets.androidplatform.net/index.html"
         const val LOCAL_ADMIN_BUNDLE_URL = "https://appassets.androidplatform.net/admin.html"
@@ -86,12 +105,31 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
 
         rootContainer.addView(webView)
+
+        try {
+            val filter = android.content.IntentFilter(ACTION_PIP_PLAY_PAUSE)
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(pipActionReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(pipActionReceiver, filter)
+            }
+            pipReceiverRegistered = true
+        } catch (_: Exception) {}
         setContentView(rootContainer)
 
         configureCorsFreeWebView()
+
+        // Pre-warm OkHttp connection pool, DNS stack, ECDSA crypto provider, Byse attestation & persisted mirrors on launch
+        // so first-install video playback starts in 1-2 seconds!
+        StreamtapeExtractor.globalCachedMainUa = webView.settings.userAgentString
+        InbuiltStreamScraper.prewarmNetworkingAndCrypto(applicationContext)
 
         val isAdminApp = packageName.endsWith(".admin", ignoreCase = true)
 
@@ -121,9 +159,11 @@ class MainActivity : AppCompatActivity() {
         createNotificationChannel()
         requestStartupPermissions()
 
-        // Start native background poller for Firestore Admin messages so notifications arrive even when minimized
+        // Start native background poller & schedule JobService / Alarm for notifications when app is closed / phone is idle
         if (!isAdminApp) {
             startBackgroundAnnouncementMonitor()
+            MaxPlayNotificationJobService.schedule(applicationContext)
+            MaxPlayNotificationAlarmReceiver.scheduleAlarm(applicationContext)
         }
 
         // Check if launched from tapping a status-bar notification
@@ -164,6 +204,30 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleNotificationIntent(intent)
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val action = event.action
+        val keyCode = event.keyCode
+        if (action == android.view.KeyEvent.ACTION_DOWN) {
+            if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+                val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+                if (audioManager != null) {
+                    val currentVol = audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                    val maxVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                    if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP && currentVol >= maxVol) {
+                        runOnUiThread {
+                            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('MAXPLAY_HARDWARE_VOLUME_UP'));", null)
+                        }
+                    } else if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+                        runOnUiThread {
+                            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('MAXPLAY_HARDWARE_VOLUME_DOWN'));", null)
+                        }
+                    }
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun handleNotificationIntent(intent: android.content.Intent?) {
@@ -233,32 +297,41 @@ class MainActivity : AppCompatActivity() {
             domStorageEnabled = true
             databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
-            allowFileAccess = true
+            allowFileAccess = false
             allowContentAccess = true
 
-            // Critical: Disable browser CORS restrictions for local & cross-origin requests!
+            // Security: App runs on https://appassets.androidplatform.net/, so disable dangerous file:// SOP bypasses!
             @Suppress("DEPRECATION")
-            allowFileAccessFromFileURLs = true
+            allowFileAccessFromFileURLs = false
             @Suppress("DEPRECATION")
-            allowUniversalAccessFromFileURLs = true
+            allowUniversalAccessFromFileURLs = false
 
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             cacheMode = WebSettings.LOAD_DEFAULT
             userAgentString = InbuiltStreamScraper.DEFAULT_USER_AGENT
         }
 
-        // Attach Native Kotlin Bridge (`window.MaxPlayNative`)
-        webView.addJavascriptInterface(MaxPlayNativeBridge(this, webView), "MaxPlayNative")
+        // Attach Native Kotlin Bridge (`window.MaxPlayNative` & `window.AndroidNative`)
+        val nativeBridge = MaxPlayNativeBridge(this, webView)
+        webView.addJavascriptInterface(nativeBridge, "MaxPlayNative")
+        webView.addJavascriptInterface(nativeBridge, "AndroidNative")
 
-        // Attach CORS-Free OkHttp Interceptor & HTTPS Local Asset Client
-        webView.webViewClient = CorsFreeWebViewClient(this)
+        // Attach CORS-Free OkHttp Interceptor & HTTPS Local Asset Client with WebView renderer crash recovery
+        webView.webViewClient = CorsFreeWebViewClient(this) {
+            recoverFromWebViewCrash()
+        }
 
         // Fullscreen HTML5 Video, File Chooser (Local Video & .maxplay Receive), Microphone Permission & Orientation Handler
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
                 runOnUiThread {
                     try {
-                        request?.grant(request.resources)
+                        val reqHost = request?.origin?.host?.lowercase() ?: ""
+                        if (reqHost == CorsFreeWebViewClient.VIRTUAL_ASSET_HOST || reqHost == "maxplay.local") {
+                            request?.grant(request.resources)
+                        } else {
+                            request?.deny()
+                        }
                     } catch (_: Exception) {}
                 }
             }
@@ -436,6 +509,55 @@ class MainActivity : AppCompatActivity() {
 
     fun setVideoPlayingState(isPlaying: Boolean) {
         isVideoCurrentlyPlaying = isPlaying
+        updatePipPlaybackState(isPlaying)
+    }
+
+    fun buildPipParams(isPlaying: Boolean): android.app.PictureInPictureParams? {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return null
+        return try {
+            val metrics = resources.displayMetrics
+            val screenWidth = metrics.widthPixels
+            val videoHeight = ((screenWidth * 9) / 16).coerceAtLeast(1)
+            val sourceRect = android.graphics.Rect(0, 0, screenWidth, videoHeight)
+
+            val iconRes = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+            val title = if (isPlaying) "Pause" else "Play"
+            val intent = android.content.Intent(ACTION_PIP_PLAY_PAUSE).setPackage(packageName)
+            val flags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pendingIntent = android.app.PendingIntent.getBroadcast(this, 9401, intent, flags)
+            val action = android.app.RemoteAction(
+                android.graphics.drawable.Icon.createWithResource(this, iconRes),
+                title,
+                title,
+                pendingIntent
+            )
+
+            android.app.PictureInPictureParams.Builder()
+                .setAspectRatio(android.util.Rational(16, 9))
+                .setSourceRectHint(sourceRect)
+                .setActions(listOf(action))
+                .build()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun updatePipPlaybackState(isPlaying: Boolean) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            try {
+                if (isInPictureInPictureMode) {
+                    runOnUiThread {
+                        try {
+                            buildPipParams(isPlaying)?.let { setPictureInPictureParams(it) }
+                        } catch (_: Exception) {}
+                    }
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     /**
@@ -473,7 +595,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Enters native Android Picture-in-Picture (PiP) floating window mode (Android 8.0+).
-     * Immediately notifies the React player so ONLY the video player fills the PiP window.
+     * Focuses ONLY on the top 16:9 video player and attaches native Play/Pause remote actions!
      */
     fun enterNativePipMode(): Boolean {
         return try {
@@ -484,9 +606,10 @@ class MainActivity : AppCompatActivity() {
                             "window.__onMaxPlayPipModeChanged && window.__onMaxPlayPipModeChanged(true);",
                             null
                         )
-                        val params = android.app.PictureInPictureParams.Builder()
-                            .setAspectRatio(android.util.Rational(16, 9))
-                            .build()
+                        val params = buildPipParams(isVideoCurrentlyPlaying)
+                            ?: android.app.PictureInPictureParams.Builder()
+                                .setAspectRatio(android.util.Rational(16, 9))
+                                .build()
                         enterPictureInPictureMode(params)
                     } catch (_: Exception) {}
                 }
@@ -504,6 +627,10 @@ class MainActivity : AppCompatActivity() {
         newConfig: android.content.res.Configuration
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (isInPictureInPictureMode) {
+            try { webView.onResume() } catch (_: Exception) {}
+            try { webView.resumeTimers() } catch (_: Exception) {}
+        }
         runOnUiThread {
             try {
                 webView.evaluateJavascript(
@@ -713,13 +840,22 @@ class MainActivity : AppCompatActivity() {
                         .build()
                     InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
+                            val cl = resp.header("Content-Length")?.toLongOrNull() ?: 0L
+                            if (cl > 2 * 1024 * 1024L) return@use null
                             val bytes = resp.body?.bytes()
-                            if (bytes != null && bytes.isNotEmpty()) {
-                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            if (bytes != null && bytes.isNotEmpty() && bytes.size <= 2 * 1024 * 1024) {
+                                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                                var sample = 1
+                                while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) {
+                                    sample *= 2
+                                }
+                                val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
                             } else null
                         } else null
                     }
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     null
                 }
             } else null
@@ -752,6 +888,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     builder.setSmallIcon(R.drawable.ic_stat_maxplay)
+                        .setColor(0xFF8B5CF6.toInt())
                         .setContentTitle(title.ifBlank { "MaxPlay" })
                         .setContentText(body)
                         .setAutoCancel(true)
@@ -783,13 +920,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @Volatile
+    private var isActivityInForeground: Boolean = true
+
     /**
-     * Background poller that checks Firestore `messages` collection every 15 seconds so users receive
-     * instant status-bar notifications (with attached image!) even when the app is minimized in background.
+     * Background poller that checks Firestore `messages` collection every 60 seconds ONLY when minimized
+     * (when foregrounded, JS Firestore onSnapshot handles notifications in real time with zero polling overhead).
      */
     private fun startBackgroundAnnouncementMonitor() {
         bgNotificationScheduler.scheduleWithFixedDelay({
             try {
+                if (isActivityInForeground) return@scheduleWithFixedDelay
                 if (android.os.Build.VERSION.SDK_INT >= 33) {
                     if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                         return@scheduleWithFixedDelay
@@ -856,8 +997,8 @@ class MainActivity : AppCompatActivity() {
                         showNativeStatusNotification(newestNewTitle, newestNewBody, newestNewImg)
                     }
                 }
-            } catch (_: Exception) {}
-        }, 6, 15, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (_: Throwable) {}
+        }, 30, 60, java.util.concurrent.TimeUnit.SECONDS)
     }
 
     /**
@@ -1032,7 +1173,8 @@ class MainActivity : AppCompatActivity() {
             } else {
                 packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
             }
-            return pkgInfo != null && !pkgInfo.packageName.isNullOrBlank()
+            // Strictly verify downloaded APK matches OUR exact applicationId (prevents foreign malware APK swap!)
+            return pkgInfo != null && pkgInfo.packageName == packageName
         } catch (_: Exception) {
             return false
         }
@@ -1174,10 +1316,6 @@ class MainActivity : AppCompatActivity() {
                     throw Exception("Downloaded file is not a valid Android APK package")
                 }
 
-                try {
-                    targetFile.setReadable(true, false)
-                } catch (_: Exception) {}
-
                 val finalMb = Math.round((targetFile.length().toDouble() / (1024.0 * 1024.0)) * 10.0) / 10.0
                 emitApkUpdateProgress(
                     "installing",
@@ -1195,8 +1333,7 @@ class MainActivity : AppCompatActivity() {
                 installDownloadedApk(targetFile)
             } catch (e: Exception) {
                 try { apkFile?.delete() } catch (_: Exception) {}
-                // If link is an external hosting page (e.g., Google Drive folder / Mega / webpage),
-                // open in Android system browser so user can download the APK without a corrupt package error
+                // If link is an external HTTPS hosting page, open safely in system browser
                 emitApkUpdateProgress(
                     "browser_fallback",
                     100,
@@ -1205,16 +1342,19 @@ class MainActivity : AppCompatActivity() {
                     versionName,
                     "Opening official APK download in browser..."
                 )
-                runOnUiThread {
-                    try {
-                        val browserIntent = android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse(cleanUrl)
-                        ).apply {
-                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        startActivity(browserIntent)
-                    } catch (_: Exception) {}
+                if (cleanUrl.startsWith("https://", ignoreCase = true) || cleanUrl.startsWith("http://", ignoreCase = true)) {
+                    runOnUiThread {
+                        try {
+                            val browserIntent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(cleanUrl)
+                            ).apply {
+                                addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(browserIntent)
+                        } catch (_: Exception) {}
+                    }
                 }
             }
         }
@@ -1311,7 +1451,10 @@ class MainActivity : AppCompatActivity() {
             try {
                 popunderWebView?.apply {
                     stopLoading()
+                    onPause()
                     loadUrl("about:blank")
+                    (parent as? ViewGroup)?.removeView(this)
+                    removeAllViews()
                     destroy()
                 }
             } catch (_: Exception) {}
@@ -1476,8 +1619,9 @@ class MainActivity : AppCompatActivity() {
                         javaScriptEnabled = true
                         domStorageEnabled = true
                         databaseEnabled = true
+                        allowFileAccess = false
                         mediaPlaybackRequiresUserGesture = false
-                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         userAgentString = mobileChromeUa
                         setSupportMultipleWindows(true)
                         javaScriptCanOpenWindowsAutomatically = true
@@ -1493,25 +1637,41 @@ class MainActivity : AppCompatActivity() {
                         ): Boolean {
                             val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
                             val tempWebView = WebView(this@MainActivity)
+                            val destroyed = java.util.concurrent.atomic.AtomicBoolean(false)
+                            val safeDestroyTemp = {
+                                if (destroyed.compareAndSet(false, true)) {
+                                    try {
+                                        tempWebView.stopLoading()
+                                        tempWebView.destroy()
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                            // Auto-destroy tempWebView after 4s so leaked ad popups never exhaust renderer RAM
+                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ safeDestroyTemp() }, 4000L)
                             tempWebView.webViewClient = object : android.webkit.WebViewClient() {
+                                override fun onRenderProcessGone(v: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                                    safeDestroyTemp()
+                                    return true
+                                }
+
                                 override fun shouldOverrideUrlLoading(
                                     v: WebView?,
                                     request: android.webkit.WebResourceRequest?
                                 ): Boolean {
                                     val targetUrl = request?.url?.toString()
-                                    if (!targetUrl.isNullOrBlank()) {
+                                    if (!targetUrl.isNullOrBlank() && (targetUrl.startsWith("http://", true) || targetUrl.startsWith("https://", true))) {
                                         view?.loadUrl(targetUrl)
                                     }
-                                    try { v?.destroy() } catch (_: Exception) {}
+                                    safeDestroyTemp()
                                     return true
                                 }
 
                                 @Deprecated("Deprecated in Java")
                                 override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean {
-                                    if (!url.isNullOrBlank()) {
+                                    if (!url.isNullOrBlank() && (url.startsWith("http://", true) || url.startsWith("https://", true))) {
                                         view?.loadUrl(url)
                                     }
-                                    try { v?.destroy() } catch (_: Exception) {}
+                                    safeDestroyTemp()
                                     return true
                                 }
                             }
@@ -1522,6 +1682,15 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     webViewClient = object : android.webkit.WebViewClient() {
+                        override fun onRenderProcessGone(
+                            view: WebView?,
+                            detail: android.webkit.RenderProcessGoneDetail?
+                        ): Boolean {
+                            // Never let an ad WebView OOM/crash kill MaxPlay!
+                            closeNativePopunderAd()
+                            return true
+                        }
+
                         private fun handleAdUrl(view: WebView?, rawTarget: String?): Boolean {
                             val target = rawTarget?.trim() ?: return true
                             if (target.startsWith("http://", ignoreCase = true) ||
@@ -1529,6 +1698,7 @@ class MainActivity : AppCompatActivity() {
                             ) {
                                 return false
                             }
+                            // Security & UX: NEVER launch external apps via untrusted ad intent:// URIs (prevents kicking user out of MaxPlay!)
                             if (target.startsWith("intent://", ignoreCase = true)) {
                                 try {
                                     val parsedIntent = android.content.Intent.parseUri(
@@ -1541,12 +1711,6 @@ class MainActivity : AppCompatActivity() {
                                             fallbackUrl.startsWith("https://", ignoreCase = true))
                                     ) {
                                         view?.loadUrl(fallbackUrl)
-                                        return true
-                                    }
-                                    if (parsedIntent.resolveActivity(packageManager) != null) {
-                                        parsedIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        startActivity(parsedIntent)
-                                        closeNativePopunderAd()
                                     }
                                 } catch (_: Exception) {}
                                 return true
@@ -1754,6 +1918,7 @@ class MainActivity : AppCompatActivity() {
     private fun dispatchMusicActionToWebView(action: String, seekTimeSec: Double = -1.0) {
         runOnUiThread {
             try {
+                try { webView.resumeTimers() } catch (_: Exception) {}
                 val safeAction = org.json.JSONObject.quote(action)
                 val js = "window.dispatchEvent(new CustomEvent('MAXPLAY_NATIVE_MEDIA_ACTION', { detail: { action: $safeAction, seekTime: $seekTimeSec } }));"
                 webView.evaluateJavascript(js, null)
@@ -1829,8 +1994,13 @@ class MainActivity : AppCompatActivity() {
             val wantsEq = enabled && bandsDb.any { kotlin.math.abs(it) > 0.05 }
             val wantsBass = enabled && bassLevel > 0
             val extraGainMb = when {
-                volumeBoostPct >= 300 -> 1800
-                volumeBoostPct >= 200 -> 1000
+                volumeBoostPct >= 300 -> 3000
+                volumeBoostPct >= 250 -> 2400
+                volumeBoostPct >= 200 -> 1800
+                volumeBoostPct >= 175 -> 1400
+                volumeBoostPct >= 150 -> 1000
+                volumeBoostPct >= 125 -> 600
+                volumeBoostPct > 100 -> ((volumeBoostPct - 100) * 15)
                 enabled && immersiveLevel > 0 -> (immersiveLevel.coerceIn(0, 100) * 6)
                 else -> 0
             }
@@ -2019,6 +2189,7 @@ class MainActivity : AppCompatActivity() {
             val artBitmap = resolveMusicArtworkBitmap(artworkUrl)
             runOnUiThread {
                 try {
+                    isMusicCurrentlyPlaying = isPlaying
                     ensureMusicMediaSession()
                     if (isPlaying) {
                         webView.resumeTimers()
@@ -2178,6 +2349,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun cancelMusicNotificationState() {
+        isMusicCurrentlyPlaying = false
         runOnUiThread {
             try {
                 if (musicWakeLock?.isHeld == true) {
@@ -2187,6 +2359,89 @@ class MainActivity : AppCompatActivity() {
                 nm?.cancel(9105)
                 musicMediaSession?.isActive = false
             } catch (_: Exception) {}
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isActivityInForeground = true
+        try { webView.onResume() } catch (_: Exception) {}
+    }
+
+    override fun onPause() {
+        isActivityInForeground = false
+        val isInPip = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            isInPictureInPictureMode
+        } else false
+
+        if (!isInPip && !isMusicCurrentlyPlaying && !isVideoCurrentlyPlaying) {
+            try { webView.onPause() } catch (_: Exception) {}
+        }
+        super.onPause()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            try {
+                InbuiltStreamScraper.clearCachesOnMemoryPressure()
+                CorsFreeWebViewClient.clearAllPrefetchCaches()
+                closeNativePopunderAd()
+                webView.clearCache(false)
+            } catch (_: Exception) {}
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onLowMemory() {
+        super.onLowMemory()
+        try {
+            InbuiltStreamScraper.clearCachesOnMemoryPressure()
+            CorsFreeWebViewClient.clearAllPrefetchCaches()
+            closeNativePopunderAd()
+            webView.clearCache(false)
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Gracefully recovers the main WebView if Chromium's renderer process is terminated by Android LMK / GPU fault,
+     * preventing sudden app kick-out to the home screen!
+     */
+    private fun recoverFromWebViewCrash() {
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            try {
+                closeNativePopunderAd()
+                val oldWv = webView
+                try {
+                    (oldWv.parent as? ViewGroup)?.removeView(oldWv)
+                    oldWv.removeAllViews()
+                    oldWv.destroy()
+                } catch (_: Exception) {}
+
+                webView = WebView(this).apply {
+                    setBackgroundColor(Color.parseColor("#0A0A0A"))
+                    layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                }
+                rootContainer.addView(webView, 0)
+                configureCorsFreeWebView()
+
+                val isAdminApp = packageName.endsWith(".admin", ignoreCase = true)
+                val targetAssetFile = if (isAdminApp) "admin.html" else "index.html"
+                val hasLocalBundle = try {
+                    assets.list("webapp")?.contains(targetAssetFile) == true
+                } catch (_: Exception) { false }
+
+                if (isAdminApp) {
+                    webView.loadUrl(if (hasLocalBundle) LOCAL_ADMIN_BUNDLE_URL else LIVE_ADMIN_URL)
+                } else {
+                    webView.loadUrl(if (hasLocalBundle) LOCAL_BUNDLE_URL else LIVE_APP_URL)
+                }
+            } catch (_: Throwable) {}
         }
     }
 
@@ -2200,10 +2455,20 @@ class MainActivity : AppCompatActivity() {
                 unregisterReceiver(musicControlReceiver)
                 musicControlReceiverRegistered = false
             }
+            if (pipReceiverRegistered) {
+                try { unregisterReceiver(pipActionReceiver) } catch (_: Exception) {}
+                pipReceiverRegistered = false
+            }
             musicMediaSession?.release()
             closeNativePopunderAd()
             bgNotificationScheduler.shutdownNow()
             MaxPlayOfflineVault.stopDirectTransferServer()
+            try {
+                (webView.parent as? ViewGroup)?.removeView(webView)
+                webView.stopLoading()
+                webView.removeAllViews()
+                webView.destroy()
+            } catch (_: Exception) {}
         } catch (_: Exception) {}
         super.onDestroy()
     }

@@ -22,6 +22,7 @@ interface PlayerControlsProps {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
+  verifiedDuration?: string;
   title?: string;
   isFullscreen?: boolean;
   currentQuality?: string;
@@ -61,6 +62,7 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
   isPlaying,
   currentTime,
   duration,
+  verifiedDuration,
   title,
   isFullscreen = false,
   currentQuality,
@@ -210,25 +212,31 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
           e.stopPropagation();
           handleLock();
         }}
-        className="absolute left-3 sm:left-6 md:left-8 top-1/2 -translate-y-1/2 z-30 flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer pointer-events-auto"
+        className={`absolute left-3 sm:left-6 md:left-8 top-1/2 -translate-y-1/2 z-30 flex ${
+          isFullscreen ? 'h-12 w-12 sm:h-14 sm:w-14' : 'h-10 w-10 sm:h-11 sm:w-11'
+        } items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer pointer-events-auto`}
         title="Lock Controls"
       >
-        <Unlock className="h-5 w-5 sm:h-6 sm:w-6 text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)]" />
+        <Unlock className={`${isFullscreen ? 'h-6 w-6 sm:h-7 sm:w-7' : 'h-5 w-5 sm:h-6 sm:w-6'} text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)]`} />
       </button>
 
-      {/* CENTER CONTROLS TRIPLET: Rewind 10s, Play/Pause, Forward 10s (Clean icons without black circular backgrounds) */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex items-center justify-center gap-7 sm:gap-11 md:gap-14 select-none pointer-events-auto">
+      {/* CENTER CONTROLS TRIPLET: Rewind 10s, Play/Pause, Forward 10s */}
+      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex items-center justify-center ${
+        isFullscreen ? 'gap-10 sm:gap-14 md:gap-18' : 'gap-7 sm:gap-11 md:gap-14'
+      } select-none pointer-events-auto`}>
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             onRewind10();
           }}
-          className="relative flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer"
+          className={`relative flex ${
+            isFullscreen ? 'h-13 w-13 sm:h-15 sm:w-15' : 'h-11 w-11 sm:h-12 sm:w-12'
+          } items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer`}
           title="Rewind 10s"
         >
-          <RotateCcw className="h-6 w-6 sm:h-7 sm:w-7 drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)]" />
-          <span className="absolute inset-0 flex items-center justify-center text-[9.5px] font-extrabold drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]">10</span>
+          <RotateCcw className={`${isFullscreen ? 'h-7 w-7 sm:h-8 sm:w-8' : 'h-6 w-6 sm:h-7 sm:w-7'} drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)]`} />
+          <span className={`absolute inset-0 flex items-center justify-center ${isFullscreen ? 'text-[11px]' : 'text-[9.5px]'} font-extrabold drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]`}>10</span>
         </button>
 
         <button
@@ -237,13 +245,20 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
             e.stopPropagation();
             onPlayPause();
           }}
-          className="flex h-15 w-15 sm:h-16 sm:w-16 items-center justify-center bg-transparent text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.95)] transition-transform duration-150 hover:scale-110 active:scale-90 cursor-pointer"
+          className={`relative flex ${
+            isFullscreen ? 'h-16 w-16 sm:h-18 sm:w-18' : 'h-14 w-14 sm:h-16 sm:w-16'
+          } items-center justify-center bg-transparent text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.95)] transition-all duration-150 hover:scale-110 active:scale-90 cursor-pointer`}
           title={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? (
-            <Pause className="h-8 w-8 sm:h-9 sm:w-9 fill-current drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)]" />
+            <svg viewBox="0 0 24 24" className={`${isFullscreen ? 'h-10 w-10 sm:h-11 sm:w-11' : 'h-8 w-8 sm:h-9 sm:w-9'} fill-white text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)]`}>
+              <rect x="5.5" y="4" width="4.5" height="16" fill="currentColor" rx="0.5" />
+              <rect x="14" y="4" width="4.5" height="16" fill="currentColor" rx="0.5" />
+            </svg>
           ) : (
-            <Play className="h-8 w-8 sm:h-9 sm:w-9 fill-current ml-0.5 drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)]" />
+            <svg viewBox="0 0 24 24" className={`${isFullscreen ? 'h-10 w-10 sm:h-11 sm:w-11' : 'h-8 w-8 sm:h-9 sm:w-9'} fill-white text-white translate-x-0.5 drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)]`}>
+              <polygon points="6,3 21,12 6,21" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinejoin="miter" strokeMiterlimit="10" />
+            </svg>
           )}
         </button>
 
@@ -253,11 +268,13 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
             e.stopPropagation();
             onForward10();
           }}
-          className="relative flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer"
+          className={`relative flex ${
+            isFullscreen ? 'h-13 w-13 sm:h-15 sm:w-15' : 'h-11 w-11 sm:h-12 sm:w-12'
+          } items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer`}
           title="Forward 10s"
         >
-          <RotateCw className="h-6 w-6 sm:h-7 sm:w-7 drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)]" />
-          <span className="absolute inset-0 flex items-center justify-center text-[9.5px] font-extrabold drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]">10</span>
+          <RotateCw className={`${isFullscreen ? 'h-7 w-7 sm:h-8 sm:w-8' : 'h-6 w-6 sm:h-7 sm:w-7'} drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)]`} />
+          <span className={`absolute inset-0 flex items-center justify-center ${isFullscreen ? 'text-[11px]' : 'text-[9.5px]'} font-extrabold drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]`}>10</span>
         </button>
       </div>
 
@@ -281,9 +298,25 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
 
         <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-white/90 mt-1 w-full min-w-0">
           <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 shrink">
-            <span className="tabular-nums font-medium shrink-0">{formatDuration(currentTime)}</span>
-            <span className="text-white/40 shrink-0">/</span>
-            <span className="tabular-nums text-white/70 shrink-0">{duration > 0 ? formatDuration(duration) : '--:--'}</span>
+            {duration > 0 ? (
+              <>
+                <span className="tabular-nums font-medium shrink-0">{formatDuration(currentTime)}</span>
+                <span className="text-white/40 shrink-0">/</span>
+                <span className="tabular-nums text-white/70 shrink-0">{formatDuration(duration)}</span>
+              </>
+            ) : verifiedDuration ? (
+              <>
+                <span className="tabular-nums font-medium shrink-0">{formatDuration(currentTime)}</span>
+                <span className="text-white/40 shrink-0">/</span>
+                <span className="tabular-nums text-purple-300 font-mono text-[10px] sm:text-[11px] shrink-0" title="Verified duration">{verifiedDuration}</span>
+              </>
+            ) : (
+              <div className="flex items-center gap-1.5 py-0.5">
+                <div className="h-2.5 w-10 sm:w-12 bg-white/20 rounded animate-pulse" />
+                <span className="text-white/30 text-[10px] font-semibold">/</span>
+                <div className="h-2.5 w-10 sm:w-12 bg-purple-500/30 rounded animate-pulse" />
+              </div>
+            )}
 
             {/* FULLSCREEN ONLY: 1X Speed + Next (Series mode) + Stretch Fullscreen Toggle */}
             {isFullscreen && (
@@ -295,10 +328,10 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                       e.stopPropagation();
                       onSpeedPress();
                     }}
-                    className="flex items-center justify-center h-[22px] sm:h-[26px] px-2 ml-1 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[32px] sm:min-w-[36px] shrink-0"
+                    className="flex items-center justify-center h-[26px] sm:h-[30px] px-2.5 ml-1 rounded-lg bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[36px] sm:min-w-[42px] shrink-0"
                     title="Change Playback Speed"
                   >
-                    <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
+                    <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-white leading-none">
                       {playbackRate === 1.0 ? '1X' : `${playbackRate}X`}
                     </span>
                   </button>
@@ -312,11 +345,11 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                       e.stopPropagation();
                       onNext();
                     }}
-                    className="flex items-center gap-1 h-[22px] sm:h-[26px] px-2 rounded-md bg-[#8B5CF6]/25 hover:bg-[#8B5CF6]/45 border border-[#8B5CF6]/50 text-white transition cursor-pointer active:scale-95 select-none shrink-0"
+                    className="flex items-center gap-1.5 h-[26px] sm:h-[30px] px-2.5 rounded-lg bg-[#8B5CF6]/25 hover:bg-[#8B5CF6]/45 border border-[#8B5CF6]/50 text-white transition cursor-pointer active:scale-95 select-none shrink-0"
                     title="Next Episode"
                   >
-                    <SkipForward className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-[#C4B5FD] shrink-0" />
-                    <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
+                    <SkipForward className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-[#C4B5FD] shrink-0" />
+                    <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-white leading-none">
                       Next
                     </span>
                   </button>
@@ -330,15 +363,15 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                       e.stopPropagation();
                       onToggleStretchMode();
                     }}
-                    className={`flex items-center gap-1 h-[22px] sm:h-[26px] px-2 rounded-md border transition cursor-pointer active:scale-95 select-none shrink-0 ${
+                    className={`flex items-center gap-1.5 h-[26px] sm:h-[30px] px-2.5 rounded-lg border transition cursor-pointer active:scale-95 select-none shrink-0 ${
                       videoStretchMode !== 'contain'
                         ? 'bg-[#8B5CF6]/35 border-[#8B5CF6]/70 text-white'
                         : 'bg-white/10 hover:bg-[#8B5CF6]/30 border-white/20 text-white hover:text-[#C4B5FD]'
                     }`}
                     title="Stretch / Fit Video to Fullscreen"
                   >
-                    <Maximize2 className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-amber-300 shrink-0" />
-                    <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
+                    <Maximize2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-amber-300 shrink-0" />
+                    <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-white leading-none">
                       {stretchLabel}
                     </span>
                   </button>
@@ -347,7 +380,7 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
             {/* FULLSCREEN ONLY: Audio Language & Quality Selectors */}
             {isFullscreen && (
               <>
@@ -358,11 +391,11 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                       e.stopPropagation();
                       onLanguagePress();
                     }}
-                    className="flex items-center gap-1 h-[22px] sm:h-[26px] px-1.5 sm:px-2 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none max-w-[84px] sm:max-w-none shrink-0"
+                    className="flex items-center gap-1.5 h-[26px] sm:h-[30px] px-2.5 rounded-lg bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none max-w-[100px] sm:max-w-none shrink-0"
                     title="Audio Language"
                   >
-                    <Headphones className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-[#38BDF8] shrink-0" />
-                    <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none truncate">
+                    <Headphones className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-[#38BDF8] shrink-0" />
+                    <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-white leading-none truncate">
                       {currentLanguage ? currentLanguage.toUpperCase() : 'AUDIO'}
                     </span>
                   </button>
@@ -375,10 +408,10 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                       e.stopPropagation();
                       onQualityPress();
                     }}
-                    className="flex items-center justify-center h-[22px] sm:h-[26px] px-1.5 sm:px-2 rounded-md bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[38px] sm:min-w-[48px] shrink-0"
+                    className="flex items-center justify-center h-[26px] sm:h-[30px] px-2.5 rounded-lg bg-white/10 hover:bg-[#8B5CF6]/30 border border-white/20 text-white hover:text-[#C4B5FD] transition cursor-pointer active:scale-95 select-none min-w-[42px] sm:min-w-[52px] shrink-0"
                     title="Switch Quality"
                   >
-                    <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-white leading-none">
+                    <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-white leading-none">
                       {currentQuality ? currentQuality.toUpperCase() : 'AUTO'}
                     </span>
                   </button>
@@ -394,10 +427,10 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                   e.stopPropagation();
                   onPipToggle();
                 }}
-                className="p-1 text-white/85 hover:text-white transition cursor-pointer flex items-center justify-center shrink-0"
+                className={`p-1.5 text-white/85 hover:text-white transition cursor-pointer flex items-center justify-center shrink-0 ${isFullscreen ? 'h-8 w-8' : ''}`}
                 title="Picture in Picture"
               >
-                <PictureInPicture2 className="h-4 w-4" />
+                <PictureInPicture2 className={`${isFullscreen ? 'h-5 w-5 sm:h-5.5 sm:w-5.5' : 'h-4 w-4'}`} />
               </button>
             )}
 
@@ -408,11 +441,11 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                 e.stopPropagation();
                 onFullscreenToggle();
               }}
-              className="p-1 text-white/95 hover:text-white transition cursor-pointer flex items-center justify-center shrink-0"
+              className={`p-1.5 text-white/95 hover:text-white transition cursor-pointer flex items-center justify-center shrink-0 ${isFullscreen ? 'h-8 w-8' : ''}`}
               title="Fullscreen"
             >
               {isFullscreen ? (
-                <Minimize className="h-4 w-4" />
+                <Minimize className="h-5 w-5 sm:h-6 sm:w-6" />
               ) : (
                 <Maximize className="h-4 w-4" />
               )}

@@ -35,6 +35,7 @@ import {
   insertPlayNextInQueue,
   parseMetadataFromFilename,
   sortMusicTracks,
+  resolveTrackArtwork,
 } from '../utils/musicUtils';
 import { NativeBridgeService } from '../services/nativeBridgeService';
 import {
@@ -42,6 +43,9 @@ import {
   hasActiveAudioEffects,
   shouldResumeAudioContext,
 } from '../utils/musicPlaybackUtils';
+import { auth, db } from '../services/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { onAuthStateChanged, User } from 'firebase/auth';
 
 const MUSIC_STORAGE_KEYS = {
   FAVORITES: 'maxplay_music_favorites_v1',
@@ -457,6 +461,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return 100;
     }
   });
+
+  const setVolumeBoostPct = useCallback((pct: VolumeBoostLevel) => {
+    const validLevels: VolumeBoostLevel[] = [100, 125, 150, 175, 200, 250, 300];
+    const valid: VolumeBoostLevel = validLevels.includes(pct) ? pct : 100;
+    setVolumeBoostPctState(valid);
+  }, []);
+
+  const cycleVolumeBoost = useCallback(() => {
+    const ladder: VolumeBoostLevel[] = [100, 125, 150, 175, 200, 250, 300];
+    setVolumeBoostPctState((prev) => {
+      const idx = ladder.indexOf(prev);
+      return idx >= 0 && idx < ladder.length - 1 ? ladder[idx + 1] : 100;
+    });
+  }, []);
   const [isFullScreenPlayerOpen, setIsFullScreenPlayerOpen] = useState<boolean>(false);
   const [isEqualizerOpen, setIsEqualizerOpen] = useState<boolean>(false);
   const [editingSongTrack, setEditingSongTrack] = useState<MusicTrack | null>(null);
@@ -758,6 +776,304 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
   const discovery = useMemo(() => computeLibraryDiscovery(visibleTracks), [visibleTracks]);
 
+  // =========================================================================
+  // FIREBASE PER-USER MUSIC CLOUD SYNC (Favorites, Playlists, Custom Banners & Equalizer)
+  // Auto-scans and matches library tracks by title/filename when user logs in!
+  // =========================================================================
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const cloudDataRef = useRef<any>(null);
+  const isSyncingFromCloudRef = useRef<boolean>(false);
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper: clean & normalize track title / filename for robust cross-device matching
+  const normalizeTrackSignature = useCallback((str?: string): string => {
+    if (!str) return '';
+    return str
+      .toLowerCase()
+      .replace(/\.(mp3|m4a|wav|aac|flac|ogg|opus|wma|webm)$/i, '')
+      .replace(/^[0-9\s\-._]+/, '') // strip leading track numbers e.g. "01 - Song"
+      .replace(/[_\-+.]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }, []);
+
+  const findMatchingTrackInLibrary = useCallback((
+    sig: { title?: string; fileName?: string; artist?: string },
+    tracks: MusicTrack[]
+  ): MusicTrack | undefined => {
+    const sTitle = normalizeTrackSignature(sig.title);
+    const sFile = normalizeTrackSignature(sig.fileName);
+    const sArtist = normalizeTrackSignature(sig.artist);
+
+    if (!sTitle && !sFile) return undefined;
+
+    // 1. Direct match on normalized title or filename
+    for (const t of tracks) {
+      const tTitle = normalizeTrackSignature(t.title);
+      const tFile = normalizeTrackSignature(t.fileName);
+      if ((sTitle && tTitle && sTitle === tTitle) || (sFile && tFile && sFile === tFile)) {
+        return t;
+      }
+      if (sTitle && tFile && sTitle === tFile) return t;
+      if (sFile && tTitle && sFile === tTitle) return t;
+    }
+
+    // 2. Title + Artist combined match
+    if (sTitle && sArtist) {
+      const sFull = `${sTitle} ${sArtist}`;
+      for (const t of tracks) {
+        const tFull = `${normalizeTrackSignature(t.title)} ${normalizeTrackSignature(t.artist)}`;
+        if (tFull === sFull) return t;
+      }
+    }
+
+    // 3. Substring match for tracks with slight filename variations
+    if (sTitle.length >= 4) {
+      for (const t of tracks) {
+        const tTitle = normalizeTrackSignature(t.title);
+        const tFile = normalizeTrackSignature(t.fileName);
+        if (tTitle.includes(sTitle) || sTitle.includes(tTitle) || tFile.includes(sTitle)) {
+          return t;
+        }
+      }
+    }
+
+    return undefined;
+  }, [normalizeTrackSignature]);
+
+  // 1. Auth state listener
+  useEffect(() => {
+    if (!auth) return;
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsub();
+  }, []);
+
+  // 2. Fetch and merge cloud data when user logs in or library tracks update
+  useEffect(() => {
+    if (!currentUser || !db) return;
+    let isCancelled = false;
+
+    const fetchAndMergeCloudMusic = async () => {
+      try {
+        let cloudDoc = await getDoc(doc(db, 'users', currentUser.uid, 'music_cloud', 'profile')).catch(() => null);
+        if (!cloudDoc || !cloudDoc.exists()) {
+          // Fallback to top-level user doc musicCloudData
+          const userDoc = await getDoc(doc(db, 'users', currentUser.uid)).catch(() => null);
+          if (userDoc && userDoc.exists() && userDoc.data().musicCloudData) {
+            cloudDataRef.current = userDoc.data().musicCloudData;
+          }
+        } else {
+          cloudDataRef.current = cloudDoc.data();
+        }
+
+        const cloud = cloudDataRef.current;
+        if (!cloud || isCancelled) return;
+
+        isSyncingFromCloudRef.current = true;
+        const restoredMetaBatch: Record<string, CustomSongMetadata> = {};
+
+        // A. Match and restore Favorites
+        if (Array.isArray(cloud.favoriteSongs) && cloud.favoriteSongs.length > 0) {
+          const matchedFavIds: string[] = [];
+          for (const s of cloud.favoriteSongs) {
+            const matched = findMatchingTrackInLibrary(s, allRawTracks);
+            if (matched) {
+              if (!matchedFavIds.includes(matched.id)) {
+                matchedFavIds.push(matched.id);
+              }
+              // Restore custom artwork banner if set by user
+              if (s.customArtworkUrl || s.customTitle || s.customArtist) {
+                const itemMeta: CustomSongMetadata = {
+                  ...(s.customArtworkUrl ? { artworkUrl: s.customArtworkUrl } : {}),
+                  ...(s.customTitle ? { title: s.customTitle } : {}),
+                  ...(s.customArtist ? { artist: s.customArtist } : {}),
+                };
+                restoredMetaBatch[matched.id] = { ...(restoredMetaBatch[matched.id] || {}), ...itemMeta };
+                if (matched.fileName) restoredMetaBatch[`fn_${matched.fileName}`] = itemMeta;
+                if (matched.mediaId) restoredMetaBatch[`dev_aud_${matched.mediaId}`] = itemMeta;
+              }
+            }
+          }
+          if (matchedFavIds.length > 0) {
+            setFavoriteIds((prev) => Array.from(new Set([...matchedFavIds, ...prev])));
+          }
+        }
+
+        // B. Match and restore Playlists & populate matched songs
+        if (Array.isArray(cloud.playlists) && cloud.playlists.length > 0) {
+          setPlaylists((prevPlaylists) => {
+            const nextList = [...prevPlaylists];
+            for (const cp of cloud.playlists) {
+              const matchedTrackIds: string[] = [];
+              if (Array.isArray(cp.songs)) {
+                for (const s of cp.songs) {
+                  const matched = findMatchingTrackInLibrary(s, allRawTracks);
+                  if (matched) {
+                    if (!matchedTrackIds.includes(matched.id)) {
+                      matchedTrackIds.push(matched.id);
+                    }
+                    // Restore custom song banner or title
+                    if (s.customArtworkUrl || s.customTitle || s.customArtist) {
+                      const itemMeta: CustomSongMetadata = {
+                        ...(s.customArtworkUrl ? { artworkUrl: s.customArtworkUrl } : {}),
+                        ...(s.customTitle ? { title: s.customTitle } : {}),
+                        ...(s.customArtist ? { artist: s.customArtist } : {}),
+                      };
+                      restoredMetaBatch[matched.id] = { ...(restoredMetaBatch[matched.id] || {}), ...itemMeta };
+                      if (matched.fileName) restoredMetaBatch[`fn_${matched.fileName}`] = itemMeta;
+                      if (matched.mediaId) restoredMetaBatch[`dev_aud_${matched.mediaId}`] = itemMeta;
+                    }
+                  }
+                }
+              }
+
+              const existingIdx = nextList.findIndex(
+                (p) => p.name.trim().toLowerCase() === cp.name.trim().toLowerCase() || p.id === cp.id
+              );
+              if (existingIdx !== -1) {
+                const mergedTracks = Array.from(new Set([...nextList[existingIdx].trackIds, ...matchedTrackIds]));
+                nextList[existingIdx] = {
+                  ...nextList[existingIdx],
+                  trackIds: mergedTracks,
+                  updatedAt: Math.max(nextList[existingIdx].updatedAt || 0, cp.updatedAt || 0),
+                };
+              } else {
+                nextList.push({
+                  id: cp.id || `pl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                  name: cp.name || 'My Playlist',
+                  trackIds: matchedTrackIds,
+                  createdAt: cp.createdAt || Date.now(),
+                  updatedAt: cp.updatedAt || Date.now(),
+                });
+              }
+            }
+            return nextList;
+          });
+        }
+
+        // C. Restore custom artwork banners from cloud customTracksMeta map
+        if (cloud.customTracksMeta && typeof cloud.customTracksMeta === 'object') {
+          Object.assign(restoredMetaBatch, cloud.customTracksMeta);
+        }
+
+        if (Object.keys(restoredMetaBatch).length > 0) {
+          setCustomTracksMeta((prev) => {
+            const merged = { ...prev, ...restoredMetaBatch };
+            try {
+              localStorage.setItem(MUSIC_STORAGE_KEYS.CUSTOM_META, JSON.stringify(merged));
+              saveCustomMetaMapToIdb(merged);
+            } catch {}
+            return merged;
+          });
+        }
+
+        // D. Restore Equalizer & Volume Boost if saved
+        if (cloud.equalizer && typeof cloud.equalizer === 'object') {
+          setEqualizer((prev) => ({ ...prev, ...cloud.equalizer }));
+        }
+        if (cloud.volumeBoostPct) {
+          const validLevels: VolumeBoostLevel[] = [100, 125, 150, 175, 200, 250, 300];
+          const valid: VolumeBoostLevel = validLevels.includes(cloud.volumeBoostPct) ? cloud.volumeBoostPct : 100;
+          setVolumeBoostPctState(valid);
+        }
+
+        setTimeout(() => {
+          isSyncingFromCloudRef.current = false;
+        }, 800);
+      } catch (err) {
+        console.warn('[MusicCloudSync] Error restoring cloud data:', err);
+        isSyncingFromCloudRef.current = false;
+      }
+    };
+
+    fetchAndMergeCloudMusic();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentUser?.uid, allRawTracks.length, findMatchingTrackInLibrary]);
+
+  // 3. Debounced cloud backup whenever user modifies favorites, playlists, custom banners, or equalizer
+  useEffect(() => {
+    if (!currentUser || !db || isSyncingFromCloudRef.current) return;
+
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    syncTimeoutRef.current = setTimeout(async () => {
+      try {
+        const trackLookup = new Map<string, MusicTrack>();
+        allRawTracks.forEach((t) => trackLookup.set(t.id, t));
+
+        // Format favorites with metadata signatures and custom banners
+        const favSongsPayload = favoriteIds
+          .map((id) => trackLookup.get(id))
+          .filter(Boolean)
+          .map((t) => {
+            const track = t!;
+            const custom = customTracksMeta[track.id] ||
+              (track.mediaId ? customTracksMeta[`dev_aud_${track.mediaId}`] : undefined) ||
+              (track.fileName ? customTracksMeta[`fn_${track.fileName}`] : undefined);
+            return {
+              title: track.title,
+              fileName: track.fileName || undefined,
+              artist: track.artist !== 'Unknown Artist' ? track.artist : undefined,
+              durationSec: track.durationSec || undefined,
+              customArtworkUrl: custom?.artworkUrl || (track.artworkUrl && !track.artworkUrl.startsWith('blob:') ? track.artworkUrl : undefined),
+              customTitle: custom?.title || undefined,
+              customArtist: custom?.artist || undefined,
+            };
+          });
+
+        // Format playlists with full song metadata signatures and custom banners
+        const playlistsPayload = playlists.map((pl) => ({
+          id: pl.id,
+          name: pl.name,
+          createdAt: pl.createdAt,
+          updatedAt: pl.updatedAt,
+          songs: pl.trackIds
+            .map((id) => trackLookup.get(id))
+            .filter(Boolean)
+            .map((t) => {
+              const track = t!;
+              const custom = customTracksMeta[track.id] ||
+                (track.mediaId ? customTracksMeta[`dev_aud_${track.mediaId}`] : undefined) ||
+                (track.fileName ? customTracksMeta[`fn_${track.fileName}`] : undefined);
+              return {
+                title: track.title,
+                fileName: track.fileName || undefined,
+                artist: track.artist !== 'Unknown Artist' ? track.artist : undefined,
+                durationSec: track.durationSec || undefined,
+                customArtworkUrl: custom?.artworkUrl || (track.artworkUrl && !track.artworkUrl.startsWith('blob:') ? track.artworkUrl : undefined),
+                customTitle: custom?.title || undefined,
+                customArtist: custom?.artist || undefined,
+              };
+            }),
+        }));
+
+        const cloudPayload = {
+          favoriteSongs: favSongsPayload,
+          playlists: playlistsPayload,
+          customTracksMeta,
+          equalizer,
+          volumeBoostPct,
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Dual-write: subcollection profile + top-level user doc musicCloudData
+        await setDoc(doc(db, 'users', currentUser.uid, 'music_cloud', 'profile'), cloudPayload, { merge: true }).catch(() => {});
+        await setDoc(doc(db, 'users', currentUser.uid), { musicCloudData: cloudPayload }, { merge: true }).catch(() => {});
+      } catch (err) {
+        console.warn('[MusicCloudSync] Save error:', err);
+      }
+    }, 1500);
+
+    return () => {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    };
+  }, [currentUser?.uid, favoriteIds, playlists, equalizer, volumeBoostPct, customTracksMeta]);
+
+
   // Keep currentTrack enriched with latest favorite/stats flags
   const currentTrack = useMemo(() => {
     const raw = queue[currentIndex] || null;
@@ -793,7 +1109,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return;
       }
       stallRecoveryCountRef.current += 1;
-      const resumeAt = lastGoodPositionRef.current > 0.25 ? lastGoodPositionRef.current : audio.currentTime || 0;
       if (recoveryTimer) clearTimeout(recoveryTimer);
       recoveryTimer = setTimeout(() => {
         if (!isIntendedPlayingRef.current || !audio.currentSrc || audio.ended) return;
@@ -802,15 +1117,14 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           audio.volume = 1.0;
           if (audio.error || audio.readyState === 0) {
             audio.load();
-          }
-          if (resumeAt > 0.25) {
-            try {
-              audio.currentTime = resumeAt;
-            } catch {}
+            const resumeAt = lastGoodPositionRef.current;
+            if (resumeAt > 0.25) {
+              try { audio.currentTime = resumeAt; } catch {}
+            }
           }
           audio.play().catch(() => {});
         } catch {}
-      }, 280);
+      }, 2500);
     };
 
     // Throttle timeupdate state updates to ~250ms so scrolling MusicHomeScreen stays at a locked 60fps
@@ -853,8 +1167,17 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onPause = () => {
       setIsPlaying(false);
     };
+    const onWaiting = () => {
+      if (isIntendedPlayingRef.current) {
+        resumeWebAudioIfNeeded();
+        if (audio.paused && !audio.ended && audio.currentSrc) {
+          audio.play().catch(() => {});
+        }
+      }
+    };
     const onStalled = () => {
-      if (isIntendedPlayingRef.current && audio.paused && !audio.ended) {
+      if (isIntendedPlayingRef.current && !audio.ended) {
+        resumeWebAudioIfNeeded();
         scheduleMidSongRecovery();
       }
     };
@@ -874,6 +1197,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.addEventListener('play', onPlay);
     audio.addEventListener('playing', onPlaying);
     audio.addEventListener('pause', onPause);
+    audio.addEventListener('waiting', onWaiting);
     audio.addEventListener('stalled', onStalled);
     audio.addEventListener('error', onAudioError);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
@@ -897,6 +1221,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('playing', onPlaying);
       audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('waiting', onWaiting);
       audio.removeEventListener('stalled', onStalled);
       audio.removeEventListener('error', onAudioError);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
@@ -1117,6 +1442,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!audio) return;
     const clamped = Math.max(0, Math.min(duration || audio.duration || 0, seconds));
     try {
+      lastGoodPositionRef.current = clamped;
+      lastTimeUpdateMsRef.current = performance.now();
       audio.currentTime = clamped;
       setCurrentTime(clamped);
     } catch {}
@@ -1143,15 +1470,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const toggleShuffle = useCallback(() => {
     setIsShuffle((prev) => !prev);
-  }, []);
-
-  const setVolumeBoostPct = useCallback((pct: VolumeBoostLevel) => {
-    const valid: VolumeBoostLevel = pct === 200 || pct === 300 ? pct : 100;
-    setVolumeBoostPctState(valid);
-  }, []);
-
-  const cycleVolumeBoost = useCallback(() => {
-    setVolumeBoostPctState((prev) => (prev === 100 ? 200 : prev === 200 ? 300 : 100));
   }, []);
 
   // Share the actual audio file (via Android Intent.ACTION_SEND EXTRA_STREAM or Web Share API files)
@@ -1181,13 +1499,15 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ? 'repeat_one'
       : 'repeat_all';
 
+    const resolvedArt = resolveTrackArtwork(currentTrack);
+
     if (settings.notificationControls || settings.lockScreenControls) {
       NativeBridgeService.updateMusicNotificationNative({
         title: currentTrack.title,
         artist: currentTrack.artist,
         album: currentTrack.album,
         isPlaying,
-        artworkUrl: currentTrack.artworkUrl,
+        artworkUrl: resolvedArt,
         durationSec: duration || currentTrack.durationSec || 0,
         positionSec: currentTime || 0,
         isFavorite: Boolean(currentTrack.isFavorite),
@@ -1201,13 +1521,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           title: currentTrack.title,
           artist: currentTrack.artist,
           album: currentTrack.album,
-          artwork: currentTrack.artworkUrl
-            ? [
-                { src: currentTrack.artworkUrl, sizes: '96x96', type: 'image/jpeg' },
-                { src: currentTrack.artworkUrl, sizes: '256x256', type: 'image/jpeg' },
-                { src: currentTrack.artworkUrl, sizes: '512x512', type: 'image/jpeg' },
-              ]
-            : [],
+          artwork: [
+            { src: resolvedArt, sizes: '96x96', type: 'image/jpeg' },
+            { src: resolvedArt, sizes: '256x256', type: 'image/jpeg' },
+            { src: resolvedArt, sizes: '512x512', type: 'image/jpeg' },
+          ],
         });
         navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
         navigator.mediaSession.setActionHandler('play', () => togglePlayPause());

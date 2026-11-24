@@ -4,8 +4,10 @@ import { FilterScreen } from '../screens/main/FilterScreen';
 import { ContentDetailScreen } from '../screens/content/ContentDetailScreen';
 import { CollectionDetailScreen } from '../screens/content/CollectionDetailScreen';
 import { NetworkDetailScreen } from '../screens/content/NetworkDetailScreen';
+import { DetailErrorBoundary } from '../components/common/DetailErrorBoundary';
 import { ContentItem, NetworkItem } from '../types';
 import { subscribeToContent } from '../services/contentService';
+import { SmartStreamService } from '../services/smartStreamService';
 
 interface HomeStackProps {
   onSelectContent: (item: ContentItem) => void;
@@ -117,6 +119,8 @@ export const HomeStack: React.FC<HomeStackProps> = ({
     if (item.isCollection) {
       push({ name: 'collection_detail', item });
     } else {
+      // Zero-delay head-start: begin extracting primary server stream BEFORE Details Screen finishes mounting!
+      SmartStreamService.prefetchContentItem(item);
       push({ name: 'detail', item });
       onSelectContent(item);
     }
@@ -166,12 +170,14 @@ export const HomeStack: React.FC<HomeStackProps> = ({
               />
             )}
             {screen.name === 'detail' && isTop && (
-              <ContentDetailScreen
-                key={`detail-${screen.item.id}-${idx}`}
-                content={screen.item}
-                onBack={handleBack}
-                onSelectContent={handleSelect}
-              />
+              <DetailErrorBoundary onBack={handleBack}>
+                <ContentDetailScreen
+                  key={`detail-${screen.item.id}-${idx}`}
+                  content={screen.item}
+                  onBack={handleBack}
+                  onSelectContent={handleSelect}
+                />
+              </DetailErrorBoundary>
             )}
             {screen.name === 'filter' && (
               <FilterScreen

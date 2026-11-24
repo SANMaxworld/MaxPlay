@@ -44,6 +44,9 @@ import {
 import {
   formatMusicDuration,
   getRainbowGradientForTrack,
+  getColoringPosterForTrack,
+  resolveTrackArtwork,
+  DETAILS_COLORING_POSTERS,
   resolvePlaylistFirstSongArtwork,
   searchLocalMusicLibrary,
 } from '../../utils/musicUtils';
@@ -66,8 +69,7 @@ type ActiveSubPage =
 
 type FavouritesSubTab = 'songs' | 'artists' | 'albums' | 'discover';
 
-const DEFAULT_MAXPLAY_MUSIC_POSTER =
-  'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=600&q=80';
+const DEFAULT_MAXPLAY_MUSIC_POSTER = DETAILS_COLORING_POSTERS[0];
 
 export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenChange }) => {
   const {
@@ -326,29 +328,23 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
     </div>
   );
 
-  // Render song square cover art (or rainbow accent gradient fallback)
+  // Render song square cover art (using colorful details screen poster fallback so it is NEVER blank)
   const renderSongThumbnail = (track: MusicTrack, _indexHint = 0) => {
-    const grad = getRainbowGradientForTrack(track.id);
+    const artUrl = resolveTrackArtwork(track);
 
     return (
       <div className="relative h-12 w-12 rounded-xl overflow-hidden bg-[#181820] shrink-0 border border-white/10 shadow-sm">
-        {track.artworkUrl ? (
-          <img
-            src={track.artworkUrl}
-            alt={track.title}
-            className="h-full w-full object-cover"
-            onError={(e) => {
-              (e.target as HTMLElement).style.display = 'none';
-            }}
-          />
-        ) : (
-          <div
-            className={`h-full w-full bg-gradient-to-br ${grad} flex items-center justify-center relative`}
-          >
-            <span className="absolute top-1 left-1 text-[8px] text-white/80">♪</span>
-            <Music2 className="h-6 w-6 text-white/95 drop-shadow" />
-          </div>
-        )}
+        <img
+          src={artUrl}
+          alt={track.title}
+          className="h-full w-full object-cover"
+          onError={(e) => {
+            const fallback = getColoringPosterForTrack(track.id + '_fallback');
+            if ((e.target as HTMLImageElement).src !== fallback) {
+              (e.target as HTMLImageElement).src = fallback;
+            }
+          }}
+        />
       </div>
     );
   };
@@ -1380,19 +1376,19 @@ export const MusicHomeScreen: React.FC<MusicHomeScreenProps> = ({ onDetailOpenCh
         )
       ) : (
         <div className="flex flex-col h-full w-full px-4 pt-3 pb-32 overflow-y-auto scrollbar-none">
-          {/* TOP HEADER: MaxPlay Logo on Left + Rounded Pill Search Bar with Mic on Right */}
-          <div className="flex items-center gap-3">
+          {/* TOP HEADER: MaxPlay Logo on Left + Centered Rounded Pill Search Bar with Mic */}
+          <div className="flex items-center gap-3 w-full">
             <div className="shrink-0">
               <LogoPlaceholder size="sm" />
             </div>
 
             <div
               onClick={() => setActiveSubPage('search')}
-              className="flex-1 flex items-center justify-between gap-2 rounded-full bg-[#16161E] hover:bg-[#1C1C26] border border-white/10 px-3.5 py-2.5 cursor-pointer transition shadow-inner"
+              className="flex-1 flex items-center justify-between gap-2 rounded-full bg-[#16161E] hover:bg-[#1C1C26] border border-white/10 px-4 py-2.5 cursor-pointer transition shadow-inner"
             >
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex-1 flex items-center justify-center gap-2 min-w-0 pr-1">
                 <Search className="h-4 w-4 text-[#A1A1AA] shrink-0" />
-                <span className="text-xs sm:text-sm text-[#8E8E93] truncate">
+                <span className="text-xs sm:text-sm text-[#8E8E93] truncate text-center">
                   Search songs, playlists, and artists
                 </span>
               </div>

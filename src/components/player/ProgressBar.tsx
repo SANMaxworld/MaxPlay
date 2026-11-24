@@ -91,17 +91,38 @@ export const ProgressBar: React.FC<ProgressBarProps> = React.memo(({
     return null;
   };
 
-  // Resolve effective stream URL for the dedicated preview video element
+  // Resolve effective stream URL for the dedicated preview video element.
+  // SPEED & SEEK OPTIMIZATION: Only spawn a 2nd preview <video>/HLS pipeline for local/offline streams.
+  // For remote online streams (VOE, Streamtape, Filemoon/Byse), a 2nd concurrent stream competes for
+  // hoster connection slots, bandwidth, and Android MediaCodec decoders, causing severe seek buffering!
   const effectivePreviewUrl = previewStreamUrl || videoElement?.currentSrc || videoElement?.src || '';
+  const lowerPreviewUrl = effectivePreviewUrl.toLowerCase();
+  const isLocalPreviewStream = Boolean(
+    lowerPreviewUrl &&
+    (lowerPreviewUrl.includes('/offline-vault/') ||
+      lowerPreviewUrl.includes('/vault-video/') ||
+      lowerPreviewUrl.includes('/device-video/') ||
+      lowerPreviewUrl.startsWith('blob:') ||
+      lowerPreviewUrl.startsWith('file:'))
+  );
 
-  // Clean up preview HLS instance when stream URL changes or component unmounts
+  // Clean up preview HLS instance & release Chromium MediaCodec decoder when stream URL changes or component unmounts
   useEffect(() => {
     return () => {
       if (previewHlsRef.current) {
         previewHlsRef.current.destroy();
         previewHlsRef.current = null;
       }
+      if (previewVideoRef.current) {
+        try {
+          previewVideoRef.current.pause();
+          previewVideoRef.current.removeAttribute('src');
+          previewVideoRef.current.load();
+        } catch {}
+      }
       loadedPreviewUrlRef.current = '';
+      pendingPreviewTimeRef.current = null;
+      isPreviewSeekingRef.current = false;
       setHasPreviewFrame(false);
       setHasActivatedPreview(false);
     };
@@ -111,11 +132,20 @@ export const ProgressBar: React.FC<ProgressBarProps> = React.memo(({
     if (isScrubActive && !hasActivatedPreview) {
       setHasActivatedPreview(true);
     }
+    if (!isScrubActive) {
+      pendingPreviewTimeRef.current = null;
+      isPreviewSeekingRef.current = false;
+      if (previewHlsRef.current) {
+        try {
+          previewHlsRef.current.stopLoad();
+        } catch {}
+      }
+    }
   }, [isScrubActive, hasActivatedPreview]);
 
-  // Lazily initialize and seek the dedicated muted preview <video> element to the target scrubbed timestamp
+  // Lazily initialize and seek the dedicated muted preview <video> element ONLY for local/offline videos
   useEffect(() => {
-    if (!isScrubActive || !hasActivatedPreview || !effectivePreviewUrl || duration <= 0) return;
+    if (!isLocalPreviewStream || !isScrubActive || !hasActivatedPreview || !effectivePreviewUrl || duration <= 0) return;
     const pVideo = previewVideoRef.current;
     if (!pVideo) return;
 
@@ -250,6 +280,13 @@ export const ProgressBar: React.FC<ProgressBarProps> = React.memo(({
     const handleEnd = () => {
       if (isDragging) {
         const finalTime = dragTimeRef.current ?? 0;
+        pendingPreviewTimeRef.current = null;
+        isPreviewSeekingRef.current = false;
+        if (previewHlsRef.current) {
+          try {
+            previewHlsRef.current.stopLoad();
+          } catch {}
+        }
         onSeek(finalTime);
         setIsDragging(false);
         setDragTime(null);
@@ -308,33 +345,36 @@ export const ProgressBar: React.FC<ProgressBarProps> = React.memo(({
                 className="absolute inset-0 w-full h-full object-cover opacity-45"
               />
             )}
-            <video
-              ref={previewVideoRef}
-              muted
-              playsInline
-              preload="none"
-              referrerPolicy="no-referrer"
-              onLoadedData={() => setHasPreviewFrame(true)}
-              onSeeked={() => {
-                setHasPreviewFrame(true);
-                isPreviewSeekingRef.current = false;
-                // If user dragged further while previous seek was in flight, immediately seek to latest target
-                const pVideo = previewVideoRef.current;
-                const latestTarget = pendingPreviewTimeRef.current;
-                if (pVideo && latestTarget !== null && Math.abs((pVideo.currentTime || 0) - latestTarget) > 0.6) {
-                  lastPreviewSeekMsRef.current = Date.now();
-                  isPreviewSeekingRef.current = true;
-                  try {
-                    pVideo.currentTime = latestTarget;
-                  } catch {
-                    isPreviewSeekingRef.current = false;
+            {isLocalPreviewStream && (
+              <video
+                ref={previewVideoRef}
+                muted
+                playsInline
+                preload="none"
+                referrerPolicy="no-referrer"
+                onLoadedData={() => setHasPreviewFrame(true)}
+                onSeeked={() => {
+                  setHasPreviewFrame(true);
+                  isPreviewSeekingRef.current = false;
+                  if (!isScrubActive) return;
+                  // If user dragged further while previous seek was in flight, immediately seek to latest target
+                  const pVideo = previewVideoRef.current;
+                  const latestTarget = pendingPreviewTimeRef.current;
+                  if (pVideo && latestTarget !== null && Math.abs((pVideo.currentTime || 0) - latestTarget) > 0.6) {
+                    lastPreviewSeekMsRef.current = Date.now();
+                    isPreviewSeekingRef.current = true;
+                    try {
+                      pVideo.currentTime = latestTarget;
+                    } catch {
+                      isPreviewSeekingRef.current = false;
+                    }
                   }
-                }
-              }}
-              className={`relative z-10 w-full h-full object-cover transition-opacity duration-100 ${
-                hasPreviewFrame ? 'opacity-100' : 'opacity-0'
-              }`}
-            />
+                }}
+                className={`relative z-10 w-full h-full object-cover transition-opacity duration-100 ${
+                  hasPreviewFrame ? 'opacity-100' : 'opacity-0'
+                }`}
+              />
+            )}
             <div className="absolute inset-0 z-20 bg-gradient-to-t from-black/85 via-transparent to-transparent" />
 
             {/* Chapter / Skip Marker Badge inside Preview Frame */}
@@ -370,28 +410,37 @@ export const ProgressBar: React.FC<ProgressBarProps> = React.memo(({
         </div>
       )}
 
-      {/* Main Track Bar */}
-      <div className="relative h-1.5 w-full rounded-full bg-white/20 transition-all duration-150 group-hover:h-2.5 overflow-hidden">
-        {/* Buffer Bar */}
-        <div
-          style={{ width: `${buffered}%` }}
-          className="absolute h-full bg-white/30 transition-all duration-300"
-        />
+      {duration > 0 ? (
+        <>
+          {/* Main Track Bar */}
+          <div className="relative h-1.5 w-full rounded-full bg-white/20 transition-all duration-150 group-hover:h-2.5 overflow-hidden">
+            {/* Buffer Bar */}
+            <div
+              style={{ width: `${buffered}%` }}
+              className="absolute h-full bg-white/30 transition-all duration-300"
+            />
 
-        {/* Progress Fill Bar with MaxPlay Signature Purple Gradient */}
-        <div
-          style={{ width: `${progressPercent}%` }}
-          className="absolute h-full bg-gradient-to-r from-[#A855F7] via-[#8B5CF6] to-[#6366F1] shadow-[0_0_10px_rgba(139,92,246,0.6)] z-10"
-        />
-      </div>
+            {/* Progress Fill Bar with MaxPlay Signature Purple Gradient */}
+            <div
+              style={{ width: `${progressPercent}%` }}
+              className="absolute h-full bg-gradient-to-r from-[#A855F7] via-[#8B5CF6] to-[#6366F1] shadow-[0_0_10px_rgba(139,92,246,0.6)] z-10"
+            />
+          </div>
 
-      {/* Scrubber Thumb Knob */}
-      <div
-        style={{ left: `${progressPercent}%` }}
-        className={`absolute -translate-x-1/2 h-3.5 w-3.5 rounded-full bg-gradient-to-r from-[#A855F7] via-[#8B5CF6] to-[#6366F1] border-2 border-white shadow-[0_0_10px_rgba(139,92,246,0.8)] transition-transform duration-100 ${
-          isHovered || isDragging ? 'scale-125' : 'scale-100'
-        }`}
-      />
+          {/* Scrubber Thumb Knob */}
+          <div
+            style={{ left: `${progressPercent}%` }}
+            className={`absolute -translate-x-1/2 h-3.5 w-3.5 rounded-full bg-gradient-to-r from-[#A855F7] via-[#8B5CF6] to-[#6366F1] border-2 border-white shadow-[0_0_10px_rgba(139,92,246,0.8)] transition-transform duration-100 ${
+              isHovered || isDragging ? 'scale-125' : 'scale-100'
+            }`}
+          />
+        </>
+      ) : (
+        /* Animated Sleek Placeholder Shimmer Bar before metadata arrives */
+        <div className="relative h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-purple-500/35 to-transparent animate-pulse" />
+        </div>
+      )}
     </div>
   );
 });

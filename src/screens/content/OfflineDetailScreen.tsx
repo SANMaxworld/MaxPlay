@@ -516,7 +516,7 @@ export const OfflineDetailScreen: React.FC<OfflineDetailScreenProps> = ({
 
           {/* NATIVE BANNER AD */}
           <div className="pt-1 pb-1">
-            <NativeBanner />
+            <NativeBanner screen="detail" />
           </div>
 
           {/* FOR YOU SECTION */}

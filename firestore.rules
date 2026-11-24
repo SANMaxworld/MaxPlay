@@ -5,6 +5,10 @@ service cloud.firestore {
     // Users can read/write their own profile and admin panel management
     match /users/{userId} {
       allow read, write: if true;
+
+      match /{document=**} {
+        allow read, write: if true;
+      }
     }
 
     // Content is readable by all, writable by admin or authenticated users
@@ -77,6 +81,21 @@ service cloud.firestore {
     match /heroBanners/{bannerId} {
       allow read: if true;
       allow write: if true;
+    }
+
+    // Custom Event Banners for Ad Replacement
+    match /event_banners/{bannerId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Music data, user playlists and favorites
+    match /user_music/{userId} {
+      allow read, write: if true;
+
+      match /{document=**} {
+        allow read, write: if true;
+      }
     }
 
     // Site & Search settings

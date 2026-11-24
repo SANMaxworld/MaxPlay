@@ -332,7 +332,7 @@ export const FeedbackScreen: React.FC<FeedbackScreenProps> = ({ onBack }) => {
             </div>
 
             {/* NATIVE BANNER AD */}
-            <NativeBanner />
+            <NativeBanner screen="settings" />
 
             {/* Step 1: Category Selection Grid */}
             <div className="flex flex-col gap-2">

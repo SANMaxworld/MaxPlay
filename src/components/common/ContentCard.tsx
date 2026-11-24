@@ -8,6 +8,7 @@ interface ContentCardProps {
   onEdit?: (item: ContentItem) => void;
   width?: number;
   height?: number;
+  responsive?: boolean;
 }
 
 export const ContentCard: React.FC<ContentCardProps> = React.memo(({
@@ -16,6 +17,7 @@ export const ContentCard: React.FC<ContentCardProps> = React.memo(({
   onEdit,
   width = 120,
   height = 175,
+  responsive = false,
 }) => {
   const displayPoster = (item as any).customImage || item.posterUrl || undefined;
   const displayTitle = (item as any).customTitle || item.title;
@@ -29,13 +31,17 @@ export const ContentCard: React.FC<ContentCardProps> = React.memo(({
       onClick={() => {
         onPress?.(item);
       }}
-      className="group relative cursor-pointer flex-shrink-0 transition-transform duration-150 active:scale-95 touch-manipulation rounded-lg overflow-hidden bg-[#161922] border border-white/5 shadow-md shadow-black/40"
-      style={{ width }}
+      className={`group relative cursor-pointer transition-transform duration-200 active:scale-95 touch-manipulation select-none rounded-lg overflow-hidden bg-[#161922] border border-white/5 shadow-md shadow-black/40 ${
+        responsive ? 'flex flex-col w-full' : 'flex-shrink-0'
+      }`}
+      style={responsive ? undefined : { width }}
     >
       {/* Poster Container */}
       <div
-        className="relative overflow-hidden bg-[#1C1C1E]"
-        style={{ width, height }}
+        className={`relative overflow-hidden bg-[#1C1C1E] ${
+          responsive ? 'w-full aspect-[2/3]' : ''
+        }`}
+        style={responsive ? undefined : { width, height }}
       >
         <img
           src={displayPoster}
@@ -60,6 +66,13 @@ export const ContentCard: React.FC<ContentCardProps> = React.memo(({
           </button>
         )}
 
+        {/* AnimeSalt Engine Badge (top left) */}
+        {Boolean((item as any).isAnimeSalt) && !onEdit && (
+          <div className="absolute top-1.5 left-1.5 rounded bg-purple-950/85 border border-purple-500/50 px-1.5 py-0.5 text-[9px] font-extrabold text-purple-200 backdrop-blur-[2px] pointer-events-none flex items-center gap-1 shadow-md">
+            <span>⚡ AnimeSalt</span>
+          </div>
+        )}
+
         {/* Language Badge (top right) */}
         {langBadge && (
           <div className="absolute top-1.5 right-1.5 rounded bg-black/75 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-[2px] pointer-events-none">
@@ -71,7 +84,7 @@ export const ContentCard: React.FC<ContentCardProps> = React.memo(({
       {/* Attached Dark Footer Strip below poster */}
       <div className="bg-[#161922] px-2 py-2 text-left">
         <h3
-          className="truncate block text-[12px] font-medium text-[#E4E4E7] group-hover:text-white transition-colors leading-tight"
+          className="truncate block text-[12px] sm:text-[13px] font-medium text-[#E4E4E7] group-hover:text-white transition-colors leading-tight"
           title={displayTitle}
         >
           {displayTitle}

@@ -10,6 +10,7 @@ import { FeedbackScreen } from '../screens/settings/FeedbackScreen';
 import { ContentDetailScreen } from '../screens/content/ContentDetailScreen';
 import { useContent } from '../hooks/useContent';
 import { ContentItem } from '../types';
+import { SmartStreamService } from '../services/smartStreamService';
 
 interface MeStackProps {
   onLogout?: () => void;
@@ -82,6 +83,7 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
     const content = contentList.find(c => c.id === contentId);
     if (content) {
       const itemToPush = historyMeta ? { ...content, _historyResume: historyMeta } : content;
+      SmartStreamService.prefetchContentItem(itemToPush);
       push({ name: 'detail', item: itemToPush });
     }
   };
@@ -116,7 +118,10 @@ export const MeStack: React.FC<MeStackProps> = ({ onLogout, onDetailOpenChange }
                 key={`detail-${screen.item.id}-${idx}`}
                 content={screen.item}
                 onBack={handleBack}
-                onSelectContent={(item) => push({ name: 'detail', item })}
+                onSelectContent={(item) => {
+                  SmartStreamService.prefetchContentItem(item);
+                  push({ name: 'detail', item });
+                }}
               />
             )}
             {screen.name === 'edit-profile' && <EditProfileScreen onBack={handleBack} />}

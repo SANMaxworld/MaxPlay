@@ -1,6 +1,7 @@
 import React, { useCallback, useRef } from 'react';
 import { ChevronLeft, Headphones } from 'lucide-react';
 import { useMusic } from '../../context/MusicContext';
+import { NativeBridgeService } from '../../services/nativeBridgeService';
 import {
   EQUALIZER_BAND_LABELS,
   EQUALIZER_PRESET_LIST,
@@ -118,6 +119,99 @@ const RotarySoundKnob: React.FC<RotaryKnobProps> = ({
   );
 };
 
+interface BandSliderProps {
+  freqLabel: string;
+  idx: number;
+  dbVal: number;
+  enabled: boolean;
+  onChange: (val: number) => void;
+}
+
+const EqualizerBandSlider: React.FC<BandSliderProps> = ({
+  freqLabel,
+  idx,
+  dbVal,
+  enabled,
+  onChange,
+}) => {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+
+  const updateFromPointer = useCallback((clientY: number) => {
+    if (!enabled || !trackRef.current) return;
+    const rect = trackRef.current.getBoundingClientRect();
+    const trackH = rect.height;
+    if (trackH <= 0) return;
+    const relativeY = clientY - rect.top;
+    const clampedY = Math.max(0, Math.min(trackH, relativeY));
+    const pctFromBottom = 1 - (clampedY / trackH);
+    const db = Math.round(-12 + pctFromBottom * 24);
+    onChange(Math.max(-12, Math.min(12, db)));
+  }, [enabled, onChange]);
+
+  const fillPct = Math.max(0, Math.min(100, ((dbVal + 12) / 24) * 100));
+
+  return (
+    <div className="flex flex-col items-center w-full select-none">
+      <div
+        ref={trackRef}
+        role="slider"
+        aria-label={`Equaliser ${freqLabel}`}
+        aria-valuemin={-12}
+        aria-valuemax={12}
+        aria-valuenow={dbVal}
+        tabIndex={0}
+        onPointerDown={(e) => {
+          if (!enabled) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          updateFromPointer(e.clientY);
+        }}
+        onPointerMove={(e) => {
+          if (!enabled || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+          updateFromPointer(e.clientY);
+        }}
+        className={`relative h-48 w-14 flex items-center justify-center touch-none py-2 ${
+          enabled ? 'cursor-grab active:cursor-grabbing' : 'opacity-40 cursor-not-allowed'
+        }`}
+      >
+        {/* Subtle Broad Touch Line / Groove */}
+        <div className="w-1.5 h-full bg-zinc-800/90 rounded-full relative overflow-visible shadow-inner">
+          {/* Zero Level Guide Line in Center */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-[1px] bg-white/20 pointer-events-none" />
+
+          {/* Purple Filled Portion from Bottom */}
+          <div
+            className={`absolute bottom-0 left-0 right-0 rounded-full transition-all duration-75 ${
+              enabled
+                ? 'bg-gradient-to-t from-[#7C3AED] via-[#9333EA] to-[#C084FC] shadow-[0_0_8px_rgba(168,85,247,0.5)]'
+                : 'bg-zinc-600'
+            }`}
+            style={{ height: `${fillPct}%` }}
+          />
+
+          {/* Interactive Thumb Capsule / Circle */}
+          <div
+            className={`absolute left-1/2 -translate-x-1/2 translate-y-1/2 w-6 h-6 rounded-full border-2 border-white/90 shadow-[0_2px_10px_rgba(0,0,0,0.8)] pointer-events-none transition-transform duration-75 ${
+              enabled
+                ? 'bg-[#7C3AED] shadow-purple-600/70 scale-105'
+                : 'bg-zinc-500 scale-95'
+            }`}
+            style={{ bottom: `${fillPct}%` }}
+          >
+            <div className="w-1.5 h-1.5 rounded-full bg-white mx-auto mt-1.5" />
+          </div>
+        </div>
+      </div>
+
+      <span className="mt-2 text-xs font-medium text-zinc-400">{freqLabel}</span>
+      <span className={`mt-0.5 text-xs font-bold tabular-nums ${
+        dbVal > 0 ? 'text-[#C084FC]' : dbVal < 0 ? 'text-zinc-400' : 'text-zinc-300'
+      }`}>
+        {dbVal > 0 ? `+${dbVal} dB` : `${dbVal} dB`}
+      </span>
+    </div>
+  );
+};
+
 export const MusicEqualizerModal: React.FC = () => {
   const {
     isEqualizerOpen,
@@ -130,6 +224,19 @@ export const MusicEqualizerModal: React.FC = () => {
     setEqualizerImmersive,
   } = useMusic();
 
+  const topTouchStartYRef = useRef(0);
+
+  const handleTopTouchStart = (e: React.TouchEvent) => {
+    topTouchStartYRef.current = e.touches[0].clientY;
+  };
+
+  const handleTopTouchEnd = (e: React.TouchEvent) => {
+    if (e.changedTouches[0].clientY - topTouchStartYRef.current > 55) {
+      NativeBridgeService.triggerHaptic('light');
+      setIsEqualizerOpen(false);
+    }
+  };
+
   if (!isEqualizerOpen) return null;
 
   return (
@@ -137,18 +244,28 @@ export const MusicEqualizerModal: React.FC = () => {
       data-testid="music-equalizer-screen"
       className="fixed inset-0 z-[120] bg-[#0A0A0C] text-white flex flex-col overflow-hidden select-none"
     >
-      {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3.5 border-b border-white/5 shrink-0">
+      {/* Top Bar with Swipe-Down Gesture */}
+      <div
+        onTouchStart={handleTopTouchStart}
+        onTouchEnd={handleTopTouchEnd}
+        className="flex items-center justify-between px-4 py-3.5 border-b border-white/5 shrink-0"
+      >
         <button
           type="button"
           aria-label="Close Equaliser"
-          onClick={() => setIsEqualizerOpen(false)}
+          onClick={() => {
+            NativeBridgeService.triggerHaptic('light');
+            setIsEqualizerOpen(false);
+          }}
           className="w-10 h-10 rounded-full flex items-center justify-center text-zinc-200 hover:bg-white/10 active:scale-95 transition cursor-pointer"
         >
           <ChevronLeft className="w-6 h-6" />
         </button>
 
-        <h2 className="text-lg font-extrabold tracking-tight text-white">Equaliser</h2>
+        <div className="flex flex-col items-center">
+          <div className="w-8 h-1 rounded-full bg-white/20 mb-1" />
+          <h2 className="text-base font-extrabold tracking-tight text-white">Equaliser</h2>
+        </div>
 
         {/* Purple Toggle Switch */}
         <button
@@ -156,7 +273,10 @@ export const MusicEqualizerModal: React.FC = () => {
           role="switch"
           aria-checked={equalizer.enabled}
           aria-label="Toggle Equaliser"
-          onClick={() => setEqualizerEnabled(!equalizer.enabled)}
+          onClick={() => {
+            NativeBridgeService.triggerHaptic('medium');
+            setEqualizerEnabled(!equalizer.enabled);
+          }}
           className={`relative w-12 h-7 rounded-full transition-colors duration-200 p-0.5 cursor-pointer ${
             equalizer.enabled ? 'bg-[#7C3AED]' : 'bg-zinc-700'
           }`}
@@ -198,58 +318,20 @@ export const MusicEqualizerModal: React.FC = () => {
           </div>
         </div>
 
-        {/* Section 2: Manual adjustment (5 vertical sliders: 60Hz, 230Hz, 910Hz, 3.6kHz, 14.0kHz) */}
+        {/* Section 2: Manual adjustment (5 smooth gesture vertical sliders: 60Hz, 230Hz, 910Hz, 3.6kHz, 14.0kHz) */}
         <div className="mt-8">
-          <h3 className="text-lg font-extrabold text-white mb-5">Manual adjustment</h3>
-          <div className="grid grid-cols-5 gap-2 items-center justify-items-center py-2">
-            {EQUALIZER_BAND_LABELS.map((freqLabel, idx) => {
-              const dbVal = equalizer.bands[idx] || 0;
-              // Convert -12..+12 dB to 0..100% height from bottom
-              const fillPct = Math.max(0, Math.min(100, ((dbVal + 12) / 24) * 100));
-              return (
-                <div key={freqLabel} className="flex flex-col items-center w-full">
-                  <div className="relative h-48 w-10 flex items-center justify-center">
-                    {/* Vertical Background Track */}
-                    <div className="w-1 h-full bg-zinc-800 rounded-full relative overflow-visible">
-                      {/* Purple Filled Portion from Bottom */}
-                      <div
-                        className={`absolute bottom-0 left-0 right-0 rounded-full ${
-                          equalizer.enabled ? 'bg-[#7C3AED]' : 'bg-zinc-600'
-                        }`}
-                        style={{ height: `${fillPct}%` }}
-                      />
-                      {/* Purple Thumb Circle */}
-                      <div
-                        className={`absolute left-1/2 -translate-x-1/2 translate-y-1/2 w-5 h-5 rounded-full shadow-md pointer-events-none ${
-                          equalizer.enabled
-                            ? 'bg-[#7C3AED] shadow-purple-600/50'
-                            : 'bg-zinc-500'
-                        }`}
-                        style={{ bottom: `${fillPct}%` }}
-                      />
-                    </div>
-
-                    {/* Interactive Vertical Range Input */}
-                    <input
-                      type="range"
-                      aria-label={`Equaliser ${freqLabel}`}
-                      min={-12}
-                      max={12}
-                      step={1}
-                      disabled={!equalizer.enabled}
-                      value={dbVal}
-                      onChange={(e) => setEqualizerBand(idx, Number(e.target.value))}
-                      className="absolute w-48 h-10 -rotate-90 opacity-0 cursor-pointer z-10"
-                    />
-                  </div>
-
-                  <span className="mt-3 text-xs font-medium text-zinc-400">{freqLabel}</span>
-                  <span className="mt-0.5 text-xs font-bold text-white tabular-nums">
-                    {dbVal > 0 ? `+${dbVal}` : dbVal}
-                  </span>
-                </div>
-              );
-            })}
+          <h3 className="text-lg font-extrabold text-white mb-4">Manual adjustment</h3>
+          <div className="grid grid-cols-5 gap-1.5 items-center justify-items-center py-2 bg-[#121218]/60 border border-white/5 rounded-2xl p-3">
+            {EQUALIZER_BAND_LABELS.map((freqLabel, idx) => (
+              <EqualizerBandSlider
+                key={freqLabel}
+                freqLabel={freqLabel}
+                idx={idx}
+                dbVal={equalizer.bands[idx] || 0}
+                enabled={equalizer.enabled}
+                onChange={(val) => setEqualizerBand(idx, val)}
+              />
+            ))}
           </div>
         </div>
 

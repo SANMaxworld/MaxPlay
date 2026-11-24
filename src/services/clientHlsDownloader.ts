@@ -187,6 +187,8 @@ export class ClientHlsDownloader {
       ctrl.abort();
       this.activeAborters.delete(storageKey);
     }
+    // Also immediately cancel any active native Kotlin direct-file workers for this storageKey
+    NativeBridgeService.cancelDirectDownloadNative(storageKey);
   }
 
   /**
@@ -210,22 +212,31 @@ export class ClientHlsDownloader {
   public static normalizeLanguageLabel(rawName: string, rawLang: string): string {
     const combined = `${rawLang} ${rawName}`.toLowerCase().trim();
     if (!combined) return '';
-    if (combined.includes('hin') || /\bhi\b/.test(combined)) return 'Hindi';
+    if (combined.includes('hin') || /\bhi\b/.test(combined) || combined.includes('हिन्दी') || combined.includes('हिंदी')) return 'Hindi';
+    if (combined.includes('urd') || /\bur\b/.test(combined) || combined.includes('اردو')) return 'Urdu';
     if (combined.includes('eng') || /\ben\b/.test(combined)) return 'English';
-    if (combined.includes('jpn') || combined.includes('jap') || /\bja\b/.test(combined)) return 'Japanese';
-    if (combined.includes('tam') || /\bta\b/.test(combined)) return 'Tamil';
-    if (combined.includes('tel') || /\bte\b/.test(combined)) return 'Telugu';
-    if (combined.includes('mal') || /\bml\b/.test(combined)) return 'Malayalam';
-    if (combined.includes('kan') || /\bkn\b/.test(combined)) return 'Kannada';
-    if (combined.includes('kor') || /\bko\b/.test(combined)) return 'Korean';
-    if (combined.includes('spa') || /\bes\b/.test(combined)) return 'Spanish';
-    if (combined.includes('fre') || combined.includes('fra') || /\bfr\b/.test(combined)) return 'French';
-    if (combined.includes('rus') || /\bru\b/.test(combined)) return 'Russian';
-    if (combined.includes('ind') || /\bid\b/.test(combined)) return 'Indonesian';
-    if (combined.includes('ara') || /\bar\b/.test(combined)) return 'Arabic';
-    if (combined.includes('por') || /\bpt\b/.test(combined)) return 'Portuguese';
-    if (combined.includes('ger') || combined.includes('deu') || /\bde\b/.test(combined)) return 'German';
+    if (combined.includes('jpn') || combined.includes('jap') || /\bja\b/.test(combined) || combined.includes('日本語')) return 'Japanese';
+    if (combined.includes('tam') || /\bta\b/.test(combined) || combined.includes('தமிழ்')) return 'Tamil';
+    if (combined.includes('tel') || /\bte\b/.test(combined) || combined.includes('తెలుగు')) return 'Telugu';
+    if (combined.includes('mal') || /\bml\b/.test(combined) || combined.includes('മലയാളം')) return 'Malayalam';
+    if (combined.includes('kan') || /\bkn\b/.test(combined) || combined.includes('ಕನ್ನಡ')) return 'Kannada';
+    if (combined.includes('ben') || /\bbn\b/.test(combined) || combined.includes('বাংলা') || combined.includes('bangla')) return 'Bengali';
+    if (combined.includes('mar') || /\bmr\b/.test(combined) || combined.includes('मराठी')) return 'Marathi';
+    if (combined.includes('guj') || /\bgu\b/.test(combined) || combined.includes('ગુજરાતી')) return 'Gujarati';
+    if (combined.includes('pan') || /\bpa\b/.test(combined) || combined.includes('ਪੰਜਾਬੀ')) return 'Punjabi';
+    if (combined.includes('kor') || /\bko\b/.test(combined) || combined.includes('한국어')) return 'Korean';
+    if (combined.includes('zho') || combined.includes('chi') || /\bzh\b/.test(combined) || combined.includes('中文')) return 'Chinese';
+    if (combined.includes('spa') || /\bes\b/.test(combined) || combined.includes('español')) return 'Spanish';
+    if (combined.includes('fre') || combined.includes('fra') || /\bfr\b/.test(combined) || combined.includes('français')) return 'French';
+    if (combined.includes('ger') || combined.includes('deu') || /\bde\b/.test(combined) || combined.includes('deutsch')) return 'German';
+    if (combined.includes('rus') || /\bru\b/.test(combined) || combined.includes('русский')) return 'Russian';
+    if (combined.includes('ind') || /\bid\b/.test(combined) || combined.includes('bahasa')) return 'Indonesian';
+    if (combined.includes('ara') || /\bar\b/.test(combined) || combined.includes('العربية')) return 'Arabic';
+    if (combined.includes('por') || /\bpt\b/.test(combined) || combined.includes('português')) return 'Portuguese';
     if (combined.includes('ita') || /\bit\b/.test(combined)) return 'Italian';
+    if (combined.includes('tur') || /\btr\b/.test(combined) || combined.includes('türkçe')) return 'Turkish';
+    if (combined.includes('tha') || /\bth\b/.test(combined) || combined.includes('ไทย')) return 'Thai';
+    if (combined.includes('vie') || /\bvi\b/.test(combined) || combined.includes('tiếng việt')) return 'Vietnamese';
     return (rawName || rawLang).trim();
   }
 
@@ -244,12 +255,14 @@ export class ClientHlsDownloader {
     const rawName = (track.name || '').toLowerCase().trim();
     const rawLang = (track.language || '').toLowerCase().trim();
 
+    const normalizedTarget = this.normalizeLanguageLabel(targetLanguage, targetLanguage).toLowerCase().trim();
+    const trackNorm = this.normalizeLanguageLabel(track.name || track.friendly || '', track.language || '').toLowerCase().trim();
+
+    if (normalizedTarget && trackNorm && normalizedTarget === trackNorm) return true;
+    if (normalizedTarget && friendly && friendly === normalizedTarget) return true;
     if (friendly && friendly === target) return true;
     if (rawName && rawName === target) return true;
     if (rawLang && rawLang === target) return true;
-
-    const normalizedTarget = this.normalizeLanguageLabel(targetLanguage, targetLanguage).toLowerCase().trim();
-    if (normalizedTarget && friendly && friendly === normalizedTarget) return true;
 
     if (friendly.length >= 3 && target.length >= 3) {
       if (friendly.includes(target) || target.includes(friendly)) return true;
@@ -258,11 +271,12 @@ export class ClientHlsDownloader {
       if (rawName.includes(target) || target.includes(rawName)) return true;
     }
 
-    if (target.includes('hindi') && (rawLang === 'hi' || rawLang === 'hin' || rawName.includes('hin'))) return true;
+    if ((target.includes('hindi') || target.includes('हिन्दी') || target.includes('हिंदी')) && 
+        (rawLang === 'hi' || rawLang === 'hin' || rawName.includes('hin') || rawName.includes('हिन्दी') || rawName.includes('हिंदी'))) return true;
     if (target.includes('english') && (rawLang === 'en' || rawLang === 'eng' || rawName.includes('eng'))) return true;
-    if (target.includes('japanese') && (rawLang === 'ja' || rawLang === 'jpn' || rawName.includes('jap') || rawName.includes('jpn'))) return true;
-    if (target.includes('tamil') && (rawLang === 'ta' || rawLang === 'tam' || rawName.includes('tam'))) return true;
-    if (target.includes('telugu') && (rawLang === 'te' || rawLang === 'tel' || rawName.includes('tel'))) return true;
+    if (target.includes('japanese') && (rawLang === 'ja' || rawLang === 'jpn' || rawName.includes('jap') || rawName.includes('jpn') || rawName.includes('日本語'))) return true;
+    if (target.includes('tamil') && (rawLang === 'ta' || rawLang === 'tam' || rawName.includes('tam') || rawName.includes('தமிழ்'))) return true;
+    if (target.includes('telugu') && (rawLang === 'te' || rawLang === 'tel' || rawName.includes('tel') || rawName.includes('తెలుగు'))) return true;
 
     return false;
   }
@@ -863,12 +877,9 @@ export class ClientHlsDownloader {
       if (isDirectMp4) {
         if (useNativeDisk) {
           let finalBytes = 0;
-          // If streamUrl is routed via /api/stream-proxy (e.g. Server 3 Streamtape IP-bound token),
-          // pass the full origin + /api/stream-proxy URL to native OkHttp so the download IP matches the extracted token IP!
-          const nativeDownloadTargetUrl =
-            streamUrl.startsWith('/api/stream-proxy') && typeof window !== 'undefined' && window.location?.origin
-              ? `${window.location.origin}${streamUrl}`
-              : cleanUrl;
+          // In native Android APK, use direct cleanUrl (rewriting streamtape.com to streamta.pe)
+          // Never use window.location.origin (which is https://appassets.androidplatform.net in WebView)
+          const nativeDownloadTargetUrl = cleanUrl.replace('streamtape.com/get_video', 'streamta.pe/get_video');
 
           if (NativeBridgeService.supportsDirectFileVault()) {
             const directRes = await NativeBridgeService.downloadDirectFileToDiskNative(
@@ -876,21 +887,25 @@ export class ClientHlsDownloader {
               nativeDownloadTargetUrl,
               effectiveReferer,
               (dlBytes, totalBytes, speedBps) => {
-                const totalEst = totalBytes > 0 ? totalBytes : Math.max(dlBytes * 1.15, 50 * 1024 * 1024);
+                const safeDl = Number(dlBytes) || 0;
+                const safeTotal = Number(totalBytes) || 0;
+                const safeSpeed = Number(speedBps) || 0;
+                const totalEst = safeTotal > 0 ? safeTotal : Math.max(safeDl * 1.15, 50 * 1024 * 1024);
+                const pct = totalEst > 0 ? Math.min(99, Math.round((safeDl / totalEst) * 100)) : 0;
                 onProgress({
-                  progress: Math.min(99, Math.round((dlBytes / totalEst) * 100)),
-                  downloadedBytes: dlBytes,
+                  progress: isNaN(pct) ? 0 : pct,
+                  downloadedBytes: safeDl,
                   totalEstimatedBytes: totalEst,
                   completedSegments: 0,
                   totalSegments: 1,
-                  speedBps,
+                  speedBps: safeSpeed,
                 });
               }
             );
             if (!directRes.ok) {
               throw new Error(directRes.error || 'Direct native file download failed');
             }
-            finalBytes = directRes.bytes || 0;
+            finalBytes = directRes.bytes || (directRes as any).totalBytes || 0;
           } else {
             const segRes = await NativeBridgeService.downloadSegmentToDiskNative(
               storageKey,
@@ -1107,10 +1122,55 @@ export class ClientHlsDownloader {
         jobs.push({ isAudio: true, segIndex: i, url: audioSegments[i] });
       }
 
-      // Continuous sliding-window worker pool (32 parallel workers on Native Disk, 20 on Web)
-      // Saturates 100% of user's maximum mobile/5G/Hotspot/Wi-Fi bandwidth without batch stalls
-      const CONCURRENCY = useNativeDisk ? 32 : 20;
+      // Provider-tuned continuous sliding-window worker pool:
+      // - SprintCDN / Byse / Filemoon (Server 3) aggressively throttles/drops >12 simultaneous connections per IP,
+      //   so 10 concurrent workers yields MUCH higher sustained throughput & zero wild fluctuations!
+      // - VOE / primary CDNs (Server 1) saturate cleanly with 24 concurrent workers on Native Disk.
+      const sampleSegUrl = (jobs[0]?.url || effectiveReferer || '').toLowerCase();
+      const isSprintCdnOrByse =
+        sampleSegUrl.includes('sprintcdn') ||
+        sampleSegUrl.includes('owphbf') ||
+        sampleSegUrl.includes('r66nv9ed') ||
+        sampleSegUrl.includes('byse') ||
+        sampleSegUrl.includes('filemoon') ||
+        sampleSegUrl.includes('fmoon') ||
+        sampleSegUrl.includes('kerapoxy');
+      const CONCURRENCY = useNativeDisk
+        ? (isSprintCdnOrByse ? 16 : 32)
+        : (isSprintCdnOrByse ? 12 : 24);
       let nextJobIdx = 0;
+
+      // Smooth rolling-window EMA speed + 300ms UI progress throttling (prevents React thrashing on split video+audio streams!)
+      let lastProgressEmitMs = 0;
+      let lastSpeedSampleMs = Date.now();
+      let lastSpeedSampleBytes = 0;
+      let emaSpeedBps = 0;
+
+      const emitThrottledProgress = (force: boolean = false) => {
+        const now = Date.now();
+        if (!force && now - lastProgressEmitMs < 300) return;
+        const dtSec = (now - lastSpeedSampleMs) / 1000;
+        if (dtSec >= 0.45) {
+          const deltaBytes = Math.max(0, sessionDownloadedBytes - lastSpeedSampleBytes);
+          const instantBps = deltaBytes / dtSec;
+          emaSpeedBps = emaSpeedBps > 0 ? emaSpeedBps * 0.65 + instantBps * 0.35 : instantBps;
+          lastSpeedSampleMs = now;
+          lastSpeedSampleBytes = sessionDownloadedBytes;
+        }
+        const elapsedSec = Math.max(0.25, (now - startTime) / 1000);
+        const speedBps = emaSpeedBps > 0 ? emaSpeedBps : sessionDownloadedBytes / elapsedSec;
+        const progress = Math.min(99, Math.round((completedSegments / totalSegments) * 100));
+        lastProgressEmitMs = now;
+
+        onProgress({
+          progress,
+          downloadedBytes,
+          totalEstimatedBytes: lockedTotalEstimatedBytes,
+          completedSegments,
+          totalSegments,
+          speedBps,
+        });
+      };
 
       const worker = async () => {
         while (nextJobIdx < jobs.length) {
@@ -1177,7 +1237,8 @@ export class ClientHlsDownloader {
             } catch (err) {
               if (signal.aborted) throw err;
               if (attempt === 4) throw err;
-              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+              // Randomized jitter backoff prevents thundering-herd retry bursts on SprintCDN
+              await new Promise((r) => setTimeout(r, (250 + Math.random() * 350) * (attempt + 1)));
             }
           }
 
@@ -1204,18 +1265,7 @@ export class ClientHlsDownloader {
             );
           }
 
-          const elapsedSec = Math.max(0.2, (Date.now() - startTime) / 1000);
-          const speedBps = sessionDownloadedBytes / elapsedSec;
-          const progress = Math.min(99, Math.round((completedSegments / totalSegments) * 100));
-
-          onProgress({
-            progress,
-            downloadedBytes,
-            totalEstimatedBytes: lockedTotalEstimatedBytes,
-            completedSegments,
-            totalSegments,
-            speedBps,
-          });
+          emitThrottledProgress(completedSegments === totalSegments);
         }
       };
 

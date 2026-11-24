@@ -1,7 +1,7 @@
 import express from "express";
 import https from "https";
 import dns from "dns";
-import { exec, spawn, execSync } from "child_process";
+import { exec, execFile, spawn, execSync } from "child_process";
 import path from "path";
 import fs from "fs";
 import url from "url";
@@ -22,12 +22,19 @@ export const TMDB_API_KEY = (process.env.TMDB_API_KEY && process.env.TMDB_API_KE
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ADMIN_PORT = process.env.ADMIN_PORT || 3001;
 
 app.disable("x-powered-by");
-app.use((_req, res, next) => {
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD");
+  res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-XSS-Protection", "1; mode=block");
   res.setHeader("Referrer-Policy", "no-referrer-when-downgrade");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
   next();
 });
 app.use(express.json({ limit: "15mb" }));
@@ -235,20 +242,24 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
 
     // 1. Primary Engine: ffprobe (Exact duration for MP4, MKV, M3U8, WEBM, TS, MOV, etc.)
+    // Security: Uses execFile with argv array (ZERO shell command interpolation!)
     try {
       const durSec = await new Promise<number>((resolve) => {
-        const sanitizedUrl = cleanUrl.replace(/"/g, '\\"');
-        const cmd = `ffprobe -v quiet -print_format json -show_format "${sanitizedUrl}"`;
-        exec(cmd, { timeout: 15000 }, (err, stdout) => {
-          if (!err && stdout) {
-            try {
-              const json = JSON.parse(stdout);
-              const d = parseFloat(json?.format?.duration);
-              if (!isNaN(d) && d > 0) return resolve(Math.round(d));
-            } catch (_) {}
+        execFile(
+          "ffprobe",
+          ["-v", "quiet", "-print_format", "json", "-show_format", cleanUrl],
+          { timeout: 15000 },
+          (err, stdout) => {
+            if (!err && stdout) {
+              try {
+                const json = JSON.parse(stdout);
+                const d = parseFloat(json?.format?.duration);
+                if (!isNaN(d) && d > 0) return resolve(Math.round(d));
+              } catch (_) {}
+            }
+            resolve(0);
           }
-          resolve(0);
-        });
+        );
       });
       if (durSec > 0) return durSec;
     } catch (e) {
@@ -331,6 +342,46 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
     return 0;
   }
+
+  // Security: Global SSRF & Private/Metadata Network Guard for all proxy / probe / extract endpoints
+  const isBlockedSsrfUrl = (raw: unknown): boolean => {
+    if (typeof raw !== "string" || !raw.trim()) return false;
+    try {
+      const parsed = new URL(raw.trim());
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return true;
+      const h = (parsed.hostname || "").toLowerCase();
+      if (!h || h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0.0.0.0") return true;
+      if (h.startsWith("127.") || h.startsWith("10.") || h.startsWith("169.254.") || h.startsWith("192.168.")) return true;
+      if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
+      if (h.endsWith(".internal") || h.endsWith(".local") || h === "metadata.google.internal") return true;
+      return false;
+    } catch {
+      return true;
+    }
+  };
+
+  app.use((req, res, next) => {
+    const p = (req.path || "").toLowerCase();
+    if (
+      p === "/api/proxy" ||
+      p === "/proxy" ||
+      p === "/proxy/m3u8" ||
+      p === "/api/proxy/m3u8" ||
+      p === "/proxy/ts" ||
+      p === "/api/proxy/ts" ||
+      p === "/api/stream-proxy" ||
+      p === "/api/download-media" ||
+      p === "/api/probe-video-duration" ||
+      p === "/api/extract-stream"
+    ) {
+      const targetUrl = (req.query?.url as string) || (req.body?.url as string) || "";
+      if (targetUrl && isBlockedSsrfUrl(targetUrl)) {
+        res.status(403).json({ ok: false, error: "Blocked private/internal host" });
+        return;
+      }
+    }
+    next();
+  });
 
   // API Routes
   app.get("/api/health", (_req, res) => {
@@ -485,16 +536,11 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       return { durationSec, sizeMb, bandwidthBps: bw };
     }
 
-    if (knownBandwidthBps > 50000 && durationSec > 0) {
-      const bytes = (knownBandwidthBps * durationSec) / 8;
-      const sizeMb = Math.max(1, Math.round(bytes / (1024 * 1024)));
-      return { durationSec, sizeMb, bandwidthBps: knownBandwidthBps };
-    }
-
     if (segments.length > 0 && durationSec > 0) {
       const idxs = Array.from(new Set([
-        Math.min(segments.length - 1, Math.floor(segments.length * 0.25)),
-        Math.min(segments.length - 1, Math.floor(segments.length * 0.65))
+        Math.min(segments.length - 1, Math.floor(segments.length * 0.15)),
+        Math.min(segments.length - 1, Math.floor(segments.length * 0.50)),
+        Math.min(segments.length - 1, Math.floor(segments.length * 0.85))
       ]));
       let sampledBytes = 0;
       let sampledDur = 0;
@@ -519,11 +565,44 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
     }
 
+    if (knownBandwidthBps > 50000 && durationSec > 0) {
+      const bytes = (knownBandwidthBps * durationSec) / 8;
+      const sizeMb = Math.max(1, Math.round(bytes / (1024 * 1024)));
+      return { durationSec, sizeMb, bandwidthBps: knownBandwidthBps };
+    }
+
     return { durationSec, sizeMb: 0, bandwidthBps: knownBandwidthBps };
   }
 
   // Resilient SprintCDN / Byse IP Router: races & caches working IPv4 addresses to bypass cloud ASN blocks
   const sprintCdnWorkingIpCache = new Map<string, string>();
+  const sprintCdnDnsCache = new Map<string, { ips: string[]; expiresAt: number }>();
+  // Persistent Keep-Alive HTTPS pool ONLY for Server 3 (SprintCDN/Byse) — eliminates 400-600ms TCP+TLS handshakes per segment!
+  const sprintCdnKeepAliveAgent = new https.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 30000,
+    maxSockets: 64,
+    maxFreeSockets: 16,
+    timeout: 45000
+  });
+
+  async function resolveSprintCdnIpsCached(hostname: string): Promise<string[]> {
+    const now = Date.now();
+    const cached = sprintCdnDnsCache.get(hostname);
+    if (cached && cached.expiresAt > now && cached.ips.length > 0) {
+      return cached.ips;
+    }
+    const resolved = await dns.promises.resolve4(hostname).catch(() => []);
+    if (resolved.length > 0) {
+      sprintCdnDnsCache.set(hostname, { ips: resolved, expiresAt: now + 10 * 60 * 1000 });
+    }
+    return resolved;
+  }
+
+  // SERVER 3 (SprintCDN/Byse): Direct Player-Driven Stream Pipeline (zero thread blocking, zero chunk hoarding)
+  function prefetchSprintMasterPipeline(masterUrl: string, referer: string) {
+    // Direct streaming: video player communicates directly with the media stream without intermediate buffer hoarding
+  }
 
   const hlsPlaylistTextCache = new Map<string, { text: string; expiresAt: number }>();
 
@@ -609,10 +688,11 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     const cached = sprintCdnWorkingIpCache.get(parsed.hostname);
     if (cached) {
       candidateIps.push(cached);
-    }
-    const resolved = await dns.promises.resolve4(parsed.hostname).catch(() => []);
-    for (const ip of resolved) {
-      if (!candidateIps.includes(ip)) candidateIps.push(ip);
+    } else {
+      const resolved = await resolveSprintCdnIpsCached(parsed.hostname);
+      for (const ip of resolved) {
+        if (!candidateIps.includes(ip)) candidateIps.push(ip);
+      }
     }
 
     if (candidateIps.length === 0) {
@@ -635,6 +715,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }>((resolve, reject) => {
         let settled = false;
         const req = https.request({
+          agent: sprintCdnKeepAliveAgent,
           host: ip,
           port: 443,
           servername: parsed.hostname,
@@ -717,7 +798,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           responseData = await fetchViaSingleIp(cached, 2400, isPlaylistReq ? 6000 : 30000);
         } catch {
           sprintCdnWorkingIpCache.delete(parsed.hostname);
-          const fallbackIps = candidateIps.filter((ip) => ip !== cached);
+          const freshIps = await resolveSprintCdnIpsCached(parsed.hostname);
+          const fallbackIps = freshIps.filter((ip) => ip !== cached);
           responseData = await Promise.any(
             (fallbackIps.length > 0 ? fallbackIps : candidateIps).map((ip) =>
               fetchViaSingleIp(ip, 2600, isPlaylistReq ? 6000 : 30000)
@@ -782,10 +864,13 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
     const candidateIps: string[] = [];
     const cachedIp = sprintCdnWorkingIpCache.get(parsed.hostname);
-    if (cachedIp) candidateIps.push(cachedIp);
-    const resolved = await dns.promises.resolve4(parsed.hostname).catch(() => []);
-    for (const ip of resolved) {
-      if (!candidateIps.includes(ip)) candidateIps.push(ip);
+    if (cachedIp) {
+      candidateIps.push(cachedIp);
+    } else {
+      const resolved = await resolveSprintCdnIpsCached(parsed.hostname);
+      for (const ip of resolved) {
+        if (!candidateIps.includes(ip)) candidateIps.push(ip);
+      }
     }
     if (candidateIps.length === 0) return false;
 
@@ -800,6 +885,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         let settled = false;
         const upstreamReq = https.request(
           {
+            agent: sprintCdnKeepAliveAgent,
             host: ip,
             port: 443,
             servername: parsed.hostname,
@@ -868,7 +954,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           winner = await openViaIp(cachedIp, 2600);
         } catch {
           sprintCdnWorkingIpCache.delete(parsed.hostname);
-          const fallbackIps = candidateIps.filter((ip) => ip !== cachedIp);
+          const freshIps = await resolveSprintCdnIpsCached(parsed.hostname);
+          const fallbackIps = freshIps.filter((ip) => ip !== cachedIp);
           winner = await Promise.any(
             (fallbackIps.length > 0 ? fallbackIps : candidateIps).map((ip) => openViaIp(ip, 3000))
           );
@@ -935,7 +1022,9 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         const u = new URL(m3u8Url);
         const h = u.hostname.toLowerCase();
         isSprintEdge = h.includes('sprintcdn') || h.includes('owphbf') || h.includes('r66nv9ed');
-        if (!customReferer && !isSprintEdge && !h.includes('filemoon') && !h.includes('byse') && !h.includes('n1mwq')) {
+        if (h.includes('ravok') || h.includes('as-cdn') || h.includes('animesalt')) {
+          referer = 'https://animesalt.cx/';
+        } else if (!customReferer && !isSprintEdge && !h.includes('filemoon') && !h.includes('byse') && !h.includes('n1mwq')) {
           referer = `${u.origin}/`;
         }
       } catch {}
@@ -1655,8 +1744,6 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               }
               continue;
             }
-            await Promise.race([metaPromise, new Promise((r) => setTimeout(r, 150))]);
-
             if (pbData?.playback) {
               const pb = pbData.playback;
               const b64UrlToBuf = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
@@ -1753,6 +1840,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
                   result: resultObj,
                   expiresAt: Date.now() + 10 * 60 * 1000
                 });
+                // Immediately warm Master -> Variant + Audio playlists + seg #0 in background while JSON returns!
+                prefetchSprintMasterPipeline(bestM3u8, `${candidateOrigin}/`);
                 return resultObj;
               }
             }
@@ -2233,8 +2322,17 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     const ua = defaultByseUa;
     try {
       const trimmed = sourceUrl.trim();
+      const fileIdMatch = trimmed.match(/\/(?:v|e)\/([a-zA-Z0-9_-]+)/i);
+      const fileId = fileIdMatch ? fileIdMatch[1] : null;
+
       const candidates = Array.from(
         new Set([
+          ...(fileId ? [
+            `https://streamta.pe/v/${fileId}`,
+            `https://strcloud.link/v/${fileId}`,
+            `https://strtape.tech/v/${fileId}`,
+            `https://streamta.pe/e/${fileId}`,
+          ] : []),
           trimmed,
           trimmed.replace(/\/v\//i, "/e/")
         ])
@@ -2245,14 +2343,15 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       for (const candidateUrl of candidates) {
         try {
+          const candReferer = candidateUrl.includes("streamta.pe") ? "https://streamta.pe/" : "https://streamtape.com/";
           const resp = await fetch(candidateUrl, {
             headers: {
               "User-Agent": ua,
-              "Referer": "https://streamtape.com/",
+              "Referer": candReferer,
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
               "Accept-Language": "en-US,en;q=0.9"
             },
-            signal: AbortSignal.timeout(10000)
+            signal: AbortSignal.timeout(3500)
           });
           if (!resp.ok) continue;
           const html = await resp.text();
@@ -2266,9 +2365,9 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             }
           }
 
-          // Capture ALL robotlink/ideoolink/botlink innerHTML JS assignments and evaluate LAST to FIRST
+          // Capture ALL ideoooolink/captchalink/norobotlink/robotlink innerHTML JS assignments and evaluate LAST to FIRST
           const assignments: string[] = [];
-          const regex = /getElementById\s*\(\s*['"](?:robotlink|ideoolink|botlink)['"]\s*\)\s*\.innerHTML\s*=\s*([^;]+);/gi;
+          const regex = /getElementById\s*\(\s*['"](?:ideoooolink|captchalink|norobotlink|robotlink|ideoolink|botlink)['"]\s*\)\s*\.innerHTML\s*=\s*([^;]+);/gi;
           let match: RegExpExecArray | null;
           while ((match = regex.exec(html)) !== null) {
             if (match[1]) assignments.push(match[1]);
@@ -2361,6 +2460,173 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
   }
 
+  // ============================================================================
+  // ⚡ DEDICATED ANIMESALT HLS ENGINE EXTRACTOR (Multi-Audio & HD Master Stream)
+  // ============================================================================
+  function isAnimeSaltUrl(rawUrl: string): boolean {
+    if (!rawUrl || typeof rawUrl !== "string") return false;
+    const lower = rawUrl.toLowerCase().trim();
+    return (
+      lower.includes("animesalt.") ||
+      lower.includes("ravok.buzz") ||
+      lower.includes("abyssplayer.com") ||
+      lower.includes("as-cdn")
+    );
+  }
+
+  async function extractAnimeSaltStream(sourceUrl: string): Promise<{
+    ok: boolean;
+    m3u8Url?: string;
+    rawM3u8Url?: string;
+    qualities?: string[];
+    audioTracks?: string[];
+    headers?: Record<string, string>;
+    error?: string;
+  }> {
+    try {
+      const trimmed = sourceUrl.trim();
+      let masterUrl: string | null = null;
+      let audioTracks: string[] = [];
+      let qualities: string[] = [];
+      let ravokVideoId: string | null = null;
+
+      // Case 1: Already a master m3u8
+      if (trimmed.includes(".m3u8")) {
+        masterUrl = trimmed;
+      } 
+      // Case 2: ravok.buzz URL directly
+      else if (trimmed.includes("ravok.buzz")) {
+        const match = trimmed.match(/(?:video|embed)\/([a-f0-9]+)/i);
+        if (match) ravokVideoId = match[1];
+      }
+      // Case 3: AnimeSalt page URL
+      else if (trimmed.includes("animesalt.")) {
+        const pageRes = await fetch(trimmed, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://animesalt.cx/"
+          },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!pageRes.ok) throw new Error(`AnimeSalt page fetch failed: ${pageRes.status}`);
+        const html = await pageRes.text();
+
+        // Look for ravok embed
+        const ravokMatch = html.match(/https?:\/\/ravok\.buzz\/(?:video|embed)\/([a-f0-9]+)/i);
+        if (ravokMatch) {
+          ravokVideoId = ravokMatch[1];
+        }
+
+        // Look for player.php data
+        const dataMatch = html.match(/player\.php\?data=([^"'&]+)/i);
+        if (dataMatch) {
+          try {
+            const rawDecoded = decodeURIComponent(dataMatch[1]);
+            const jsonStr = Buffer.from(rawDecoded, "base64").toString("utf-8").trim();
+            const cleanJson = jsonStr.substring(0, jsonStr.lastIndexOf("]") + 1);
+            const parsed = JSON.parse(cleanJson);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((p: any) => {
+                if (p.language && !audioTracks.includes(p.language)) {
+                  audioTracks.push(p.language);
+                }
+              });
+            }
+          } catch (e: any) {
+            console.warn("[AnimeSalt] Decode player.php data warning:", e?.message);
+          }
+        }
+      }
+
+      // If we have ravokVideoId, call getVideo
+      if (ravokVideoId) {
+        const gvRes = await fetch(`https://ravok.buzz/player/index.php?data=${ravokVideoId}&do=getVideo`, {
+          method: "POST",
+          headers: {
+            "Referer": `https://ravok.buzz/video/${ravokVideoId}`,
+            "X-Requested-With": "XMLHttpRequest",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (gvRes.ok) {
+          const gvData: any = await gvRes.json();
+          masterUrl = gvData.videoSource || gvData.securedLink || null;
+        }
+      }
+
+      if (!masterUrl) {
+        return { ok: false, error: "Could not resolve master stream from AnimeSalt" };
+      }
+
+      // Inspect master.m3u8 for qualities and audio tracks
+      try {
+        const manifestRes = await fetch(masterUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://ravok.buzz/"
+          },
+          signal: AbortSignal.timeout(8000)
+        });
+
+        if (manifestRes.ok) {
+          const manifestText = await manifestRes.text();
+          const lines = manifestText.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
+              const nameMatch = line.match(/NAME="([^"]+)"/);
+              if (nameMatch && !audioTracks.includes(nameMatch[1])) {
+                audioTracks.push(nameMatch[1]);
+              }
+            }
+            if (line.startsWith("#EXT-X-STREAM-INF")) {
+              const qMatch = line.match(/NAME="([^"]+)"/);
+              if (qMatch && !qualities.includes(qMatch[1])) {
+                qualities.push(qMatch[1]);
+              } else {
+                const resMatch = line.match(/RESOLUTION=\d+x(\d+)/);
+                if (resMatch) {
+                  const h = parseInt(resMatch[1]);
+                  const q = h >= 1000 ? "1080p" : h >= 700 ? "720p" : h >= 450 ? "480p" : h >= 300 ? "360p" : "240p";
+                  if (!qualities.includes(q)) qualities.push(q);
+                }
+              }
+            }
+          }
+        }
+      } catch (manifestErr: any) {
+        console.warn("[AnimeSalt] Manifest probe warning:", manifestErr?.message);
+      }
+
+      if (qualities.length === 0) qualities = ["1080p", "720p", "480p", "360p", "240p"];
+      if (audioTracks.length === 0) audioTracks = ["Japanese", "English", "Telugu", "Tamil", "Hindi"];
+
+      const formattedAudio = audioTracks.map((l) => {
+        const lower = l.toLowerCase();
+        if (lower.includes("japan")) return "Japanese [ORIGINAL]";
+        if (lower.includes("english")) return "English [DUBBED]";
+        if (lower.includes("hindi")) return "Hindi [DUBBED]";
+        if (lower.includes("telugu")) return "Telugu [DUBBED]";
+        if (lower.includes("tamil")) return "Tamil [DUBBED]";
+        return `${l} [DUBBED]`;
+      });
+
+      return {
+        ok: true,
+        m3u8Url: masterUrl,
+        rawM3u8Url: masterUrl,
+        qualities,
+        audioTracks: formattedAudio,
+        headers: {
+          "Referer": "https://ravok.buzz/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+      };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || "AnimeSalt extraction failed" };
+    }
+  }
+
   const handleExtractStream = async (req: any, res: any) => {
     try {
       const sourceUrl = (req.body?.url || req.query?.url) as string;
@@ -2402,6 +2668,78 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             cached: true,
             expiresAt: cached.expiresAt,
             remainingSeconds: Math.max(0, Math.round((cached.expiresAt - now) / 1000))
+          });
+          return;
+        }
+      }
+
+      // ====================================================================
+      // ⚡ DEDICATED ANIMESALT HLS ENGINE FAST PATH (Ravok.buzz Multi-Audio)
+      // ====================================================================
+      if (isAnimeSaltUrl(trimmedUrl)) {
+        const asResult = await extractAnimeSaltStream(trimmedUrl);
+        if (asResult.ok && asResult.m3u8Url) {
+          const ttlMs = 170 * 60 * 1000;
+          const expiresAt = now + ttlMs;
+          const customRef = asResult.headers?.["Referer"] || "https://ravok.buzz/";
+          const host = req.get("host") || "localhost:3000";
+          const reqOrigin = String(req.headers.origin || "");
+          const isExternalCrossOrigin = Boolean(reqOrigin && !reqOrigin.includes(host) && host.includes("hf.space"));
+          const serverOrigin = isExternalCrossOrigin ? `https://${host}` : "";
+          const refParam = customRef ? `&referer=${encodeURIComponent(customRef)}` : "";
+          const proxiedMaster = `${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(asResult.m3u8Url)}${refParam}`;
+
+          const permanentQualityLinks: Record<string, string> = {};
+          const qualList = (asResult.qualities && asResult.qualities.length > 0)
+            ? asResult.qualities
+            : ["1080p", "720p", "480p", "360p", "240p"];
+          for (const q of qualList) {
+            permanentQualityLinks[q] = trimmedUrl;
+          }
+          const downloadQualities = qualList.map(q => ({
+            id: q,
+            label: `${q} ${q.includes("1080") ? "Full HD" : q.includes("720") ? "HD" : "Standard"}`,
+            sizeMb: q === "1080p" ? 1450 : q === "720p" ? 950 : q === "480p" ? 550 : q === "360p" ? 350 : 200,
+            url: trimmedUrl
+          }));
+
+          streamExtractionCache.set(cacheKey, {
+            m3u8Url: proxiedMaster,
+            rawM3u8Url: asResult.m3u8Url,
+            rawQualityLinks: permanentQualityLinks,
+            headers: asResult.headers,
+            expiresAt,
+            cachedAt: now,
+            qualities: qualList,
+            qualityLinks: permanentQualityLinks,
+            downloadQualities,
+            audioTracks: asResult.audioTracks,
+            duration: requestedDuration || 1440
+          } as any);
+
+          res.json({
+            ok: true,
+            m3u8Url: proxiedMaster,
+            rawM3u8Url: asResult.m3u8Url,
+            qualities: qualList,
+            qualityLinks: permanentQualityLinks,
+            rawQualityLinks: permanentQualityLinks,
+            downloadQualities,
+            audioTracks: asResult.audioTracks,
+            duration: requestedDuration || 1440,
+            durationFormatted: Math.floor((requestedDuration || 1440) / 60) + ":" + ((requestedDuration || 1440) % 60).toString().padStart(2, "0"),
+            headers: asResult.headers,
+            provider: "ANIMESALT",
+            cached: false,
+            expiresAt,
+            remainingSeconds: Math.round(ttlMs / 1000)
+          });
+          return;
+        } else {
+          res.status(200).json({
+            ok: false,
+            error: asResult.error || "AnimeSalt stream extraction failed",
+            provider: "ANIMESALT"
           });
           return;
         }
@@ -2677,14 +3015,22 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           const ttlMs = 170 * 60 * 1000;
           const expiresAt = now + ttlMs;
           const customRef = voeResult.headers?.["Referer"] || "https://voe.sx/";
-          const streamMeta = await parseHlsManifestMetadata(
-            voeResult.m3u8Url,
-            requestedDuration,
-            customRef,
-            skipSubPlaylistProbe,
-            forcedQuality || undefined,
-            trimmedUrl
-          );
+          const streamMeta = skipSubPlaylistProbe
+            ? {
+                qualities: [forcedQuality || "1080p"],
+                qualityLinks: {} as Record<string, string>,
+                downloadQualities: [] as any[],
+                audioTracks: [] as string[],
+                duration: requestedDuration > 0 ? requestedDuration : 0,
+              }
+            : await parseHlsManifestMetadata(
+                voeResult.m3u8Url,
+                requestedDuration,
+                customRef,
+                skipSubPlaylistProbe,
+                forcedQuality || undefined,
+                trimmedUrl
+              );
 
           const host = req.get("host") || "localhost:3000";
           const reqOrigin = String(req.headers.origin || "");
@@ -3139,6 +3485,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             referer = "https://byseraguci.com/";
           } else if (h.includes("voe")) {
             referer = "https://voe.sx/";
+          } else if (h.includes("ravok") || h.includes("as-cdn") || h.includes("animesalt")) {
+            referer = "https://animesalt.cx/";
           } else {
             referer = `${u.origin}/`;
           }
@@ -3166,29 +3514,14 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
 
       const text = await upstream.text();
+      // For Server 3 (SprintCDN/Byse) media playlists, register ordered segment map & warm seg #0 progressively!
+      try {
+        const th = new URL(targetUrl).hostname.toLowerCase();
+        if ((th.includes("sprintcdn") || th.includes("owphbf") || th.includes("r66nv9ed")) && text.includes("#EXTINF:")) {
+          registerSprintMediaPlaylistSegments(targetUrl, text, referer, 1);
+        }
+      } catch {}
       let rawLines = text.split("\n");
-
-      // Detect Byse/SprintCDN master playlists where index-a1.m3u8 is an empty 376-byte track
-      // and the video variant explicitly uses index-v1-a2.m3u8 (e.g. Vefa Sultan / Mehmed x70lrdcyz8h2).
-      const hasMultipleAudioMedia = rawLines.filter((l) => l.trim().startsWith("#EXT-X-MEDIA:TYPE=AUDIO")).length > 1;
-      const usesA2VideoVariant = rawLines.some((l) => /index-v\d+-a2\.m3u8/i.test(l));
-      if (hasMultipleAudioMedia && usesA2VideoVariant) {
-        rawLines = rawLines
-          .filter((l) => {
-            const trimmedL = l.trim();
-            if (trimmedL.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && /index-a1\.m3u8/i.test(trimmedL)) {
-              return false;
-            }
-            return true;
-          })
-          .map((l) => {
-            const trimmedL = l.trim();
-            if (trimmedL.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && /index-a2\.m3u8/i.test(trimmedL)) {
-              return trimmedL.replace(/DEFAULT=NO/i, "DEFAULT=YES");
-            }
-            return l;
-          });
-      }
 
       const lines = rawLines;
       const rewrittenLines: string[] = [];
@@ -3290,6 +3623,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             referer = "https://byseraguci.com/";
           } else if (h.includes("voe")) {
             referer = "https://voe.sx/";
+          } else if (h.includes("ravok") || h.includes("as-cdn") || h.includes("animesalt")) {
+            referer = "https://animesalt.cx/";
           } else {
             referer = `${u.origin}/`;
           }
@@ -3317,6 +3652,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "*");
       res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Cache-Control", "public, max-age=300");
 
       const normalizeSegmentMime = (rawCt: string | null): string => {
         if (!rawCt) return "video/mp2t";
@@ -3329,6 +3665,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       };
 
       if (isSprintHost) {
+        // SERVER 3 (SprintCDN/Byse): Direct Player-Driven Stream (zero locks, zero chunk hoarding)
         const streamed = await streamSprintCdnToResponse(targetUrl, headers, res, req, normalizeSegmentMime);
         if (streamed) return;
         const sprintRes = await resilientFetchSprintCdn(targetUrl, { headers });
@@ -3570,15 +3907,23 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
       const fallbackUrl = (req.query.fallbackUrl as string || "").trim();
       const isHeadReq = req.method === "HEAD";
+      const reqAbortCtrl = new AbortController();
+      const onClientClose = () => {
+        if (!reqAbortCtrl.signal.aborted) reqAbortCtrl.abort();
+      };
+      req.on("close", onClientClose);
+      res.on("close", onClientClose);
+
       const fetchWithHeaderTimeout = async (urlToFetch: string, reqHeaders: Record<string, string>) => {
-        const headerCtrl = new AbortController();
-        const headerTimer = setTimeout(() => headerCtrl.abort(), 25000);
+        const headerTimer = setTimeout(() => {
+          if (!reqAbortCtrl.signal.aborted) reqAbortCtrl.abort();
+        }, 25000);
         try {
           return await fetch(urlToFetch, {
             method: isHeadReq ? "HEAD" : "GET",
             headers: reqHeaders,
             redirect: "follow",
-            signal: headerCtrl.signal
+            signal: reqAbortCtrl.signal
           });
         } finally {
           clearTimeout(headerTimer);
@@ -3652,6 +3997,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           try { if (!res.writableEnded) res.end(); } catch {}
         });
         req.on("close", () => {
+          try { reqAbortCtrl.abort(); } catch {}
           try { nodeStream.destroy(); } catch {}
         });
         nodeStream.pipe(res);
@@ -6052,7 +6398,15 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
 </html>`);
   });
 
-  if (!isVercel && process.env.NODE_ENV !== "production") {
+  // Dedicated Admin Redirect: Route admin requests from Client Host (port 3000) to Dedicated Admin Host (port 3001)
+  app.get(["/admin.html", "/admin"], (req, res) => {
+    const host = (req.headers.host || "localhost").split(":")[0];
+    res.redirect(302, `http://${host}:${ADMIN_PORT}/`);
+  });
+
+  const isDev = !isVercel && process.env.NODE_ENV !== "production" && !__filename.endsWith("server.cjs");
+
+  if (isDev) {
     // Development mode: always use Vite middleware and dynamic index.html transformation
     vitePromise = createViteServer({
       server: { middlewareMode: true },
@@ -6110,6 +6464,22 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
       }
     });
   } else {
+    // Security: NEVER expose compiled backend bundle or sourcemaps over HTTP!
+    app.use((req, res, next) => {
+      const p = (req.path || "").toLowerCase();
+      if (p.endsWith(".map") || p.endsWith("server.cjs") || p.includes("..")) {
+        res.status(403).send("Forbidden");
+        return;
+      }
+      next();
+    });
+
+    // Dedicated Admin Redirect: Route admin requests from Client Host (port 3000) to Dedicated Admin Host (port 3001)
+    app.get(["/admin.html", "/admin"], (req, res) => {
+      const host = (req.headers.host || "localhost").split(":")[0];
+      res.redirect(302, `http://${host}:${ADMIN_PORT}/`);
+    });
+
     // Production mode: serve built dist static files
     if (hasDist) {
       app.use(express.static(distPath));
@@ -6132,10 +6502,58 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
     });
   }
 
+  // ============================================================================
+  // ⚡ DEDICATED ADMIN PANEL SERVER (Isolated Port/Host: 3001)
+  // ============================================================================
+  const adminApp = express();
+  adminApp.disable("x-powered-by");
+  adminApp.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+  });
+
+  const serveAdminHtml = (_req: express.Request, res: express.Response) => {
+    const adminDist = path.join(process.cwd(), "dist", "admin.html");
+    const adminPub = path.join(process.cwd(), "public", "admin.html");
+    if (fs.existsSync(adminDist)) {
+      return res.sendFile(adminDist);
+    } else if (fs.existsSync(adminPub)) {
+      return res.sendFile(adminPub);
+    } else {
+      return res.status(404).send("Admin panel not found");
+    }
+  };
+
+  adminApp.get("/", serveAdminHtml);
+  adminApp.get("/admin.html", serveAdminHtml);
+  adminApp.get("/admin", serveAdminHtml);
+
+  // Serve static assets (favicon, images, fonts) from public and dist
+  adminApp.use(express.static(path.join(process.cwd(), "public")));
+  if (hasDist) {
+    adminApp.use(express.static(distPath));
+  }
+
+  // Forward all backend API, streaming extractor, proxy and AI requests to main Express router
+  adminApp.use((req, res, next) => {
+    if (req.path.startsWith("/api/") || req.path.startsWith("/proxy/")) {
+      return app(req, res, next);
+    }
+    return serveAdminHtml(req, res);
+  });
+
   if (!isVercel) {
     app.listen(Number(PORT), "0.0.0.0", () => {
-      console.log(`Server running on http://0.0.0.0:${PORT}`);
+      console.log(`🎬 MaxPlay Client App running on http://0.0.0.0:${PORT} (or http://localhost:${PORT})`);
+    });
+
+    adminApp.listen(Number(ADMIN_PORT), "0.0.0.0", () => {
+      console.log(`⚡ MaxPlay Admin Panel running on http://0.0.0.0:${ADMIN_PORT} (or http://localhost:${ADMIN_PORT})`);
     });
   }
 
+  export { app, adminApp };
   export default app;

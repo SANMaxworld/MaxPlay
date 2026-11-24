@@ -72,6 +72,7 @@ export const FullScreenMusicPlayer: React.FC = () => {
     repeatMode,
     isShuffle,
     volumeBoostPct,
+    setVolumeBoostPct,
     cycleVolumeBoost,
     isFullScreenPlayerOpen,
     setIsFullScreenPlayerOpen,
@@ -128,6 +129,97 @@ export const FullScreenMusicPlayer: React.FC = () => {
     setToastText(msg);
     setTimeout(() => setToastText(null), 2400);
   };
+
+  // User Artwork Display Mode: 'poster' (Classic) vs 'vinyl' (Spinning Record Disc)
+  const [artworkStyle, setArtworkStyle] = useState<'poster' | 'vinyl'>(() => {
+    try {
+      return (localStorage.getItem('maxplay_music_artwork_style') as 'poster' | 'vinyl') || 'poster';
+    } catch {
+      return 'poster';
+    }
+  });
+
+  const toggleArtworkStyle = () => {
+    const next = artworkStyle === 'poster' ? 'vinyl' : 'poster';
+    NativeBridgeService.triggerHaptic('medium');
+    setArtworkStyle(next);
+    try {
+      localStorage.setItem('maxplay_music_artwork_style', next);
+    } catch {}
+    showToast(next === 'vinyl' ? 'Vinyl Record Mode Activated' : 'Classic Poster Mode Activated');
+  };
+
+  // Horizontal Swipe to Change Track Gestures
+  const swipeStartXRef = useRef(0);
+  const swipeStartYRef = useRef(0);
+  const isSwipingRef = useRef(false);
+
+  const handleArtworkTouchStart = (e: React.TouchEvent) => {
+    swipeStartXRef.current = e.touches[0].clientX;
+    swipeStartYRef.current = e.touches[0].clientY;
+    isSwipingRef.current = true;
+  };
+
+  const handleArtworkTouchEnd = (e: React.TouchEvent) => {
+    if (!isSwipingRef.current) return;
+    isSwipingRef.current = false;
+    const deltaX = e.changedTouches[0].clientX - swipeStartXRef.current;
+    const deltaY = e.changedTouches[0].clientY - swipeStartYRef.current;
+    if (Math.abs(deltaX) > 55 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      if (deltaX < 0) {
+        // Swiped Left -> Next Track
+        NativeBridgeService.triggerHaptic('medium');
+        playNextTrack();
+      } else {
+        // Swiped Right -> Previous Track
+        NativeBridgeService.triggerHaptic('medium');
+        playPreviousTrack();
+      }
+    }
+  };
+
+  // Hardware Volume Keys: Show Floating Boost Indicator & Adjust (100% -> 200% -> 300%)
+  const [showHardwareVolumePill, setShowHardwareVolumePill] = useState<boolean>(false);
+  const volumeBoostPctRef = useRef(volumeBoostPct);
+  volumeBoostPctRef.current = volumeBoostPct;
+  const cycleVolumeBoostRef = useRef(cycleVolumeBoost);
+  cycleVolumeBoostRef.current = cycleVolumeBoost;
+  const setVolumeBoostPctRef = useRef(setVolumeBoostPct);
+  setVolumeBoostPctRef.current = setVolumeBoostPct;
+
+  // Auto-hide volume pill after 1.8 seconds of inactivity
+  useEffect(() => {
+    if (!showHardwareVolumePill) return;
+    const hideTimer = setTimeout(() => {
+      setShowHardwareVolumePill(false);
+    }, 1800);
+    return () => clearTimeout(hideTimer);
+  }, [showHardwareVolumePill, volumeBoostPct]);
+
+  useEffect(() => {
+    const handleVolumeUp = () => {
+      if (!isFullScreenPlayerOpen) return;
+      NativeBridgeService.triggerHaptic('light');
+      cycleVolumeBoostRef.current();
+      setShowHardwareVolumePill(true);
+    };
+
+    const handleVolumeDown = () => {
+      if (!isFullScreenPlayerOpen) return;
+      if (volumeBoostPctRef.current > 100) {
+        NativeBridgeService.triggerHaptic('light');
+        setVolumeBoostPctRef.current(100);
+        setShowHardwareVolumePill(true);
+      }
+    };
+
+    window.addEventListener('MAXPLAY_HARDWARE_VOLUME_UP', handleVolumeUp);
+    window.addEventListener('MAXPLAY_HARDWARE_VOLUME_DOWN', handleVolumeDown);
+    return () => {
+      window.removeEventListener('MAXPLAY_HARDWARE_VOLUME_UP', handleVolumeUp);
+      window.removeEventListener('MAXPLAY_HARDWARE_VOLUME_DOWN', handleVolumeDown);
+    };
+  }, [isFullScreenPlayerOpen]);
 
   // Sync Edit Song Info fields whenever editingSongTrack opens (always resolving latest edited fields from allRawTracks)
   useEffect(() => {
@@ -588,11 +680,29 @@ export const FullScreenMusicPlayer: React.FC = () => {
         </div>
       )}
 
+      {/* Floating Hardware Volume Indicator Pill (Fades in when device hardware volume keys are pressed, auto-hides or tap-to-dismiss) */}
+      {showHardwareVolumePill && (
+        <div
+          onClick={() => setShowHardwareVolumePill(false)}
+          className="fixed top-14 left-1/2 -translate-x-1/2 z-[160] cursor-pointer pointer-events-auto animate-in fade-in slide-in-from-top-3 duration-200 active:scale-95 transition"
+        >
+          <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#181824]/95 border border-[#A855F7]/70 shadow-[0_8px_30px_rgba(168,85,247,0.55)] text-white text-xs font-black tracking-wide backdrop-blur-md whitespace-nowrap">
+            <Volume2 className="w-4 h-4 text-[#C084FC]" />
+            <span>Volume: {volumeBoostPct}%</span>
+            {volumeBoostPct > 100 && (
+              <span className="text-[10px] text-amber-300 font-extrabold uppercase px-1.5 py-0.5 rounded bg-amber-400/20 border border-amber-400/40">
+                🔥 Amplified
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ========================================================================
           TOP BAR (Matching `music details screen.jpg`:
           - Left: Minimize ChevronDown
-          - Center: Perfectly centered "NOW PLAYING" + Volume Boost (100% / 200% / 300%)
-          - Right: Equaliser Icon + 3-Dot Menu (T-Shirt icon completely removed!)
+          - Center: Clean centered "NOW PLAYING" (no hardcoded button clutter)
+          - Right: Style Toggle (Poster/Vinyl) + Equaliser + 3-Dot Menu
       ======================================================================== */}
       <div className="relative z-10 grid grid-cols-3 items-center px-4 pt-4 pb-2">
         {/* Left: Minimize Button */}
@@ -607,38 +717,38 @@ export const FullScreenMusicPlayer: React.FC = () => {
           </button>
         </div>
 
-        {/* Center: Perfectly Centered "NOW PLAYING" + Volume Boost Pill (100% / 200% / 300%) */}
+        {/* Center: Clean "NOW PLAYING" */}
         <div className="flex flex-col items-center justify-center text-center">
           <span className="text-xs font-extrabold tracking-wider uppercase text-white">
             NOW PLAYING
           </span>
-          <button
-            type="button"
-            aria-label="Volume Boost"
-            onClick={() => {
-              cycleVolumeBoost();
-              const nextBoost =
-                volumeBoostPct === 100 ? 200 : volumeBoostPct === 200 ? 300 : 100;
-              showToast(`Volume Boost: ${nextBoost}%`);
-            }}
-            className={`mt-1 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wide border transition cursor-pointer ${
-              volumeBoostPct > 100
-                ? 'bg-[#9333EA]/30 border-[#A855F7] text-[#E9D5FF] shadow-[0_0_12px_rgba(168,85,247,0.45)]'
-                : 'bg-white/[0.07] border-white/15 text-zinc-300 hover:text-white'
-            }`}
-            title="Tap to boost volume (100% / 200% / 300%)"
-          >
-            <Volume2 className="w-3 h-3 text-[#A855F7]" />
-            <span>{volumeBoostPct}%</span>
-          </button>
         </div>
 
-        {/* Right: Equaliser Sliders + 3-Dot Menu (No T-Shirt Icon) */}
+        {/* Right: Style Toggle (Poster/Vinyl) + Equaliser Sliders + 3-Dot Menu */}
         <div className="flex items-center justify-end gap-1">
           <button
             type="button"
+            aria-label="Toggle Poster / Vinyl Style"
+            title={artworkStyle === 'vinyl' ? 'Switch to Classic Poster' : 'Switch to Vinyl Record'}
+            onClick={toggleArtworkStyle}
+            className={`w-10 h-10 rounded-full flex items-center justify-center hover:bg-white/10 active:scale-95 transition cursor-pointer ${
+              artworkStyle === 'vinyl' ? 'text-[#C084FC]' : 'text-zinc-300'
+            }`}
+          >
+            {artworkStyle === 'vinyl' ? (
+              <Disc3 className="w-5 h-5 animate-spin-vinyl" />
+            ) : (
+              <ImageIcon className="w-5 h-5" />
+            )}
+          </button>
+
+          <button
+            type="button"
             aria-label="Open Equaliser"
-            onClick={() => setIsEqualizerOpen(true)}
+            onClick={() => {
+              NativeBridgeService.triggerHaptic('light');
+              setIsEqualizerOpen(true);
+            }}
             className={`w-10 h-10 rounded-full flex items-center justify-center hover:bg-white/10 active:scale-95 transition cursor-pointer ${
               equalizer.enabled ? 'text-[#B517FF]' : 'text-zinc-200'
             }`}
@@ -658,72 +768,168 @@ export const FullScreenMusicPlayer: React.FC = () => {
       </div>
 
       {/* ========================================================================
-          CENTER LARGE ALBUM ARTWORK
-          - Tapping the artwork toggles a dimmed overlay with an "Add / Edit" button
-            that opens the full-screen Edit song info page!
-          - Uses vibrant rainbow/accent gradient fallback when no cover is set.
+          CENTER ALBUM ARTWORK / VINYL RECORD DISC
+          - Supports touch horizontal swipe left/right to change songs!
+          - Seamlessly switches between Classic Poster and Authentic 360° Spinning Vinyl Disc.
+          - Live animated audio waveform spectrum directly underneath.
       ======================================================================== */}
-      <div className="relative z-10 flex-1 flex items-center justify-center px-6 py-2 min-h-0">
-        <div
-          onClick={() => setShowPosterEditOverlay((prev) => !prev)}
-          className="relative w-full max-w-[330px] aspect-square rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_64px_rgba(0,0,0,0.75)] flex items-center justify-center cursor-pointer group"
-        >
-          {showArt ? (
-            <img
-              src={currentTrack.artworkUrl}
-              alt={currentTrack.title}
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover"
-              onError={() =>
-                setImgFailed((prev) => ({ ...prev, [currentTrack.id]: true }))
-              }
-            />
-          ) : (
+      <div
+        className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 py-2 min-h-0 select-none"
+        onTouchStart={handleArtworkTouchStart}
+        onTouchEnd={handleArtworkTouchEnd}
+      >
+        {artworkStyle === 'vinyl' ? (
+          /* VINYL RECORD DISC MODE */
+          <div
+            onClick={() => setShowPosterEditOverlay((prev) => !prev)}
+            className="relative w-full max-w-[310px] aspect-square flex items-center justify-center cursor-pointer group"
+          >
+            {/* Spinning Outer Vinyl Plate */}
             <div
-              className={`w-full h-full bg-gradient-to-br ${rainbowFallbackGradient} flex flex-col items-center justify-center text-center p-6`}
+              className={`relative w-full h-full rounded-full bg-[#0D0D12] border-4 border-[#252532] shadow-[0_24px_64px_rgba(0,0,0,0.85)] flex items-center justify-center p-3 overflow-hidden ${
+                isPlaying ? 'animate-spin-vinyl' : 'paused-spin'
+              }`}
             >
-              <div className="w-24 h-24 rounded-full bg-black/25 backdrop-blur-md border border-white/30 flex items-center justify-center shadow-2xl mb-4">
-                <Disc3
-                  className={`w-12 h-12 text-white ${
-                    isPlaying ? 'animate-[spin_6s_linear_infinite]' : ''
-                  }`}
-                />
-              </div>
-              <span className="text-xs font-extrabold uppercase tracking-widest text-white drop-shadow">
-                MaxPlay Music
-              </span>
-              <span className="text-[11px] font-medium text-white/85 mt-1 drop-shadow">
-                {currentTrack.format || 'MP3'} • Tap cover to edit info
-              </span>
-            </div>
-          )}
+              {/* Concentric Vinyl Grooves */}
+              <div className="absolute inset-4 rounded-full border border-white/5 pointer-events-none" />
+              <div className="absolute inset-8 rounded-full border border-white/5 pointer-events-none" />
+              <div className="absolute inset-12 rounded-full border border-white/5 pointer-events-none" />
+              <div className="absolute inset-16 rounded-full border border-white/5 pointer-events-none" />
+              <div className="absolute inset-20 rounded-full border border-white/5 pointer-events-none" />
 
-          {/* Dimmed Overlay on Tap -> Shows "+ Add" / Edit Song Info Button */}
-          {showPosterEditOverlay && (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowPosterEditOverlay(false);
-              }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-[3px] flex flex-col items-center justify-center gap-2 transition-opacity"
-            >
-              <button
-                type="button"
+              {/* Glossy Vinyl Sheen Reflection */}
+              <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.04] to-transparent pointer-events-none" />
+
+              {/* Center Circular Label with Track Artwork */}
+              <div className="relative w-36 h-36 rounded-full overflow-hidden border-2 border-white/30 shadow-inner flex items-center justify-center">
+                {showArt ? (
+                  <img
+                    src={currentTrack.artworkUrl}
+                    alt={currentTrack.title}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                    onError={() =>
+                      setImgFailed((prev) => ({ ...prev, [currentTrack.id]: true }))
+                    }
+                  />
+                ) : (
+                  <div className={`w-full h-full bg-gradient-to-br ${rainbowFallbackGradient} flex items-center justify-center`}>
+                    <Disc3 className="w-10 h-10 text-white" />
+                  </div>
+                )}
+                {/* Center Spindle Hole */}
+                <div className="absolute w-5 h-5 rounded-full bg-[#0A0A0C] border-2 border-white/40 shadow-inner z-10" />
+              </div>
+            </div>
+
+            {/* Tap Dimmed Overlay for Editing Info */}
+            {showPosterEditOverlay && (
+              <div
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowPosterEditOverlay(false);
-                  setEditingSongTrack(currentTrack);
                 }}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/20 hover:bg-white/30 border border-white/40 text-white text-sm font-extrabold shadow-2xl active:scale-95 transition cursor-pointer"
+                className="absolute inset-0 rounded-full bg-black/65 backdrop-blur-[3px] flex flex-col items-center justify-center gap-2 z-30"
               >
-                <Plus className="w-4 h-4 stroke-[2.8]" />
-                <span>Add</span>
-              </button>
-              <span className="text-[11px] font-medium text-white/80">
-                Edit cover, song title &amp; lyrics
-              </span>
-            </div>
-          )}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowPosterEditOverlay(false);
+                    setEditingSongTrack(currentTrack);
+                  }}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/20 hover:bg-white/30 border border-white/40 text-white text-sm font-extrabold shadow-2xl active:scale-95 transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 stroke-[2.8]" />
+                  <span>Add</span>
+                </button>
+                <span className="text-[11px] font-medium text-white/80">
+                  Edit cover, song title & lyrics
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* CLASSIC SQUARE POSTER ART MODE */
+          <div
+            onClick={() => setShowPosterEditOverlay((prev) => !prev)}
+            className="relative w-full max-w-[330px] aspect-square rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_64px_rgba(0,0,0,0.75)] flex items-center justify-center cursor-pointer group"
+          >
+            {showArt ? (
+              <img
+                src={currentTrack.artworkUrl}
+                alt={currentTrack.title}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+                onError={() =>
+                  setImgFailed((prev) => ({ ...prev, [currentTrack.id]: true }))
+                }
+              />
+            ) : (
+              <div
+                className={`w-full h-full bg-gradient-to-br ${rainbowFallbackGradient} flex flex-col items-center justify-center text-center p-6`}
+              >
+                <div className="w-24 h-24 rounded-full bg-black/25 backdrop-blur-md border border-white/30 flex items-center justify-center shadow-2xl mb-4">
+                  <Disc3
+                    className={`w-12 h-12 text-white ${
+                      isPlaying ? 'animate-[spin_6s_linear_infinite]' : ''
+                    }`}
+                  />
+                </div>
+                <span className="text-xs font-extrabold uppercase tracking-widest text-white drop-shadow">
+                  MaxPlay Music
+                </span>
+                <span className="text-[11px] font-medium text-white/85 mt-1 drop-shadow">
+                  {currentTrack.format || 'MP3'} • Tap cover to edit info
+                </span>
+              </div>
+            )}
+
+            {/* Tap Dimmed Overlay for Editing Info */}
+            {showPosterEditOverlay && (
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowPosterEditOverlay(false);
+                }}
+                className="absolute inset-0 bg-black/60 backdrop-blur-[3px] flex flex-col items-center justify-center gap-2 transition-opacity"
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowPosterEditOverlay(false);
+                    setEditingSongTrack(currentTrack);
+                  }}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/20 hover:bg-white/30 border border-white/40 text-white text-sm font-extrabold shadow-2xl active:scale-95 transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 stroke-[2.8]" />
+                  <span>Add</span>
+                </button>
+                <span className="text-[11px] font-medium text-white/80">
+                  Edit cover, song title & lyrics
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Live Dynamic Audio Waveform Spectrum */}
+        <div className="flex items-center justify-center gap-1.5 h-6 mt-3 select-none">
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((barIdx) => (
+            <div
+              key={`wave-${barIdx}`}
+              className={`w-1 rounded-full bg-gradient-to-t from-[#7C3AED] via-[#9333EA] to-[#C084FC] transition-all duration-200 ${
+                isPlaying
+                  ? `animate-waveform-${(barIdx % 6) + 1} shadow-[0_0_8px_rgba(168,85,247,0.7)]`
+                  : 'h-1.5 opacity-35'
+              }`}
+              style={{
+                height: isPlaying ? undefined : '5px',
+                animationPlayState: isPlaying ? 'running' : 'paused',
+              }}
+            />
+          ))}
         </div>
       </div>
 
@@ -1010,6 +1216,27 @@ export const FullScreenMusicPlayer: React.FC = () => {
             >
               <Share2 className="w-5 h-5 text-zinc-200 shrink-0" />
               <span className="text-[15px] font-semibold text-white">Share</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                toggleArtworkStyle();
+                setActiveModal(null);
+              }}
+              className="flex items-center justify-between px-3 py-3 rounded-2xl hover:bg-white/5 text-left transition cursor-pointer"
+            >
+              <div className="flex items-center gap-4">
+                {artworkStyle === 'vinyl' ? (
+                  <Disc3 className="w-5 h-5 text-[#C084FC] shrink-0" />
+                ) : (
+                  <ImageIcon className="w-5 h-5 text-zinc-200 shrink-0" />
+                )}
+                <span className="text-[15px] font-semibold text-white">Player Display Style</span>
+              </div>
+              <span className="text-xs font-bold text-[#C084FC] bg-purple-500/20 px-2.5 py-0.5 rounded-full border border-purple-500/40">
+                {artworkStyle === 'vinyl' ? 'Vinyl Record 💿' : 'Classic Poster 🖼️'}
+              </span>
             </button>
 
             <button

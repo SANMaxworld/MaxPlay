@@ -197,7 +197,7 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
       </div>
 
       <div className="px-4">
-        <NativeBanner />
+        <NativeBanner screen="anime" />
       </div>
 
       {/* Grid Content Area */}
@@ -205,13 +205,12 @@ export const AnimeScreen: React.FC<AnimeScreenProps> = ({
         {loading ? (
           <SkeletonGrid count={9} cols="grid-cols-3 sm:grid-cols-4 md:grid-cols-6" />
         ) : sortedAnime.length > 0 ? (
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2.5 sm:gap-3.5 select-none">
             {sortedAnime.map((item, index) => (
               <ContentCard
                 key={`${item.id}-${index}`}
                 item={item}
-                width={105}
-                height={155}
+                responsive
                 onPress={handleContentClick}
               />
             ))}

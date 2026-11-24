@@ -102,6 +102,8 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
   const [activeFilter, setActiveFilter] = useState<'moviebox' | 'local' | 'received'>('moviebox');
   const [showLocalFoldersView, setShowLocalFoldersView] = useState(false);
   const [selectedLocalFolder, setSelectedLocalFolder] = useState<string | null>(null);
+  const [showManageModal, setShowManageModal] = useState(false);
+  const [concurrentLimit, setConcurrentLimit] = useState<number>(() => downloadManager.getMaxConcurrentDownloads());
   const swipeTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferTab, setTransferTab] = useState<'send' | 'receive'>('send');
@@ -1367,9 +1369,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
               Downloading ({activeDownloadingTasks.length})
             </h3>
             <button
-              onClick={() => {
-                activeDownloadingTasks.forEach((t) => handlePauseResume(t.taskId));
-              }}
+              onClick={() => setShowManageModal(true)}
               className="text-xs font-semibold text-[#06B6D4] hover:underline cursor-pointer"
             >
               Manage
@@ -1390,7 +1390,7 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
       )}
 
       <div className="mt-4">
-        <NativeBanner />
+        <NativeBanner screen="downloads" />
       </div>
 
       {/* SECTION 3: DOWNLOADED (COMPLETED) - Supports Smooth 60 FPS Horizontal Swipe Between Maxbox, Musics, Local files, and Received */}
@@ -1410,8 +1410,8 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
           if (!start || e.changedTouches.length === 0) return;
           const dx = e.changedTouches[0].clientX - start.x;
           const dy = e.changedTouches[0].clientY - start.y;
-          // Responsive horizontal swipe (> 38px and primarily horizontal)
-          if (Math.abs(dx) > 38 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+          // Smooth 60 FPS gesture: Only trigger when deliberate horizontal swipe (dx > 45px and mostly horizontal)
+          if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.4) {
             const pillOrder: Array<'moviebox' | 'local' | 'received'> = [
               'moviebox',
               'local',
@@ -1419,10 +1419,8 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
             ];
             const currentIdx = pillOrder.indexOf(activeFilter);
             if (dx < 0 && currentIdx < pillOrder.length - 1) {
-              // Swiped left -> go to next pill (Maxbox -> Local files -> Received)
               setActiveFilter(pillOrder[currentIdx + 1]);
             } else if (dx > 0 && currentIdx > 0) {
-              // Swiped right -> go to previous pill (Received -> Local files -> Maxbox)
               setActiveFilter(pillOrder[currentIdx - 1]);
             }
           }
@@ -1751,30 +1749,32 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
         </button>
       </div>
 
-      {/* DIRECT APP-TO-APP MAXPLAY TRANSFER MODAL */}
+      {/* DIRECT APP-TO-APP MAXPLAY TRANSFER FULL PAGE */}
       {showTransferModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
-          <div className="flex w-full max-w-md flex-col rounded-3xl bg-[#121216] p-5 sm:p-6 border border-white/10 text-left shadow-2xl max-h-[92vh] overflow-y-auto scrollbar-none">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#10B981]/25 to-[#06B6D4]/25 text-[#10B981] border border-[#10B981]/40 shadow-md">
-                  <Wifi className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-white">Direct App-to-App Transfer</h3>
-                  <p className="text-[11px] text-[#A1A1AA]">
-                    High-speed P2P transfer between two MaxPlay devices
-                  </p>
-                </div>
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#0b0c11] text-white text-left overflow-y-auto no-scrollbar scrollbar-none animate-in fade-in duration-200">
+          <div className="sticky top-0 z-30 flex items-center justify-between px-4 sm:px-6 py-4 bg-[#10121a]/95 backdrop-blur-md border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-tr from-[#10B981]/25 to-[#06B6D4]/25 text-[#10B981] border border-[#10B981]/40 shadow-md">
+                <Wifi className="h-5 w-5" />
               </div>
-              <button
-                type="button"
-                onClick={() => setShowTransferModal(false)}
-                className="p-1.5 rounded-full bg-white/5 text-[#A1A1AA] hover:text-white cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div>
+                <h3 className="text-base font-black text-white">Direct App-to-App Transfer</h3>
+                <p className="text-xs text-[#A1A1AA]">
+                  High-speed P2P offline transfer between MaxPlay devices
+                </p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowTransferModal(false)}
+              className="flex items-center justify-center h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 text-white transition active:scale-90 cursor-pointer shadow-md"
+              title="Close Transfer"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 py-4 flex flex-col gap-4">
 
             {/* Mode Switcher Tabs: Send Direct vs Receive Direct */}
             <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-[#0A0A0C] p-1 border border-white/5">
@@ -2245,6 +2245,72 @@ export const DownloadsScreen: React.FC<DownloadsScreenProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* MANAGE DOWNLOADS CONCURRENCY SETTINGS MODAL */}
+      {showManageModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm rounded-3xl bg-[#14151b] border border-white/15 p-5 shadow-2xl flex flex-col gap-4 text-left">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white">Manage Downloads</h3>
+              <button
+                type="button"
+                onClick={() => setShowManageModal(false)}
+                className="p-1.5 rounded-full bg-white/5 text-zinc-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <p className="text-xs text-white/70 mb-2.5 font-medium">Simultaneous Active Downloads:</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[1, 2, 3].map((num) => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => {
+                      downloadManager.setMaxConcurrentDownloads(num);
+                      setConcurrentLimit(num);
+                      triggerToast(`Simultaneous downloads set to ${num}`);
+                    }}
+                    className={`py-2.5 rounded-xl text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
+                      concurrentLimit === num
+                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/30 border border-purple-400/40'
+                        : 'bg-white/5 text-zinc-300 hover:bg-white/10 border border-white/10'
+                    }`}
+                  >
+                    <span className="text-sm font-black">{num}</span>
+                    <span className="text-[10px] font-medium opacity-80">{num === 1 ? 'Worker' : 'Parallel'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => {
+                  activeDownloadingTasks.forEach((t) => handlePauseResume(t.taskId));
+                  setShowManageModal(false);
+                }}
+                className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-semibold text-white transition text-center cursor-pointer"
+              >
+                Toggle Pause / Resume All
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  activeDownloadingTasks.forEach((t) => handleCancel(t.taskId));
+                  setShowManageModal(false);
+                }}
+                className="w-full py-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-xs font-semibold text-red-400 border border-red-500/20 transition text-center cursor-pointer"
+              >
+                Cancel All Active Downloads
+              </button>
+            </div>
           </div>
         </div>
       )}

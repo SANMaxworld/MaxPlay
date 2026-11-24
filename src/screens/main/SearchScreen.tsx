@@ -549,7 +549,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
             {/* Hot Items List with 60fps Directional Slide Animation */}
             <div className="relative z-10 mt-3.5 flex flex-col gap-2.5 overflow-hidden">
               {/* NATIVE BANNER AD */}
-              <NativeBanner />
+              <NativeBanner screen="search" />
 
               <AnimatePresence mode="wait" initial={false}>
                 <motion.div

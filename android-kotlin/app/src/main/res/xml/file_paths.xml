@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Scoped strictly to APK update & explicit P2P export directories (never expose full storage roots!) -->
     <cache-path name="cache_apk_updates" path="apk_updates/" />
-    <cache-path name="cache_root" path="." />
     <external-cache-path name="ext_cache_apk_updates" path="apk_updates/" />
-    <external-cache-path name="ext_cache_root" path="." />
     <files-path name="files_apk_updates" path="apk_updates/" />
-    <files-path name="files_root" path="." />
+    <files-path name="files_shared_transfers" path="maxplay_exports/" />
     <external-files-path name="ext_files_apk_updates" path="apk_updates/" />
-    <external-files-path name="ext_files_root" path="." />
-    <external-path name="external_files" path="." />
 </paths>
-

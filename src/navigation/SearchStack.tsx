@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { SearchScreen } from '../screens/main/SearchScreen';
 import { ContentDetailScreen } from '../screens/content/ContentDetailScreen';
+import { DetailErrorBoundary } from '../components/common/DetailErrorBoundary';
 import { FilterScreen } from '../screens/main/FilterScreen';
 import { ContentItem } from '../types';
+import { SmartStreamService } from '../services/smartStreamService';
 
 interface SearchStackProps {
   onSelectContent: (item: ContentItem) => void;
@@ -48,6 +50,7 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
   }, []);
 
   const handleSelect = (item: ContentItem) => {
+    SmartStreamService.prefetchContentItem(item);
     push({ name: 'detail', item });
     onSelectContent(item);
   };
@@ -70,12 +73,12 @@ export const SearchStack: React.FC<SearchStackProps> = ({ onSelectContent, onDet
             className={`absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto ${!isTop ? 'hidden pointer-events-none' : ''}`}
           >
             {screen.name === 'detail' && isTop && (
-              <ContentDetailScreen
+              <DetailErrorBoundary onBack={handleBack}><ContentDetailScreen
                 key={`detail-${screen.item.id}-${idx}`}
                 content={screen.item}
                 onBack={handleBack}
                 onSelectContent={handleSelect}
-              />
+              /></DetailErrorBoundary>
             )}
             {screen.name === 'filter' && (
               <FilterScreen

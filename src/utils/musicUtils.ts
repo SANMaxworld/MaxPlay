@@ -497,3 +497,53 @@ export function getRainbowGradientForTrack(seedStr?: string): string {
 }
 
 
+
+
+/**
+ * High-definition vibrant coloring posters from MaxPlay's Details Screens.
+ * Used as colorful artwork fallback across the Music System so songs without custom art are NEVER blank!
+ */
+export const DETAILS_COLORING_POSTERS = [
+  'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1604011152285-3e284be572e4?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1563089145-599997674d42?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1541562232579-512a21360020?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1580477651163-f222687c4767?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1546143977-96a9ce8b4d8d?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1618331835717-801e976710b2?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1610403328249-14a51e60086c?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1587588354456-ae376af71a25?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=800&auto=format&fit=crop&q=80',
+  'https://images.unsplash.com/photo-1563245372-f21724e3856d?w=800&auto=format&fit=crop&q=80',
+];
+
+/**
+ * Deterministically returns a vibrant coloring poster from the details screen for any track or title.
+ */
+export function getColoringPosterForTrack(trackIdOrTitle?: string): string {
+  const s = (trackIdOrTitle || 'maxplay_music').trim();
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return DETAILS_COLORING_POSTERS[hash % DETAILS_COLORING_POSTERS.length];
+}
+
+/**
+ * Resolves valid artwork for any music track:
+ * Returns the track's custom `artworkUrl` if available and not failed;
+ * otherwise returns a vibrant coloring poster from details screen so the artwork is NEVER blank.
+ */
+export function resolveTrackArtwork(
+  track?: { id?: string; title?: string; artworkUrl?: string } | null,
+  isFailed?: boolean
+): string {
+  if (track?.artworkUrl && !isFailed) {
+    return track.artworkUrl;
+  }
+  return getColoringPosterForTrack(track?.id || track?.title || 'maxplay_music');
+}

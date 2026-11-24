@@ -37,7 +37,7 @@ export const MOCK_SERIES_DETAIL: ContentDetailItem = {
     { id: 'lang-4', language: 'Tamil Dub' },
   ],
   isSmartHls: true,
-  videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+  videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
   episodesList: Array.from({ length: 12 }, (_, i) => ({
     id: `ep-${i + 1}`,
     episodeNumber: i + 1,
@@ -59,7 +59,7 @@ export const MOCK_SERIES_DETAIL: ContentDetailItem = {
     }`,
     duration: 1420, // 23 mins 40 secs
     thumbnailUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=400&auto=format&fit=crop&q=80',
-    videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
     isSmartHls: true,
   })),
   commentsList: [
@@ -134,7 +134,7 @@ export const MOCK_MOVIE_DETAIL: ContentDetailItem = {
   duration: 9960, // 2h 46m
   language: 'English / Hindi',
   isSmartHls: true,
-  videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+  videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
   uploader: {
     name: 'Warner Bros Max Stream',
     verified: true,
@@ -151,7 +151,7 @@ export const MOCK_MOVIE_DETAIL: ContentDetailItem = {
       title: 'Full Feature Movie (4K Ultra HD)',
       duration: 9960,
       thumbnailUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=400&auto=format&fit=crop&q=80',
-      videoUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+      videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
       isSmartHls: true,
     },
   ],

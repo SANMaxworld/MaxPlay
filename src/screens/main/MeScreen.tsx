@@ -256,7 +256,7 @@ export const MeScreen: React.FC<MeScreenProps> = ({
 
       {/* NATIVE BANNER AD */}
       <div className="mt-5">
-        <NativeBanner />
+        <NativeBanner screen="me" />
       </div>
 
       {/* SECTION 1: LIBRARY & MEDIA */}

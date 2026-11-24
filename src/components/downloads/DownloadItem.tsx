@@ -15,8 +15,10 @@ export const DownloadItem: React.FC<DownloadItemProps> = ({
   onCancel,
   onMenu,
 }) => {
-  const total = Math.max(1024 * 1024, task.totalBytes || 1024 * 1024);
-  const downloaded = task.bytesDownloaded || 0;
+  const rawTotal = Number(task.totalBytes);
+  const total = !isNaN(rawTotal) && rawTotal > 0 ? rawTotal : 1024 * 1024;
+  const rawDownloaded = Number(task.bytesDownloaded);
+  const downloaded = !isNaN(rawDownloaded) && rawDownloaded >= 0 ? rawDownloaded : 0;
   const percent = Math.min(
     100,
     Math.round((downloaded / total) * 100) || 0

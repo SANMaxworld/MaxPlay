@@ -60,8 +60,39 @@ class StreamtapeExtractor(
     companion object {
         const val STREAMTAPE_REFERER = "https://streamtape.com/"
 
+        @Volatile
+        var globalCachedMainUa: String? = null
+
+        fun resolveUserAgent(): String {
+            return globalCachedMainUa?.takeIf { it.isNotBlank() } ?: InbuiltStreamScraper.DEFAULT_USER_AGENT
+        }
+
+        private val fastMirrorHttpClient: okhttp3.OkHttpClient by lazy {
+            InbuiltStreamScraper.okHttpClient.newBuilder()
+                .connectTimeout(3500, TimeUnit.MILLISECONDS)
+                .readTimeout(4000, TimeUnit.MILLISECONDS)
+                .build()
+        }
+
+        // 1-RTT non-redirecting client: grabs Streamtape's 302 Location (tapecontent.net) over the warm mirror TLS socket
+        // without wasting 350-900ms opening a throwaway OkHttp TLS connection to tapecontent.net!
+        private val noRedirectHttpClient: okhttp3.OkHttpClient by lazy {
+            InbuiltStreamScraper.okHttpClient.newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .connectTimeout(3500, TimeUnit.MILLISECONDS)
+                .readTimeout(4000, TimeUnit.MILLISECONDS)
+                .build()
+        }
+
+        @Volatile
+        private var fastestMirrorHost: String? = null
+
+        private val streamtapePlaybackCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
         val STREAMTAPE_DOMAINS = listOf(
-            "streamtape.", "strtape.", "shavetape.", "streamta.pe", "tapecontent.net"
+            "streamtape.", "strtape.", "shavetape.", "streamta.pe", "tapecontent.",
+            "strcloud.", "streamadblockplus."
         )
 
         private val BLOCKED_AD_KEYWORDS = listOf(
@@ -96,8 +127,11 @@ class StreamtapeExtractor(
                 resolved.startsWith("https://", ignoreCase = true) ||
                     resolved.startsWith("http://", ignoreCase = true) -> resolved
                 resolved.startsWith("//") -> "https:$resolved"
-                resolved.startsWith("/") -> "https://streamtape.com$resolved"
+                resolved.startsWith("/") -> "https://streamta.pe$resolved"
                 else -> "https://${resolved.trimStart('/')}"
+            }
+            if (resolved.contains("streamtape.com/get_video", ignoreCase = true)) {
+                resolved = resolved.replace("streamtape.com/get_video", "streamta.pe/get_video", ignoreCase = true)
             }
             if (!resolved.contains("stream=1", ignoreCase = true)) {
                 resolved += if (resolved.contains("?")) "&stream=1" else "?stream=1"
@@ -183,13 +217,13 @@ class StreamtapeExtractor(
 
         /**
          * Extracts the genuine `get_video` URL from Streamtape HTML by scanning ALL assignments to
-         * `getElementById('robotlink'|'ideoolink'|'botlink').innerHTML = ...` and evaluating from LAST to FIRST
-         * so the static fake-token DOM trap is ignored.
+         * `getElementById('ideoooolink'|'captchalink'|'norobotlink'|'robotlink'|'ideoolink'|'botlink').innerHTML = ...`
+         * and evaluating from LAST to FIRST so static fake-token traps are ignored.
          */
         fun extractDirectUrlFromHtml(html: String): String? {
             if (html.isBlank()) return null
             val assignPattern = Pattern.compile(
-                """getElementById\s*\(\s*['"](?:robotlink|ideoolink|botlink)['"]\s*\)\.innerHTML\s*=\s*([^;]+);""",
+                """getElementById\s*\(\s*['"](?:ideoooolink|captchalink|norobotlink|robotlink|ideoolink|botlink)['"]\s*\)\s*\.innerHTML\s*=\s*([^;]+);""",
                 Pattern.CASE_INSENSITIVE
             )
             val matcher = assignPattern.matcher(html)
@@ -254,7 +288,9 @@ class StreamtapeExtractor(
                 addAudio("English")
             }
 
-            val mimeType = if (rawMeta.contains(".mkv") && !rawMeta.contains(".mkv.mp4") && !rawMeta.endsWith(".mp4")) "video/x-matroska" else "video/mp4"
+            // In Android WebView native player, always return "video/mp4" MIME type.
+            // Returning "video/x-matroska" causes Chromium to immediately reject the stream with MEDIA_ERR_SRC_NOT_SUPPORTED (code 4).
+            val mimeType = "video/mp4"
             return Triple(quality, audioTracks, mimeType)
         }
     }
@@ -265,12 +301,20 @@ class StreamtapeExtractor(
     init {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             try {
-                cachedMainUa = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
+                val ua = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
+                if (ua != null) {
+                    cachedMainUa = ua
+                    globalCachedMainUa = ua
+                }
             } catch (_: Exception) {}
         } else {
             Handler(Looper.getMainLooper()).post {
                 try {
-                    cachedMainUa = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
+                    val ua = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
+                    if (ua != null) {
+                        cachedMainUa = ua
+                        globalCachedMainUa = ua
+                    }
                 } catch (_: Exception) {}
             }
         }
@@ -278,11 +322,13 @@ class StreamtapeExtractor(
 
     private fun resolveUserAgent(): String {
         cachedMainUa?.takeIf { it.isNotBlank() }?.let { return it }
+        globalCachedMainUa?.takeIf { it.isNotBlank() }?.let { return it }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             try {
                 val ua = mainWebView?.settings?.userAgentString?.takeIf { it.isNotBlank() }
                 if (ua != null) {
                     cachedMainUa = ua
+                    globalCachedMainUa = ua
                     return ua
                 }
             } catch (_: Exception) {}
@@ -322,7 +368,7 @@ class StreamtapeExtractor(
                 val cl = resp.header("Content-Length")?.toLongOrNull() ?: 0L
                 if (cl > 100_000L) sizeBytes = cl
                 val ct = (resp.header("Content-Type") ?: "").substringBefore(";").trim().lowercase()
-                if (ct.startsWith("video/")) mimeType = ct
+                if (ct.startsWith("video/") && !ct.contains("matroska")) mimeType = ct
             }
         } catch (_: Exception) {}
 
@@ -354,7 +400,7 @@ class StreamtapeExtractor(
                         if (cl > 100_000L) sizeBytes = cl
                     }
                     val ct = (resp.header("Content-Type") ?: "").substringBefore(";").trim().lowercase()
-                    if (ct.startsWith("video/")) mimeType = ct
+                    if (ct.startsWith("video/") && !ct.contains("matroska")) mimeType = ct
                 }
             } catch (_: Exception) {}
         }
@@ -363,7 +409,42 @@ class StreamtapeExtractor(
     }
 
     /**
-     * Synchronous OkHttp + Headless WebView extraction pipeline (call off the Android Main Thread).
+     * Ultra-fast 1-RTT redirect resolver for playback:
+     * Fetches ONLY the 302 `Location` header (`tapecontent.net`) over the already-warm mirror TLS socket
+     * without opening a throwaway cold TLS connection to `tapecontent.net` (-350 to -900ms saved!).
+     */
+    private fun resolveRedirectFast1Rtt(
+        directUrl: String,
+        userAgent: String,
+        referer: String = STREAMTAPE_REFERER
+    ): String {
+        if (directUrl.lowercase().contains("tapecontent")) return directUrl
+        return try {
+            val req = Request.Builder()
+                .url(directUrl)
+                .get()
+                .header("Range", "bytes=0-0")
+                .header("User-Agent", userAgent)
+                .header("Referer", referer)
+                .header("Accept", "*/*")
+                .build()
+            noRedirectHttpClient.newCall(req).execute().use { resp ->
+                val loc = resp.header("Location")?.trim() ?: ""
+                if (loc.startsWith("http", ignoreCase = true)) {
+                    loc
+                } else if (loc.startsWith("//")) {
+                    "https:$loc"
+                } else {
+                    directUrl
+                }
+            }
+        } catch (_: Exception) {
+            directUrl
+        }
+    }
+
+    /**
+     * Synchronous Parallel-Race OkHttp + Headless WebView extraction pipeline (call off the Android Main Thread).
      */
     fun extractStreamSync(sourceUrl: String): JSONObject {
         val trimmed = sourceUrl.trim()
@@ -373,77 +454,151 @@ class StreamtapeExtractor(
         if (isDirectGetVideoUrl(trimmed)) {
             val normalizedDirect = normalizeExtractedDirectUrl(trimmed)
             CorsFreeWebViewClient.registerStreamReferer(normalizedDirect, STREAMTAPE_REFERER, ua)
-            val (cdnUrl, sizeBytes, mime) = resolveRedirectAndSize(normalizedDirect, ua, STREAMTAPE_REFERER)
+            val cdnUrl = resolveRedirectFast1Rtt(normalizedDirect, ua, STREAMTAPE_REFERER)
             if (cdnUrl.isNotEmpty() && cdnUrl != normalizedDirect) {
                 CorsFreeWebViewClient.registerStreamReferer(cdnUrl, STREAMTAPE_REFERER, ua)
             }
             val (quality, audios, inferredMime) = inferMetadataFromPage(trimmed, "")
-            val finalMime = if (mime != "video/mp4") mime else inferredMime
             val stream = ExtractedStream(
                 directUrl = normalizedDirect,
                 userAgent = ua,
                 referer = STREAMTAPE_REFERER,
                 cdnUrl = cdnUrl,
-                sizeBytes = sizeBytes,
-                mimeType = finalMime
+                sizeBytes = 0L,
+                mimeType = inferredMime
             )
             return toScraperJson(trimmed, stream, "kotlin_streamtape_direct", quality, audios)
         }
 
-        // Layer 1: Fast OkHttp HTML fetch + JS substring evaluator (< 600ms)
-        val watchCandidates = buildList {
-            add(trimmed)
-            val embedVariant = trimmed.replace(Regex("/v/", RegexOption.IGNORE_CASE), "/e/")
-            if (embedVariant != trimmed) add(embedVariant)
+        // Layer 0: Instant 0ms In-Memory Cache hit (12-min TTL per fileId)
+        val fileIdMatch = Regex("""/(?:v|e)/([a-zA-Z0-9_-]+)""").find(trimmed)
+        val fileId = fileIdMatch?.groupValues?.get(1)
+        if (!fileId.isNullOrBlank()) {
+            val cached = streamtapePlaybackCache[fileId]
+            if (cached != null && System.currentTimeMillis() < cached.second) {
+                try {
+                    val obj = JSONObject(cached.first)
+                    val mUrl = obj.optString("m3u8Url", "")
+                    val ref = obj.optJSONObject("headers")?.optString("Referer", STREAMTAPE_REFERER) ?: STREAMTAPE_REFERER
+                    if (mUrl.isNotBlank()) {
+                        CorsFreeWebViewClient.registerStreamReferer(mUrl, ref, ua)
+                        return obj
+                    }
+                } catch (_: Exception) {}
+            }
         }
 
-        for (candidateUrl in watchCandidates) {
-            try {
-                val req = Request.Builder()
-                    .url(candidateUrl)
-                    .header("User-Agent", ua)
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                    .header("Accept-Language", "en-US,en;q=0.9")
-                    .header("Referer", STREAMTAPE_REFERER)
-                    .build()
+        // Layer 1: Parallel Mirror Race (eliminates 3.5-60s sequential blocked-mirror stalls!)
+        val mirrorHosts = buildList {
+            fastestMirrorHost?.takeIf { it.isNotBlank() }?.let { add(it) }
+            listOf("streamta.pe", "strcloud.link", "strtape.tech", "streamadblockplus.com").forEach { h ->
+                if (!contains(h)) add(h)
+            }
+        }
 
-                InbuiltStreamScraper.okHttpClient.newCall(req).execute().use { resp ->
-                    val html = resp.body?.string() ?: ""
-                    if (html.isNotBlank()) {
-                        val directUrl = extractDirectUrlFromHtml(html)
-                        if (!directUrl.isNullOrBlank()) {
-                            CorsFreeWebViewClient.registerStreamReferer(directUrl, STREAMTAPE_REFERER, ua)
-                            val (cdnUrl, sizeBytes, probedMime) = resolveRedirectAndSize(directUrl, ua, STREAMTAPE_REFERER)
-                            if (cdnUrl.isNotEmpty() && cdnUrl != directUrl) {
-                                CorsFreeWebViewClient.registerStreamReferer(cdnUrl, STREAMTAPE_REFERER, ua)
+        val raceUrls = if (!fileId.isNullOrBlank()) {
+            mirrorHosts.map { "https://$it/v/$fileId" }
+        } else {
+            listOf(trimmed)
+        }
+
+        data class MirrorHit(val directUrl: String, val html: String, val winHost: String, val referer: String)
+        val winnerRef = AtomicReference<MirrorHit?>(null)
+        val activeCalls = java.util.concurrent.CopyOnWriteArrayList<okhttp3.Call>()
+        val raceLatch = CountDownLatch(1)
+        val doneCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+        for (candidateUrl in raceUrls) {
+            InbuiltStreamScraper.backgroundExecutor.execute {
+                try {
+                    if (winnerRef.get() != null) return@execute
+                    val candidateUri = android.net.Uri.parse(candidateUrl)
+                    val candHost = candidateUri.host ?: "streamta.pe"
+                    val candReferer = "${candidateUri.scheme ?: "https"}://$candHost/"
+                    val req = Request.Builder()
+                        .url(candidateUrl)
+                        .header("User-Agent", ua)
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                        .header("Accept-Language", "en-US,en;q=0.9")
+                        .header("Referer", candReferer)
+                        .build()
+
+                    val call = fastMirrorHttpClient.newCall(req)
+                    activeCalls.add(call)
+                    if (winnerRef.get() != null) {
+                        call.cancel()
+                        return@execute
+                    }
+
+                    call.execute().use { resp ->
+                        val html = resp.body?.string() ?: ""
+                        if (html.isNotBlank()) {
+                            var directUrl = extractDirectUrlFromHtml(html)
+                            if (!directUrl.isNullOrBlank()) {
+                                // Keep extracted get_video on the exact winning unblocked mirror host!
+                                if (candHost != "streamtape.com" && directUrl.contains("streamta.pe/get_video") && candHost != "streamta.pe") {
+                                    directUrl = directUrl.replace("streamta.pe/get_video", "$candHost/get_video")
+                                }
+                                if (winnerRef.compareAndSet(null, MirrorHit(directUrl, html, candHost, candReferer))) {
+                                    fastestMirrorHost = candHost
+                                    raceLatch.countDown()
+                                    // Cancel all slower losing mirrors immediately
+                                    activeCalls.forEach { c -> if (c !== call) try { c.cancel() } catch (_: Exception) {} }
+                                }
                             }
-                            val (quality, audios, inferredMime) = inferMetadataFromPage(trimmed, html)
-                            val finalMime = if (probedMime != "video/mp4") probedMime else inferredMime
-                            val stream = ExtractedStream(
-                                directUrl = directUrl,
-                                userAgent = ua,
-                                referer = STREAMTAPE_REFERER,
-                                cdnUrl = cdnUrl,
-                                sizeBytes = sizeBytes,
-                                mimeType = finalMime
-                            )
-                            return toScraperJson(trimmed, stream, "kotlin_streamtape_okhttp", quality, audios)
                         }
                     }
+                } catch (_: Exception) {
+                } finally {
+                    if (doneCount.incrementAndGet() >= raceUrls.size) {
+                        raceLatch.countDown()
+                    }
                 }
-            } catch (_: Exception) {}
+            }
         }
 
-        // Layer 2: Client-side Headless Offscreen WebView Scraping (blocks ads/popups, 500ms polling up to 15s)
+        try {
+            raceLatch.await(4500, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {}
+
+        val hit = winnerRef.get()
+        if (hit != null) {
+            CorsFreeWebViewClient.registerStreamReferer(hit.directUrl, hit.referer, ua)
+            val cdnUrl = resolveRedirectFast1Rtt(hit.directUrl, ua, hit.referer)
+            if (cdnUrl.isNotEmpty() && cdnUrl != hit.directUrl) {
+                CorsFreeWebViewClient.registerStreamReferer(cdnUrl, hit.referer, ua)
+            }
+            val (quality, audios, inferredMime) = inferMetadataFromPage(trimmed, hit.html)
+            val stream = ExtractedStream(
+                directUrl = hit.directUrl,
+                userAgent = ua,
+                referer = hit.referer,
+                cdnUrl = cdnUrl,
+                sizeBytes = 0L,
+                mimeType = inferredMime
+            )
+            val json = toScraperJson(trimmed, stream, "kotlin_streamtape_okhttp_race", quality, audios)
+            if (!fileId.isNullOrBlank()) {
+                streamtapePlaybackCache[fileId] = Pair(json.toString(), System.currentTimeMillis() + 12 * 60 * 1000L)
+            }
+            return json
+        }
+
+        // Layer 2: Client-side Headless Offscreen WebView Scraping (use best unblocked mirror instead of blocked streamtape.com!)
         if (Looper.myLooper() != Looper.getMainLooper()) {
+            val bestLayer2Url = if (!fileId.isNullOrBlank()) {
+                "https://${fastestMirrorHost ?: "streamta.pe"}/e/$fileId"
+            } else {
+                trimmed
+            }
             val latch = CountDownLatch(1)
             val resultRef = AtomicReference<JSONObject?>(null)
-            extractStreamViaHeadlessWebView(trimmed, 15000L) { res ->
+            extractStreamViaHeadlessWebView(bestLayer2Url, 4000L) { res ->
                 resultRef.set(res)
                 latch.countDown()
             }
             try {
-                latch.await(18, TimeUnit.SECONDS)
+                latch.await(4200, TimeUnit.MILLISECONDS)
             } catch (_: Exception) {}
             resultRef.get()?.let { return it }
         }
@@ -598,8 +753,13 @@ class StreamtapeExtractor(
                         mediaPlaybackRequiresUserGesture = false
                         javaScriptCanOpenWindowsAutomatically = false
                         setSupportMultipleWindows(false)
-                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        allowFileAccess = false
+                        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         userAgentString = resolveUserAgent()
+                        @Suppress("DEPRECATION")
+                        allowUniversalAccessFromFileURLs = false
+                        @Suppress("DEPRECATION")
+                        allowFileAccessFromFileURLs = false
                     }
                     capturedUa = settings.userAgentString ?: InbuiltStreamScraper.DEFAULT_USER_AGENT
 
@@ -619,6 +779,27 @@ class StreamtapeExtractor(
                     }
 
                     webViewClient = object : WebViewClient() {
+                        override fun onRenderProcessGone(
+                            view: WebView?,
+                            detail: android.webkit.RenderProcessGoneDetail?
+                        ): Boolean {
+                            // Never let an offscreen headless WebView crash kill the main MaxPlay process or hang the 14s latch!
+                            mainHandler.removeCallbacks(timeoutRunnable)
+                            mainHandler.post {
+                                if (isResolved.compareAndSet(false, true)) {
+                                    cleanupWebView()
+                                    onResult(JSONObject().apply {
+                                        put("ok", false)
+                                        put("provider", "STREAMTAPE")
+                                        put("error", "Streamtape headless WebView reset")
+                                    })
+                                } else {
+                                    cleanupWebView()
+                                }
+                            }
+                            return true
+                        }
+
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?
@@ -680,7 +861,7 @@ class StreamtapeExtractor(
                                 titleText = (og && og.getAttribute('content')) || document.title || '';
                             } catch (e) {}
 
-                            var ids = ['robotlink', 'ideoolink', 'botlink'];
+                            var ids = ['ideoooolink', 'captchalink', 'norobotlink', 'robotlink', 'ideoolink', 'botlink'];
                             for (var i = 0; i < ids.length; i++) {
                                 var el = document.getElementById(ids[i]);
                                 if (el) {

@@ -227,10 +227,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <button
             onClick={async () => {
               setLoading(true);
-              const randomNum = Math.floor(1000 + Math.random() * 9000);
-              const guestEmail = `guest_${randomNum}@maxplay.app`;
-              await login(guestEmail, 'guestpass123');
-              onSuccess();
+              setError('');
+              try {
+                const randomNum = Math.floor(1000 + Math.random() * 9000);
+                const guestEmail = `guest_${randomNum}@maxplay.app`;
+                await login(guestEmail, 'guestpass123');
+                onSuccess();
+              } catch (e: any) {
+                console.warn('Guest login error:', e);
+                setError(e?.message || 'Guest sign in failed. Please try again.');
+              } finally {
+                setLoading(false);
+              }
             }}
             className="font-semibold text-[#8B5CF6] hover:underline cursor-pointer"
           >

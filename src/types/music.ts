@@ -11,7 +11,7 @@ export type RepeatMode = 'off' | 'all' | 'one';
 
 export type PlayModeThreeWay = 'repeat_all' | 'repeat_one' | 'shuffle';
 
-export type VolumeBoostLevel = 100 | 200 | 300;
+export type VolumeBoostLevel = 100 | 125 | 150 | 175 | 200 | 250 | 300;
 
 export type SleepTimerMode = 'off' | '5' | '10' | '15' | '30' | '45' | '60' | 'end_of_song';
 

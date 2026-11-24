@@ -30,7 +30,9 @@ import {
   AlertTriangle,
   ShieldAlert,
   Loader2,
-  Server
+  Server,
+  Zap,
+  ShieldCheck
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ContentItem, CommentItem, CommentReplyItem, SeasonData } from '../../types';
@@ -60,6 +62,7 @@ import {
   submitCommentReport,
   saveUserProgress,
   getUserProgress,
+  fetchExternalSeasons,
   subscribeToContent,
   SAMPLE_CONTENT_ITEMS 
 } from '../../services/contentService';
@@ -91,6 +94,19 @@ const formatResumeTime = (seconds: number) => {
 
 // 30 High-Quality Curated Recommendation Items (10 rows of 3 columns)
 const CURATED_RECOMMENDATIONS: Partial<ContentItem>[] = [
+  {
+    id: 'animesalt-demon-slayer-infinity-castle',
+    title: 'Demon Slayer: Kimetsu no Yaiba - The Infinity Castle (AnimeSalt Engine)',
+    type: 'anime',
+    rating: 9.9,
+    year: 2025,
+    country: 'Japan',
+    genres: ['Anime', 'Action', 'Dark Fantasy', 'Demons'],
+    posterUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&auto=format&fit=crop&q=80',
+    backdropUrl: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
+    videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
+    uploader: { name: '⚡ AnimeSalt Engine', verified: true }
+  },
   {
     id: 'demon-slayer-infinity-castle',
     title: 'A Place Where Only The Strong Stand',
@@ -493,12 +509,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
   useEffect(() => {
     if (rawContent?.id && (rawContent as any)?.hasExternalSeasons) {
-      import('../../services/contentService').then(({ fetchExternalSeasons }) => {
-        fetchExternalSeasons(rawContent.id).then(seasons => {
-          if (seasons && seasons.length > 0) {
-            setExternalSeasons(seasons);
-          }
-        });
+      fetchExternalSeasons(rawContent.id).then(seasons => {
+        if (seasons && seasons.length > 0) {
+          setExternalSeasons(seasons);
+        }
       });
     }
   }, [rawContent?.id, (rawContent as any)?.hasExternalSeasons]);
@@ -534,6 +548,16 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   }, [content]);
 
   const isAnime = !isMovie && (content?.type === 'anime');
+  const isAnimeContent = useMemo(() => {
+    return Boolean(
+      isAnime ||
+      content?.type === 'anime' ||
+      (content as any)?.isAnimeSalt ||
+      (Array.isArray(content?.genres) && content.genres.some((g: any) => typeof g === 'string' && g.toLowerCase().includes('anime'))) ||
+      (typeof content?.category === 'string' && content.category.toLowerCase().includes('anime')) ||
+      (typeof (content as any)?.genre === 'string' && (content as any).genre.toLowerCase().includes('anime'))
+    );
+  }, [isAnime, content]);
   const isSeries = !isMovie;
 
   // Synchronously resolve saved state so the FIRST render already has the restored episode, part, language, quality, and time
@@ -550,7 +574,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           currentTime: hr.watchedSeconds || hr.currentTime || 0,
           watchedSeconds: hr.watchedSeconds || hr.currentTime || 0,
           activeLanguage: hr.activeLanguage || '',
-          activeQuality: hr.activeQuality || 'auto',
+          activeQuality: hr.activeQuality || '720p',
           partProgressMap: hr.partProgressMap || {},
           seasonEpisodeMap: hr.seasonEpisodeMap || {}
         };
@@ -632,6 +656,22 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState('');
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [isNativePipActive, setIsNativePipActive] = useState(false);
+
+  useEffect(() => {
+    const prevHandler = (window as any).__onMaxPlayPipModeChanged;
+    (window as any).__onMaxPlayPipModeChanged = (inPip: boolean) => {
+      setIsNativePipActive(Boolean(inPip));
+      if (typeof prevHandler === 'function') {
+        try { prevHandler(inPip); } catch {}
+      }
+    };
+    return () => {
+      if ((window as any).__onMaxPlayPipModeChanged) {
+        delete (window as any).__onMaxPlayPipModeChanged;
+      }
+    };
+  }, []);
   
   // Independent playback, language, and quality state (respects Me > Settings preferred quality & language!)
   const [playbackPosition, setPlaybackPosition] = useState(() => initialSavedData?.currentTime || initialSavedData?.watchedSeconds || 0);
@@ -651,38 +691,46 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         return cleanPref.toLowerCase() === 'auto' ? 'auto' : cleanPref;
       }
     } catch {}
-    if (initialSavedData?.activeQuality) {
-      return initialSavedData.activeQuality.toLowerCase() === 'auto' ? 'auto' : initialSavedData.activeQuality;
+    if (initialSavedData?.activeQuality && initialSavedData.activeQuality.toLowerCase() !== 'auto') {
+      return initialSavedData.activeQuality;
     }
-    return 'auto';
+    // Always default to crisp 720p on first open so Details Screen knows immediately which exact quality URL to scrape & play!
+    return '720p';
   });
   const [partProgressMap, setPartProgressMap] = useState<Record<string, { time: number; duration?: number; language?: string; quality?: string }>>(() => initialSavedData?.partProgressMap || {});
 
-  // Ultra Pro Max Resume Controls & Anti-Overwrite Guards
-  const [isCloudResumeChecking, setIsCloudResumeChecking] = useState<boolean>(() => !isMovie && !initialSavedData);
+  // Ultra Pro Max Resume Controls & Anti-Overwrite Guards (non-blocking on first install so player starts immediately!)
+  const [isCloudResumeChecking, setIsCloudResumeChecking] = useState<boolean>(false);
   const isCloudResumeResolvedRef = useRef<boolean>(!!initialSavedData);
   const userExplicitlyChoseEpisodeRef = useRef<boolean>(false);
   const maxWatchedEpisodeRef = useRef<number>(initialSavedData?.episodeIndex ?? 0);
+
+  // Synchronously reset all playback and episode state when switching to a different content item
+  useEffect(() => {
+    userExplicitlyChoseEpisodeRef.current = false;
+    const initialSaved = initialSavedData;
+    setSelectedSeasonIndex(initialSaved?.seasonIndex !== undefined && !isMovie ? initialSaved.seasonIndex : 0);
+    setSelectedEpisodeIndex(initialSaved?.episodeIndex !== undefined && !isMovie ? initialSaved.episodeIndex : 0);
+    setSelectedPartIndex(initialSaved?.partIndex !== undefined ? initialSaved.partIndex : 0);
+    setPlaybackPosition(initialSaved?.currentTime || initialSaved?.watchedSeconds || 0);
+    setPartProgressMap(initialSaved?.partProgressMap || {});
+    if (initialSaved?.activeLanguage) {
+      setActiveLanguage(initialSaved.activeLanguage);
+    }
+    if (initialSaved?.activeQuality) {
+      setActiveQuality(initialSaved.activeQuality);
+    }
+  }, [content?.id]);
   
   const [isAllEpisodesModalOpen, setIsAllEpisodesModalOpen] = useState<boolean>(false);
   const [isAutoNextEnabled, setIsAutoNextEnabled] = useState<boolean>(true);
   const [showDetails, setShowDetails] = useState(false);
-  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>(() => {
-    try {
-      if (content?.id) {
-        const savedForContent = localStorage.getItem(`maxplay_server_${content.id}`);
-        if (savedForContent === 'server1' || savedForContent === 'server2' || savedForContent === 'server3') return savedForContent;
-      }
-      const savedGlobal = localStorage.getItem('maxplay_preferred_server');
-      if (savedGlobal === 'server1' || savedGlobal === 'server2' || savedGlobal === 'server3') return savedGlobal;
-    } catch {}
-    return 'server1';
-  });
-  const [isServerModalOpen, setIsServerModalOpen] = useState(false);
+  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>('server1');
   const [isSynopsisExpanded, setIsSynopsisExpanded] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
   const [isQualityModalOpen, setIsQualityModalOpen] = useState(false);
   const [isSeasonModalOpen, setIsSeasonModalOpen] = useState(false);
+  const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [discoveredAudioTracks, setDiscoveredAudioTracks] = useState<string[]>([]);
   const [s1DiscoveredAudioTracks, setS1DiscoveredAudioTracks] = useState<string[]>([]);
   const [s2DiscoveredAudioTracks, setS2DiscoveredAudioTracks] = useState<string[]>([]);
@@ -695,15 +743,15 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<ContentItem[]>([]);
 
-  // Remembered Server Selection helper (persists per-title and globally)
+  // Remembered Server Selection helper
   const handleSelectServer = (srv: 'server1' | 'server2' | 'server3') => {
     saveProgressNow(playbackPosition, false, true);
     setSelectedServer(srv);
     try {
+      localStorage.setItem('maxplay_preferred_server', srv);
       if (content?.id) {
         localStorage.setItem(`maxplay_server_${content.id}`, srv);
       }
-      localStorage.setItem('maxplay_preferred_server', srv);
     } catch {}
   };
 
@@ -765,26 +813,17 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       ))
     );
 
-    let desiredServer: 'server1' | 'server2' | 'server3' = selectedServer;
     try {
-      const savedForContent = localStorage.getItem(`maxplay_server_${content.id}`);
-      if (savedForContent === 'server1' || savedForContent === 'server2' || savedForContent === 'server3') {
-        desiredServer = savedForContent;
+      const savedPref = (content?.id && localStorage.getItem(`maxplay_server_${content.id}`)) || localStorage.getItem('maxplay_preferred_server');
+      if (savedPref === 'server2' && hasS2) {
+        setSelectedServer('server2');
       } else {
-        const savedGlobal = localStorage.getItem('maxplay_preferred_server');
-        if (savedGlobal === 'server1' || savedGlobal === 'server2' || savedGlobal === 'server3') {
-          desiredServer = savedGlobal;
-        }
+        setSelectedServer('server1');
       }
-    } catch {}
-
-    const resolvedServer = resolveServerWhenMissingOrCorrupt(desiredServer, {
-      server1: hasS1,
-      server2: hasS2,
-      server3: hasS3,
-    });
-    setSelectedServer(resolvedServer);
-  }, [content?.id]);
+    } catch {
+      setSelectedServer('server1');
+    }
+  }, [content?.id, externalSeasons]);
 
   // Report Modal States
   const [reportModalOpen, setReportModalOpen] = useState(false);
@@ -799,6 +838,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const languageTriggerRef = useRef<HTMLButtonElement>(null);
   const qualityTriggerRef = useRef<HTMLButtonElement>(null);
   const seasonTriggerRef = useRef<HTMLButtonElement>(null);
+  const serverTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Initialize details screen ad grace period (10 min delay, max 2 popunders per Details screen)
   useEffect(() => {
@@ -897,9 +937,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
     const now = Date.now();
     const isPlayerFullscreen = Boolean((window as any).__isMaxPlayPlayerFullscreen);
-    // Avoid triggering 4,300-line ContentDetailScreen React re-renders every 1.5s during active playback
-    // especially when in fullscreen mode (where ContentDetailScreen UI is completely hidden behind the player)
-    if (forceSave || isFinished || (!isPlayerFullscreen && now - lastSaveTimeRef.current >= 5000)) {
+    // Avoid triggering 4,400-line ContentDetailScreen React re-renders frequently during active playback
+    if (forceSave || isFinished || (!isPlayerFullscreen && now - lastSaveTimeRef.current >= 15000)) {
       setPartProgressMap(updatedPartMap);
       setPlaybackPosition(actualTime);
     }
@@ -985,13 +1024,13 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
 
     let isMounted = true;
 
-    // Generous safety timeout: 6 seconds to ensure mobile / cold network has plenty of time
+    // Fast safety timeout: 2.5 seconds so cold network never blocks save guard
     const timeoutId = setTimeout(() => {
       if (isMounted) {
         setIsCloudResumeChecking(false);
         isCloudResumeResolvedRef.current = true;
       }
-    }, 6000);
+    }, 2500);
 
     // If auth is still initializing, wait for it before evaluating user state
     if (isAuthLoading && !user) {
@@ -1130,14 +1169,20 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     };
   }, [content?.id, user?.uid, isAuthLoading, isMovie]);
 
-  // Subscribe to all content to enrich recommendations
+  // Subscribe to all content to enrich recommendations (deferred 1.5s so initial video extraction gets 100% network priority)
   useEffect(() => {
-    const unsub = subscribeToContent((items) => {
-      if (items && Array.isArray(items)) {
-        setCatalogItems(items);
-      }
-    });
-    return () => unsub();
+    let unsub: (() => void) | null = null;
+    const timer = setTimeout(() => {
+      unsub = subscribeToContent((items) => {
+        if (items && Array.isArray(items)) {
+          setCatalogItems(items);
+        }
+      });
+    }, 1500);
+    return () => {
+      clearTimeout(timer);
+      if (unsub) unsub();
+    };
   }, []);
 
   // Subscribe to My List
@@ -1337,7 +1382,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 p.videoUrl ||
                 p.secondaryVideoUrl ||
                 p.secondaryServerUrl ||
-                p.secondaryUrl
+                p.secondaryUrl ||
+                p.tertiaryVideoUrl ||
+                p.tertiaryServerUrl ||
+                p.tertiaryUrl
               )
         )
       );
@@ -1350,7 +1398,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           qualityLinks: content.qualityLinks,
           videoUrl: content.videoUrl,
           secondaryVideoUrl: content.secondaryVideoUrl || (content as any).secondaryServerUrl,
-          secondaryQualityLinks: content.secondaryQualityLinks || (content as any).secondaryServerQualityLinks
+          secondaryQualityLinks: content.secondaryQualityLinks || (content as any).secondaryServerQualityLinks,
+          tertiaryVideoUrl: content.tertiaryVideoUrl || (content as any).tertiaryServerUrl,
+          tertiaryQualityLinks: content.tertiaryQualityLinks || (content as any).tertiaryServerQualityLinks
         }];
         movieTotalParts = 1;
       }
@@ -1360,7 +1410,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         qualityLinks: content.qualityLinks,
         videoUrl: content.videoUrl,
         secondaryVideoUrl: content.secondaryVideoUrl || (content as any).secondaryServerUrl,
-        secondaryQualityLinks: content.secondaryQualityLinks || (content as any).secondaryServerQualityLinks
+        secondaryQualityLinks: content.secondaryQualityLinks || (content as any).secondaryServerQualityLinks,
+        tertiaryVideoUrl: content.tertiaryVideoUrl || (content as any).tertiaryServerUrl,
+        tertiaryQualityLinks: content.tertiaryQualityLinks || (content as any).tertiaryServerQualityLinks
       }];
       movieTotalParts = 1;
     }
@@ -1712,6 +1764,35 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
   }
 
+  // Auto-normalize swapped Firestore server fields (e.g. cards uploaded before Admin Box2/Box3 alignment):
+  // Canonical UI mapping: tertiary* ('server3') = UI Server 2 (Rose - Streamtape), secondary* ('server2') = UI Server 3 (Gold - Filemoon/Byse)
+  {
+    const isStreamtapeHost = (u: string) =>
+      /(streamtape|streamta\.pe|strtape|strcloud|strtpe|stape\.|tapecontent|shavetape|tape\.to|antiadtape|watchadsontape|adblocktape|streamadblocker)/i.test(u || '');
+    const isFilemoonByseHost = (u: string) =>
+      /(filemoon|byse|fmoon|moonmov|kerapoxy|n1mwq|ico3c|f16px|sprintcdn|owphbf|r66nv9ed)/i.test(u || '');
+    const secIsStreamtape = isStreamtapeHost(secondaryServerUrl);
+    const terIsStreamtape = isStreamtapeHost(tertiaryServerUrl);
+    const secIsFilemoon = isFilemoonByseHost(secondaryServerUrl);
+    const terIsFilemoon = isFilemoonByseHost(tertiaryServerUrl);
+    if ((secIsStreamtape && !terIsStreamtape) || (terIsFilemoon && !secIsFilemoon)) {
+      const tmpUrl = secondaryServerUrl;
+      const tmpLinks = secondaryServerQualityLinks;
+      const tmpSources = secondaryVideoSources;
+      secondaryServerUrl = tertiaryServerUrl;
+      secondaryServerQualityLinks = tertiaryServerQualityLinks;
+      secondaryVideoSources = tertiaryVideoSources;
+      tertiaryServerUrl = tmpUrl;
+      tertiaryServerQualityLinks = tmpLinks;
+      tertiaryVideoSources = tmpSources;
+    }
+  }
+
+  let activeEffectiveServer = selectedServer;
+  let warmupS1Url = '';
+  let warmupS2Url = '';
+  let warmupS3Url = '';
+
   if (!offlineVideoUrl) {
     const cleanS1QualityLinks = extractValidQualityLinksMap(playerQualityLinks);
     const cleanS2QualityLinks = extractValidQualityLinksMap(secondaryServerQualityLinks);
@@ -1729,31 +1810,45 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       Object.keys(cleanS3QualityLinks).length > 0 ||
       hasAnyValidLinkInSources(tertiaryVideoSources);
 
-    const activeEffectiveServer = resolveServerWhenMissingOrCorrupt(selectedServer, {
-      server1: hasValidS1,
-      server2: hasValidS2,
-      server3: hasValidS3,
-    });
-
-    if (activeEffectiveServer === 'server3' && hasValidS3) {
-      const smartS3 = SmartStreamService.selectSourceUrlForQuality(
-        isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '',
-        cleanS3QualityLinks,
+    if (hasValidS1) {
+      warmupS1Url = SmartStreamService.selectSourceUrlForQuality(
+        isValidStreamUrl(playerVideoUrl) ? playerVideoUrl : '',
+        cleanS1QualityLinks,
         activeQuality
-      );
-      playerQualityLinks = smartS3.cleanQualityLinks;
-      playerVideoUrl = smartS3.chosenUrl || (isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '');
-      playerVideoSources = tertiaryVideoSources || {};
-    } else if (activeEffectiveServer === 'server2' && hasValidS2) {
-      const smartS2 = SmartStreamService.selectSourceUrlForQuality(
+      ).chosenUrl || (isValidStreamUrl(playerVideoUrl) ? playerVideoUrl : '');
+    }
+    if (hasValidS2) {
+      warmupS2Url = SmartStreamService.selectSourceUrlForQuality(
         isValidStreamUrl(secondaryServerUrl) ? secondaryServerUrl : '',
         cleanS2QualityLinks,
         activeQuality
-      );
-      playerQualityLinks = smartS2.cleanQualityLinks;
-      playerVideoUrl = smartS2.chosenUrl || (isValidStreamUrl(secondaryServerUrl) ? secondaryServerUrl : '');
-      playerVideoSources = secondaryVideoSources || {};
-    } else if (activeEffectiveServer === 'server1' && hasValidS1) {
+      ).chosenUrl || (isValidStreamUrl(secondaryServerUrl) ? secondaryServerUrl : '');
+    }
+    if (hasValidS3) {
+      warmupS3Url = SmartStreamService.selectSourceUrlForQuality(
+        isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '',
+        cleanS3QualityLinks,
+        activeQuality
+      ).chosenUrl || (isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '');
+    }
+
+    if (selectedServer === 'server2' && hasValidS2) {
+      activeEffectiveServer = 'server2';
+      if (Object.keys(cleanS2QualityLinks).length > 0) {
+        const smartS2 = SmartStreamService.selectSourceUrlForQuality(
+          isValidStreamUrl(secondaryServerUrl) ? secondaryServerUrl : '',
+          cleanS2QualityLinks,
+          activeQuality
+        );
+        playerQualityLinks = smartS2.cleanQualityLinks;
+        if (smartS2.chosenUrl) {
+          playerVideoUrl = smartS2.chosenUrl;
+        }
+      } else if (isValidStreamUrl(secondaryServerUrl)) {
+        playerVideoUrl = secondaryServerUrl;
+      }
+    } else if (hasValidS1) {
+      activeEffectiveServer = 'server1';
       if (Object.keys(cleanS1QualityLinks).length > 0) {
         const smartS1 = SmartStreamService.selectSourceUrlForQuality(
           isValidStreamUrl(playerVideoUrl) ? playerVideoUrl : '',
@@ -1768,8 +1863,22 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       } else if (!isValidStreamUrl(playerVideoUrl)) {
         playerVideoUrl = '';
       }
+    } else if (hasValidS2) {
+      activeEffectiveServer = 'server2';
+      playerVideoUrl = secondaryServerUrl;
     }
   }
+
+  // Zero-Delay Background Stream Warmup for Primary Server (Server 1)
+  useEffect(() => {
+    if (offlineVideoUrl) return;
+    const warmupTimer = setTimeout(() => {
+      if (warmupS1Url) {
+        SmartStreamService.prefetchStream(warmupS1Url);
+      }
+    }, 350);
+    return () => clearTimeout(warmupTimer);
+  }, [content?.id, selectedSeasonIndex, selectedEpisodeIndex, offlineVideoUrl, warmupS1Url]);
 
   // Reset per-episode discovered tracks/qualities only when switching content or episode (never wipe cross-server cache on server toggle!)
   useEffect(() => {
@@ -1806,8 +1915,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     return /^(\d{3,4}p|4k|2k|8k|hd|fhd|uhd|sd|auto)$/i.test(val.trim());
   };
 
-  // Track Server 1 specific languages, Server 2 specific languages, and Unified Languages across BOTH servers
-  const { s1SpecificLanguages, s2SpecificLanguages, availableLanguages } = useMemo(() => {
+  // Track Server 1 specific languages, Server 2 specific languages, Server 3 specific languages, and Unified Languages across ALL servers
+  const { s1SpecificLanguages, s2SpecificLanguages, s3SpecificLanguages, availableLanguages } = useMemo(() => {
     const s1List: string[] = [];
     const s2List: string[] = [];
     const merged: string[] = [];
@@ -1876,6 +1985,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     if (Array.isArray(s1VerifiedAudios)) {
       s1VerifiedAudios.forEach((l) => addLangTo(s1List, l));
     }
+    if (isAnimeContent || (content as any)?.isAnimeSalt || (currentEpisode as any)?.isAnimeSalt) {
+      const animeSaltAudios = ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
+      animeSaltAudios.forEach((l) => addLangTo(s1List, l));
+    }
     if (currentEpisode?.videoSources && typeof currentEpisode.videoSources === 'object') {
       Object.keys(currentEpisode.videoSources).forEach((l) => addLangTo(s1List, l));
     }
@@ -1913,13 +2026,47 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       Object.keys(secondaryVideoSources).forEach((l) => addLangTo(s2List, l));
     }
 
-    // --- 3. Content / Episode General Configured Languages (Always merged so BOTH Server 1 & Server 2 display ALL languages!) ---
+    // --- 3. Server 3 Specific Languages (Streamtape Direct MP4/MKV) ---
+    const s3List: string[] = [];
+    const s3LiveTracks = [...s3DiscoveredAudioTracks];
+    if (tertiaryServerUrl) {
+      const cachedS3 = SmartStreamService.getCachedStreamMeta(tertiaryServerUrl);
+      if (cachedS3 && Array.isArray(cachedS3.audioTracks)) {
+        cachedS3.audioTracks.forEach((l) => {
+          if (!s3LiveTracks.includes(l)) s3LiveTracks.push(l);
+        });
+      }
+    }
+    if (selectedServer === 'server3' && discoveredAudioTracks.length > 0) {
+      discoveredAudioTracks.forEach((l) => {
+        if (!s3LiveTracks.includes(l)) s3LiveTracks.push(l);
+      });
+    }
+    s3LiveTracks.forEach((l) => addLangTo(s3List, l));
+
+    const s3VerifiedAudios = isSeries && !isMovie
+      ? (currentEpisode as any)?.tertiaryAudioTracks || epPart0?.tertiaryAudioTracks
+      : (activeMoviePart as any)?.tertiaryAudioTracks || contentPart0?.tertiaryAudioTracks || (content as any)?.tertiaryAudioTracks;
+    if (Array.isArray(s3VerifiedAudios)) {
+      s3VerifiedAudios.forEach((l) => addLangTo(s3List, l));
+    }
+    if (tertiaryVideoSources && typeof tertiaryVideoSources === 'object') {
+      Object.keys(tertiaryVideoSources).forEach((l) => addLangTo(s3List, l));
+    }
+
+    // Always merge live audio tracks detected directly from the active playing stream
+    discoveredAudioTracks.forEach((l) => addLangTo(merged, l));
+
+    // --- 4. Content / Episode General Configured Languages (Always merged so ALL servers display ALL languages!) ---
     const generalLangs: string[] = [];
     if (Array.isArray(s1VerifiedAudios)) {
       s1VerifiedAudios.forEach((l: any) => addLangTo(generalLangs, l));
     }
     if (Array.isArray(s2VerifiedAudios)) {
       s2VerifiedAudios.forEach((l: any) => addLangTo(generalLangs, l));
+    }
+    if (Array.isArray(s3VerifiedAudios)) {
+      s3VerifiedAudios.forEach((l: any) => addLangTo(generalLangs, l));
     }
     const partLangs =
       (activeMoviePart as any)?.languages ||
@@ -1966,28 +2113,28 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
 
     if (merged.length === 0) {
-      if (activeLanguage && !isQualityKeyString(activeLanguage)) {
-        addLangTo(merged, activeLanguage);
-      }
-      if (merged.length === 0) {
-        merged.push('Hindi');
-      }
+      merged.push('Hindi');
     }
 
     return {
       s1SpecificLanguages: s1List,
       s2SpecificLanguages: s2List,
+      s3SpecificLanguages: s3List,
       availableLanguages: merged,
     };
   }, [
     s1DiscoveredAudioTracks,
     s2DiscoveredAudioTracks,
+    s3DiscoveredAudioTracks,
     discoveredAudioTracks,
     selectedServer,
     primaryServerUrl,
     secondaryServerUrl,
+    tertiaryServerUrl,
     secondaryServerQualityLinks,
+    tertiaryServerQualityLinks,
     secondaryVideoSources,
+    tertiaryVideoSources,
     playerVideoSources,
     activeMoviePart,
     currentEpisode,
@@ -2000,17 +2147,49 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     (content as any)?.audioLanguages,
     (content as any)?.audioTracks,
     (content as any)?.secondaryAudioTracks,
-    activeLanguage,
+    (content as any)?.tertiaryAudioTracks,
   ]);
 
-  // Unified Cross-Server Language Selection Handler:
-  // If user is on Server 1 (at e.g. 480p or 1080p) and selects a language available on Server 2,
-  // automatically switches to Server 2 while keeping the exact same quality and playback timestamp!
+  // Derived available languages strictly for Server 1 (Primary MaxPlay Provider / AnimeSalt Engine):
+  const currentServerLanguages = useMemo(() => {
+    let list: string[] = [...s1SpecificLanguages];
+
+    if (isAnimeContent || (content as any)?.isAnimeSalt || (currentEpisode as any)?.isAnimeSalt) {
+      const animeSaltAudios = ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
+      animeSaltAudios.forEach((al) => {
+        if (!list.some((x) => x.toLowerCase().trim() === al.toLowerCase().trim())) {
+          list.push(al);
+        }
+      });
+    }
+
+    if (list.length === 0) {
+      if (discoveredAudioTracks.length > 0) {
+        list = [...discoveredAudioTracks];
+      } else {
+        const fallback = (content as any)?.languages || (content as any)?.availableLanguages || [content.language || 'Hindi'];
+        list = Array.isArray(fallback) && fallback.length > 0 ? fallback : ['Hindi'];
+      }
+    }
+    return list;
+  }, [s1SpecificLanguages, discoveredAudioTracks, content, isAnimeContent, currentEpisode]);
+
+  // Robust In-Memory Language Resolution (Strictly derived without circular state setter effects)
+  const effectiveActiveLanguage = useMemo(() => {
+    if (activeLanguage) {
+      const matchInCurrent = currentServerLanguages.find(
+        (l) => l.toLowerCase().trim() === activeLanguage.toLowerCase().trim()
+      );
+      if (matchInCurrent) return matchInCurrent;
+    }
+    return currentServerLanguages[0] || 'Hindi';
+  }, [activeLanguage, currentServerLanguages]);
+
+  // In-Place Audio Language Selection Handler:
+  // Strictly switches audio track on the current server/stream without ever jumping to another server!
   const handleUnifiedLanguageSelect = useCallback(
     (rawLang: string) => {
-      const s2TagMatch = /\[S2\]/i.test(rawLang);
-      const s1TagMatch = /\[S1\]/i.test(rawLang);
-      const cleanLang = rawLang.replace(/\s*\[(S1|S2)\]/i, '').trim();
+      const cleanLang = rawLang.replace(/\s*\[(S1|S2|S3)\]/i, '').trim();
       if (!cleanLang) return;
 
       saveProgressNow(playbackPosition, false, true);
@@ -2020,63 +2199,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         localStorage.setItem('maxplay_preferred_lang', cleanLang);
       } catch {}
 
-      const matchesInList = (lang: string, list: string[]) =>
-        list.some(
-          (item) =>
-            item.toLowerCase() === lang.toLowerCase() ||
-            ClientHlsDownloader.matchesTargetLanguage(
-              { name: item, language: item, friendly: item },
-              lang
-            )
-        );
-
-      const hasS1 = Boolean(primaryServerUrl);
-      const hasS2 = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
-      const inS1 = matchesInList(cleanLang, s1SpecificLanguages);
-      const inS2 = matchesInList(cleanLang, s2SpecificLanguages);
-      const qualBadge = activeQuality && activeQuality !== 'auto' ? ` • ${activeQuality.toUpperCase()}` : '';
-
-      // If the language already exists on the currently active server (and wasn't explicitly tagged for the other server),
-      // keep the current server and switch the audio track directly in-place!
-      if (selectedServer === 'server1' && inS1 && !s2TagMatch) {
-        setToastMessage(`Audio • ${cleanLang}`);
-        setTimeout(() => setToastMessage(null), 2000);
-        return;
-      }
-      if (selectedServer === 'server2' && inS2 && !s1TagMatch) {
-        setToastMessage(`Audio • ${cleanLang}`);
-        setTimeout(() => setToastMessage(null), 2000);
-        return;
-      }
-
-      if (selectedServer === 'server1' && hasS2) {
-        if (s2TagMatch || (!inS1 && inS2)) {
-          handleSelectServer('server2');
-          setToastMessage(`Switched to Server 2 • ${cleanLang}${qualBadge}`);
-          setTimeout(() => setToastMessage(null), 2800);
-          return;
-        }
-      } else if (selectedServer === 'server2' && hasS1) {
-        if (s1TagMatch || (!inS2 && inS1)) {
-          handleSelectServer('server1');
-          setToastMessage(`Switched to Server 1 • ${cleanLang}${qualBadge}`);
-          setTimeout(() => setToastMessage(null), 2800);
-          return;
-        }
-      }
       setToastMessage(`Audio • ${cleanLang}`);
       setTimeout(() => setToastMessage(null), 2000);
     },
-    [
-      playbackPosition,
-      primaryServerUrl,
-      secondaryServerUrl,
-      secondaryServerQualityLinks,
-      s1SpecificLanguages,
-      s2SpecificLanguages,
-      selectedServer,
-      activeQuality,
-    ]
+    [playbackPosition]
   );
 
   const s1ProbeTargetUrl =
@@ -2125,95 +2251,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     };
 
     if (s1ProbeTargetUrl) applyCachedMeta(s1ProbeTargetUrl, 'server1');
-    if (s2ProbeTargetUrl) {
-      applyCachedMeta(s2ProbeTargetUrl, 'server2');
-      if (selectedServer !== 'server2' && !SmartStreamService.getCachedStreamMeta(s2ProbeTargetUrl)) {
-        SmartStreamService.resolveStream(s2ProbeTargetUrl, { forceRefresh: false })
-          .then(() => applyCachedMeta(s2ProbeTargetUrl, 'server2'))
-          .catch(() => {});
-      }
-    }
-    if (s3ProbeTargetUrl) {
-      applyCachedMeta(s3ProbeTargetUrl, 'server3');
-      if (selectedServer !== 'server3' && !SmartStreamService.getCachedStreamMeta(s3ProbeTargetUrl)) {
-        SmartStreamService.resolveStream(s3ProbeTargetUrl, { forceRefresh: false })
-          .then(() => applyCachedMeta(s3ProbeTargetUrl, 'server3'))
-          .catch(() => {});
-      }
-    }
-  }, [s1ProbeTargetUrl, s2ProbeTargetUrl, s3ProbeTargetUrl, selectedServer]);
+    if (s2ProbeTargetUrl) applyCachedMeta(s2ProbeTargetUrl, 'server2');
+    if (s3ProbeTargetUrl) applyCachedMeta(s3ProbeTargetUrl, 'server3');
+  }, [s1ProbeTargetUrl, s2ProbeTargetUrl, s3ProbeTargetUrl]);
 
-  // Compute cross-server qualities with [S1] / [S2] / [S3] badges so configured servers' qualities appear in the unified Quality drawer & selector
-  const crossServerQualities = useMemo(() => {
-    const gatherServerQualities = (
-      badge: 'S1' | 'S2' | 'S3',
-      url: string,
-      links: Record<string, string> | undefined,
-      discovered: string[]
-    ): string[] => {
-      const hasSrv = Boolean(url || (links && Object.keys(links).length > 0));
-      if (!hasSrv) return [];
-      const set = new Set<string>();
-      const addQ = (q?: string) => {
-        if (!q || typeof q !== 'string') return;
-        const clean = q.trim();
-        if (!clean || clean.toLowerCase() === 'auto' || clean.toLowerCase() === 'default') return;
-        if (isQualityKeyString(clean)) set.add(clean);
-      };
-      if (links && typeof links === 'object') {
-        Object.entries(links).forEach(([k, v]) => {
-          if (v && typeof v === 'string' && v.trim().length > 0) addQ(k);
-        });
-      }
-      discovered.forEach(addQ);
-      if (url) {
-        const cached = SmartStreamService.getCachedStreamMeta(url);
-        if (cached && Array.isArray((cached as any).qualities)) {
-          (cached as any).qualities.forEach(addQ);
-        }
-      }
-      if (set.size === 0 && url) {
-        (badge === 'S3' ? ['1080p', '720p'] : ['1080p', '720p', '480p', '360p']).forEach(addQ);
-      }
-      return Array.from(set)
-        .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0))
-        .map((q) => `${q} [${badge}]`);
-    };
+  // Strictly isolate qualities per selected server — no cross-server badges ([S1]/[S2]/[S3])
+  const crossServerQualities: string[] = useMemo(() => [], []);
 
-    const s1Links =
-      (isSeries && !isMovie ? currentEpisode?.qualityLinks : (activeMoviePart as any)?.qualityLinks) ||
-      content.qualityLinks ||
-      {};
-
-    const result: string[] = [];
-    if (selectedServer !== 'server1') {
-      result.push(...gatherServerQualities('S1', primaryServerUrl, s1Links, s1DiscoveredQualities));
-    }
-    if (selectedServer !== 'server2') {
-      result.push(...gatherServerQualities('S2', secondaryServerUrl, secondaryServerQualityLinks, s2DiscoveredQualities));
-    }
-    if (selectedServer !== 'server3') {
-      result.push(...gatherServerQualities('S3', tertiaryServerUrl, tertiaryServerQualityLinks, s3DiscoveredQualities));
-    }
-    return result;
-  }, [
-    selectedServer,
-    primaryServerUrl,
-    secondaryServerUrl,
-    secondaryServerQualityLinks,
-    tertiaryServerUrl,
-    tertiaryServerQualityLinks,
-    s1DiscoveredQualities,
-    s2DiscoveredQualities,
-    s3DiscoveredQualities,
-    isSeries,
-    isMovie,
-    currentEpisode,
-    activeMoviePart,
-    content.qualityLinks,
-  ]);
-
-  // Derive available qualities for the active server + cross-server qualities ([S1] / [S2] / [S3]), never mixing language names into qualities!
+  // Derive available qualities strictly for the active selected server, never mixing other servers or languages!
   const availableDetailQualities = useMemo(() => {
     const qSet = new Set<string>();
     const addQual = (q?: string) => {
@@ -2253,14 +2298,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       }
     }
 
-    // Standard fallback ladder for HLS streams if master manifest is still probing
-    if (qSet.size === 0) {
-      ['1080p', '720p', '480p', '360p'].forEach((q) => qSet.add(q));
+    // Standard fallback ladder for HLS streams if master manifest is still probing or AnimeSalt
+    if (qSet.size === 0 || isAnimeContent || (content as any)?.isAnimeSalt) {
+      ['1080p', '720p', '480p', '360p', '240p'].forEach((q) => qSet.add(q));
     }
 
     const sorted = Array.from(qSet).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
-    return ['auto', ...sorted, ...crossServerQualities];
-  }, [playerQualityLinks, discoveredQualities, selectedServer, primaryServerUrl, secondaryServerUrl, tertiaryServerUrl, crossServerQualities]);
+    return ['auto', ...sorted];
+  }, [playerQualityLinks, discoveredQualities, selectedServer, primaryServerUrl, secondaryServerUrl, tertiaryServerUrl]);
 
   // Resolve all parts for the current media (episode or movie)
   const allCurrentParts = useMemo(() => {
@@ -2405,12 +2450,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     }
   }, [allCurrentParts, isMovie, selectedSeasonIndex, selectedEpisodeIndex, partOffsets, selectedPartIndex, partProgressMap]);
 
-  // Auto-sync activeLanguage when switching parts/episodes if current activeLanguage is not available in new part
-  useEffect(() => {
-    if (availableLanguages.length > 0 && (!activeLanguage || !availableLanguages.includes(activeLanguage))) {
-      setActiveLanguage(availableLanguages[0]);
-    }
-  }, [availableLanguages, activeLanguage]);
 
   // Derive season options for Solo Leveling System selector
   const seasonOptions = useMemo(() => {
@@ -2959,7 +2998,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   }, [globalPlaybackPosition, globalTotalDuration]);
 
   // Clean Language Label for Movie Banner
-  const displayLangTag = activeLanguage ? activeLanguage.replace(/\(Sub\)/i, '').replace(/Dub/i, '').trim() : 'Hindi';
+  const displayLangTag = effectiveActiveLanguage ? effectiveActiveLanguage.replace(/\(Sub\)/i, '').replace(/Dub/i, '').trim() : 'Hindi';
 
   // Dynamic Quality / Format resolution (Zero Hardcoded values)
   const displayQualityTag = useMemo(() => {
@@ -3056,7 +3095,18 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   return (
     <div className="relative flex flex-col h-full w-full overflow-hidden bg-[#09090b]">
       {/* 1. Sticky/Pinned Video Player Area at Top */}
-      <div className="relative w-full bg-black shrink-0 z-40 shadow-2xl overflow-hidden" style={{ aspectRatio: '16/9', maxHeight: '42vh' }}>
+      <div 
+        className={
+          isNativePipActive
+            ? "fixed inset-0 z-[9999] w-screen h-screen bg-black overflow-hidden"
+            : "relative w-full bg-black shrink-0 z-40 shadow-2xl overflow-hidden"
+        } 
+        style={
+          isNativePipActive
+            ? { width: '100vw', height: '100vh', maxHeight: undefined }
+            : { aspectRatio: '16/9', maxHeight: '42vh' }
+        }
+      >
         {/* Soft atmospheric background ambient halo */}
         <div 
           className="absolute -top-14 -left-12 w-80 h-80 rounded-full bg-purple-600/25 blur-3xl pointer-events-none -z-10" 
@@ -3068,18 +3118,30 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-40 bg-rose-500/10 blur-3xl pointer-events-none -z-10" 
         />
 
-        {/* Resuming Progress Cloud Sync Overlay */}
+        {/* Resuming Progress Cloud Sync Skeleton Shimmer */}
         {isCloudResumeChecking && !initialSavedData && (
-          <div className="absolute inset-0 z-50 bg-[#09090b] flex flex-col items-center justify-center gap-3">
-            <div className="relative">
-              <div className="w-10 h-10 border-2 border-purple-500/20 border-t-purple-500 rounded-full animate-spin" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-2.5 h-2.5 bg-purple-500 rounded-full blur-[2px] animate-pulse" />
+          <div className="absolute inset-0 z-50 bg-[#09090b] flex flex-col justify-between p-4 select-none">
+            {/* Shimmering Player Area */}
+            <div className="relative w-full aspect-video rounded-2xl bg-[#14141B] overflow-hidden border border-white/5">
+              <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                <div className="h-1.5 w-32 rounded-full bg-purple-500/30 overflow-hidden">
+                  <div className="h-full w-1/2 bg-[#A855F7] animate-pulse rounded-full" />
+                </div>
+                <span className="text-[11px] font-semibold text-purple-300 tracking-wide">
+                  Restoring progress...
+                </span>
               </div>
             </div>
-            <p className="text-xs font-medium text-white/80 tracking-wide">
-              Restoring your watch progress...
-            </p>
+            {/* Shimmering Details Row */}
+            <div className="flex flex-col gap-3 py-4">
+              <div className="relative h-6 w-3/5 rounded-lg bg-[#181822] overflow-hidden">
+                <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+              </div>
+              <div className="relative h-4 w-2/5 rounded bg-[#181822] overflow-hidden">
+                <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+              </div>
+            </div>
           </div>
         )}
         
@@ -3102,16 +3164,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                || (content.episodesList && content.episodesList[selectedEpisodeIndex]?.skipMarkers)
                || (content.episodesList && (content.episodesList[selectedEpisodeIndex] as any)?.skip_markers));
                
-          console.log('[SkipDebug] Passed to Player:', currentPlayerSkipMarkers, 'activeMoviePart:', activeMoviePart, 'content skip markers:', content.skipMarkers);
-
           return (
             <InlinePlayer
-              key={content.id}
-              streamKey={`${content.id}-${currentPartKey}-${selectedServer}`}
+              key={`${content.id}-${currentPartKey}`}
+              streamKey={`${content.id}-${currentPartKey}`}
               videoUrl={playerVideoUrl}
               qualityLinks={playerQualityLinks}
               videoSources={playerVideoSources}
-              availableLanguages={availableLanguages}
+              availableLanguages={currentServerLanguages}
               chunks={playerChunks}
               skipMarkers={currentPlayerSkipMarkers}
               isSmartHls={Boolean(content.isSmartHls || (currentEpisode as any)?.isSmartHls || (activeMoviePart as any)?.isSmartHls || secondaryServerUrl || tertiaryServerUrl)}
@@ -3121,47 +3181,20 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               autoPlay={true}
               timeOffset={activePartOffset}
               globalDuration={totalEpisodeDuration}
+              verifiedDuration={
+                (currentEpisode as any)?.verifiedDuration ||
+                (content as any)?.verifiedDuration ||
+                (typeof (content as any)?.duration === 'string' ? (content as any)?.duration : undefined)
+              }
               onGlobalSeek={allCurrentParts.length > 1 ? handleGlobalSeek : undefined}
-              activeLanguage={activeLanguage}
+              activeLanguage={effectiveActiveLanguage}
               activeQuality={activeQuality}
-              selectedServer={selectedServer}
+              selectedServer={activeEffectiveServer}
               crossServerQualities={crossServerQualities}
               onLanguageChange={handleUnifiedLanguageSelect}
-              onRequestCrossServerLanguageSwitch={(missingLang) => {
-                const hasS1 = Boolean(primaryServerUrl || Object.keys(primaryServerQualityLinks || {}).length > 0);
-                const hasS2 = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks || {}).length > 0);
-                const qualBadge = activeQuality && activeQuality !== 'auto' ? ` • ${activeQuality.toUpperCase()}` : '';
-                if (selectedServer === 'server1' && hasS2) {
-                  saveProgressNow(playbackPosition, false, true);
-                  handleSelectServer('server2');
-                  setToastMessage(`Switched to Server 2 • ${missingLang}${qualBadge}`);
-                  setTimeout(() => setToastMessage(null), 2800);
-                } else if (selectedServer === 'server2' && hasS1) {
-                  saveProgressNow(playbackPosition, false, true);
-                  handleSelectServer('server1');
-                  setToastMessage(`Switched to Server 1 • ${missingLang}${qualBadge}`);
-                  setTimeout(() => setToastMessage(null), 2800);
-                }
-              }}
               onQualityChange={(qual) => {
-                const s3Match = /\[S3\]/i.test(qual);
-                const s2Match = /\[S2\]/i.test(qual);
-                const s1Match = /\[S1\]/i.test(qual);
                 const cleanQ = qual.replace(/\s*\[(S1|S2|S3)\]/i, '').trim();
                 saveProgressNow(playbackPosition, false, true);
-                if (s3Match && selectedServer !== 'server3') {
-                  handleSelectServer('server3');
-                  setToastMessage(`Switched to Server 3 • ${cleanQ.toUpperCase()}`);
-                  setTimeout(() => setToastMessage(null), 2800);
-                } else if (s2Match && selectedServer !== 'server2') {
-                  handleSelectServer('server2');
-                  setToastMessage(`Switched to Server 2 • ${cleanQ.toUpperCase()}`);
-                  setTimeout(() => setToastMessage(null), 2800);
-                } else if (s1Match && selectedServer !== 'server1') {
-                  handleSelectServer('server1');
-                  setToastMessage(`Switched to Server 1 • ${cleanQ.toUpperCase()}`);
-                  setTimeout(() => setToastMessage(null), 2800);
-                }
                 setActiveQuality(cleanQ);
                 try {
                   localStorage.setItem('maxplay_preferred_quality', cleanQ);
@@ -3190,10 +3223,20 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               }}
               onProgress={handleProgress}
               onDuration={handleDurationUpdate}
+              onFirstFrameRendered={() => {
+                // First frame delivered smoothly
+              }}
               onPause={(time, totalDuration) => {
                 saveProgressNow(time, false, true, totalDuration);
               }}
               onNext={hasNext ? handleNextEpisode : undefined}
+              nextEpisodeTitle={
+                isSeries && !isMovie && activeSeasonEpisodes.length > selectedEpisodeIndex + 1
+                  ? (activeSeasonEpisodes[selectedEpisodeIndex + 1]?.title || `Episode ${selectedEpisodeIndex + 2}`)
+                  : isMovie && selectedPartIndex + 1 < movieTotalParts
+                  ? `Part ${selectedPartIndex + 2}`
+                  : undefined
+              }
               onComplete={isAutoNextEnabled && hasNext ? handleNextEpisode : undefined}
               onBack={handleBackWithMiniplayer}
             />
@@ -3204,7 +3247,11 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       {/* 2. Scrollable Body Content Below Player */}
       <div 
         ref={scrollContainerRef}
-        className="flex-1 w-full overflow-y-auto overflow-x-hidden bg-[#101116] text-white pb-36 font-sans scroll-smooth"
+        className={
+          isNativePipActive
+            ? "hidden"
+            : "flex-1 w-full overflow-y-auto overflow-x-hidden bg-[#101116] text-white pb-36 font-sans scroll-smooth"
+        }
       >
         <div className="px-3.5 sm:px-5 pt-3.5 pb-6 z-10 w-full max-w-5xl mx-auto">
         
@@ -3252,7 +3299,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           <span className="text-[#7c808b] shrink-0 uppercase">
             {activeQuality && activeQuality !== 'auto'
               ? activeQuality.replace(/\s*\[(S1|S2|S3)\]/i, '').toUpperCase()
-              : (discoveredQualities[0] || displayQualityTag || '480P').replace(/\s*\[(S1|S2|S3)\]/i, '').toUpperCase()}
+              : (discoveredQualities[0] || displayQualityTag || '720P').replace(/\s*\[(S1|S2|S3)\]/i, '').toUpperCase()}
           </span>
 
           <span className="text-[#3a3d46] shrink-0">|</span>
@@ -3310,7 +3357,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             <span>Share</span>
           </button>
 
-          {/* 3. Download */}
+          {/* 3. Download (Right next to Share for high visibility) */}
           {(() => {
             const isContentHlsSupported = Boolean(
               content.isSmartHls ||
@@ -3331,7 +3378,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 type="button"
                 onClick={() => {
                   if (!isContentHlsSupported) {
-                    setToastMessage("Download is only available for HLS / Server 3 content. Normal links do not support offline downloading.");
+                    setToastMessage("Offline download is only available for verified streaming sources.");
                     setTimeout(() => setToastMessage(null), 3500);
                     return;
                   }
@@ -3340,7 +3387,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                 className={`shrink-0 flex items-center justify-center gap-2 h-[38px] px-4 rounded-full bg-[#1e2029] hover:bg-[#262936] text-[13px] font-medium transition-colors cursor-pointer active:scale-95 ${
                   isContentHlsSupported ? 'text-[#e4e6eb]' : 'text-white/50'
                 }`}
-                title={isContentHlsSupported ? "Download for offline viewing" : "Download available only for HLS / Server 3"}
+                title={isContentHlsSupported ? "Download for offline viewing" : "Download not available for this stream"}
               >
                 <Download className="w-4 h-4 text-[#b0b3b8] stroke-[2] shrink-0" />
                 <span>Download</span>
@@ -3348,24 +3395,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             );
           })()}
 
-          {/* 4. Server 1 (Purple) / Server 2 (Gold) / Server 3 (Crimson) */}
+          {/* 4. Comments Pill Action Button (Placed at the very end) */}
           <button 
             type="button"
             onClick={() => {
               adManager.handleActionDockClick(!!user?.isPremium);
-              setIsServerModalOpen(true);
+              setActiveTab('comments');
+              setTimeout(() => {
+                commentsSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
+              }, 50);
             }}
-            className={`shrink-0 flex items-center justify-center gap-2 h-[38px] px-4 rounded-full text-[13px] font-bold transition-all cursor-pointer active:scale-95 border ${
-              selectedServer === 'server3'
-                ? 'bg-gradient-to-r from-[#E11D48] via-[#BE123C] to-[#9F1239] text-white border-rose-400/50 shadow-md shadow-rose-950/50'
-                : selectedServer === 'server2'
-                ? 'bg-gradient-to-r from-[#F59E0B] via-[#D97706] to-[#B45309] text-black border-amber-300/60 shadow-md shadow-amber-950/50'
-                : 'bg-gradient-to-r from-[#8B5CF6] via-[#7C3AED] to-[#5B21B6] text-white border-purple-400/50 shadow-md shadow-purple-950/50'
-            }`}
-            title="Switch Streaming Server (Server 1 / Server 2 / Server 3)"
+            className="shrink-0 flex items-center justify-center gap-2 h-[38px] px-4 rounded-full bg-[#1e2029] hover:bg-[#262936] text-[#e4e6eb] text-[13px] font-medium transition-colors cursor-pointer active:scale-95"
+            title="Comments"
           >
-            <Server className={`w-4 h-4 shrink-0 stroke-[2.2] ${selectedServer === 'server2' ? 'text-black' : selectedServer === 'server3' ? 'text-rose-100' : 'text-purple-100'}`} />
-            <span>{selectedServer === 'server3' ? 'Server 3' : selectedServer === 'server2' ? 'Server 2' : 'Server 1'}</span>
+            <MessageSquare className="w-4 h-4 text-[#b0b3b8] stroke-[2] shrink-0" />
+            <span>Comments</span>
           </button>
         </div>
 
@@ -3465,7 +3509,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       title="Change Audio Language"
                     >
                       <span className="truncate max-w-[115px]">
-                        {activeLanguage || availableLanguages[0] || 'Hindi'}
+                        {effectiveActiveLanguage}
                       </span>
                       <ChevronDown className={`w-4 h-4 text-[#8e929b] transition-transform duration-150 shrink-0 ${isLanguageModalOpen ? 'rotate-180 text-white' : ''}`} />
                     </button>
@@ -3509,6 +3553,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                         e.stopPropagation();
                         setIsLanguageModalOpen(false);
                         setIsSeasonModalOpen(false);
+                        setIsServerModalOpen(false);
                         setIsQualityModalOpen(prev => {
                           const next = !prev;
                           if (next) {
@@ -3522,10 +3567,55 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                     >
                       <span className="truncate max-w-[90px]">
                         {activeQuality === 'auto'
-                          ? (discoveredQualities[0] ? discoveredQualities[0].toUpperCase() : '480P')
+                          ? (discoveredQualities[0] ? discoveredQualities[0].toUpperCase() : '720P')
                           : activeQuality.replace(/\s*\[(S1|S2|S3)\]/i, '').toUpperCase()}
                       </span>
                       <ChevronDown className={`w-4 h-4 text-[#8e929b] transition-transform duration-150 shrink-0 ${isQualityModalOpen ? 'rotate-180 text-white' : ''}`} />
+                    </button>
+
+                    {/* 4. Server Selector Box (Highlights AnimeSalt for Anime) */}
+                    <button
+                      ref={serverTriggerRef}
+                      data-selector-trigger="server"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsLanguageModalOpen(false);
+                        setIsSeasonModalOpen(false);
+                        setIsQualityModalOpen(false);
+                        setIsServerModalOpen(prev => {
+                          const next = !prev;
+                          if (next) {
+                            adManager.handleSelectorClick(!!user?.isPremium);
+                          }
+                          return next;
+                        });
+                      }}
+                      className={`shrink-0 inline-flex items-center justify-between gap-2.5 bg-[#14161d] hover:bg-[#1c1f28] active:scale-95 border rounded-[6px] h-[38px] px-3.5 text-[13px] font-medium transition-all cursor-pointer ${
+                        isAnimeContent
+                          ? 'border-[#8B5CF6]/50 text-purple-200 shadow-[0_0_12px_rgba(139,92,246,0.15)]'
+                          : 'border-white/15 text-[#e4e6eb]'
+                      }`}
+                      title="Select Streaming Server"
+                    >
+                      <span className="truncate max-w-[130px] flex items-center gap-1.5">
+                        {isAnimeContent ? (
+                          selectedServer === 'server1' ? (
+                            <>
+                              <Zap className="w-3.5 h-3.5 text-[#A855F7] shrink-0" />
+                              <span className="text-[#D8B4FE] font-bold">AnimeSalt</span>
+                            </>
+                          ) : (
+                            <>
+                              <ShieldCheck className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                              <span>Server 1 (Backup)</span>
+                            </>
+                          )
+                        ) : (
+                          selectedServer === 'server1' ? 'Server 1' : 'Server 2'
+                        )}
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-[#8e929b] transition-transform duration-150 shrink-0 ${isServerModalOpen ? 'rotate-180 text-white' : ''}`} />
                     </button>
                 </div>
 
@@ -3535,9 +3625,10 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   onClose={() => setIsLanguageModalOpen(false)}
                   triggerRef={languageTriggerRef}
                   type="language"
+                  selectedServer={selectedServer}
                   contentTitle={content.title}
-                  languages={availableLanguages}
-                  activeLanguage={activeLanguage || availableLanguages[0] || ''}
+                  languages={currentServerLanguages}
+                  activeLanguage={effectiveActiveLanguage}
                   onSelectLanguage={handleUnifiedLanguageSelect}
                 />
 
@@ -3546,34 +3637,30 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   onClose={() => setIsQualityModalOpen(false)}
                   triggerRef={qualityTriggerRef}
                   type="quality"
+                  selectedServer={selectedServer}
                   contentTitle={content.title}
                   qualities={availableDetailQualities}
                   activeQuality={activeQuality}
                   onSelectQuality={(newQual) => {
-                    const s3Match = /\[S3\]/i.test(newQual);
-                    const s2Match = /\[S2\]/i.test(newQual);
-                    const s1Match = /\[S1\]/i.test(newQual);
                     const cleanQ = newQual.replace(/\s*\[(S1|S2|S3)\]/i, '').trim();
                     saveProgressNow(playbackPosition, false, true);
-                    if (s3Match && selectedServer !== 'server3') {
-                      handleSelectServer('server3');
-                      setToastMessage(`Switched to Server 3 • ${cleanQ.toUpperCase()}`);
-                      setTimeout(() => setToastMessage(null), 2800);
-                    } else if (s2Match && selectedServer !== 'server2') {
-                      handleSelectServer('server2');
-                      setToastMessage(`Switched to Server 2 • ${cleanQ.toUpperCase()}`);
-                      setTimeout(() => setToastMessage(null), 2800);
-                    } else if (s1Match && selectedServer !== 'server1') {
-                      handleSelectServer('server1');
-                      setToastMessage(`Switched to Server 1 • ${cleanQ.toUpperCase()}`);
-                      setTimeout(() => setToastMessage(null), 2800);
-                    }
                     setActiveQuality(cleanQ);
                     try {
                       localStorage.setItem('maxplay_preferred_quality', cleanQ);
                       localStorage.setItem('maxplay_video_quality', cleanQ);
                     } catch {}
                   }}
+                />
+
+                <SoloLevelingSelectorModal
+                  isOpen={isServerModalOpen}
+                  onClose={() => setIsServerModalOpen(false)}
+                  triggerRef={serverTriggerRef}
+                  type="server"
+                  selectedServer={selectedServer}
+                  onSelectServer={handleSelectServer}
+                  isAnime={isAnimeContent}
+                  contentTitle={content.title}
                 />
 
                 {!isMovie && (
@@ -3700,12 +3787,9 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         </div>
 
         {/* NATIVE BANNER AD — Placed between Episode/Playback section and For you / Comments tabs */}
-        <div className="my-2">
-          <NativeBanner />
+        <div className="my-1.5">
+          <NativeBanner screen="detail" />
         </div>
-
-        {/* Full-bleed dark divider bar matching reference screenshots */}
-        <div className="h-[6px] -mx-3.5 sm:-mx-5 bg-[#090a0d] my-3.5" />
 
         {/* Navigation Tabs: Clean Underline Tabs ("For you" & "Comments") matching reference image */}
         <div ref={commentsSectionRef} className="mb-3">
@@ -4028,7 +4112,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               )}
 
               {/* NATIVE BANNER AD */}
-              <NativeBanner />
+              <NativeBanner screen="detail" />
             </div>
           </div>
         </div>
@@ -4165,246 +4249,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           </div>
         </div>
       )}
-
-      {/* Server Selection Slide-Up Sheet Anchored Directly Below Video Player (Animated like Quality/Language Selector) */}
-      <AnimatePresence>
-        {isServerModalOpen && content && (
-          <div className="fixed inset-x-0 bottom-0 top-[min(56.25vw,42vh)] z-50 flex items-end justify-center p-0 overflow-hidden">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1, transition: { duration: 0.16 } }}
-              exit={{ opacity: 0, transition: { duration: 0.14 } }}
-              className="fixed inset-x-0 bottom-0 top-[min(56.25vw,42vh)] bg-black/65"
-              style={{ willChange: 'opacity', transform: 'translateZ(0)' }}
-              onClick={() => setIsServerModalOpen(false)}
-            />
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0, transition: { type: 'tween', ease: [0.22, 1, 0.36, 1], duration: 0.22 } }}
-              exit={{ y: '100%', transition: { type: 'tween', ease: [0.4, 0, 1, 1], duration: 0.16 } }}
-              className="relative z-10 bg-[#121318] border-t border-white/15 w-full h-full rounded-t-2xl p-5 overflow-y-auto overscroll-contain shadow-2xl"
-              style={{ willChange: 'transform', transform: 'translate3d(0,0,0)' }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-            <div className="flex items-center justify-between pb-3.5 mb-3.5 border-b border-white/10 sticky top-0 bg-[#121318] z-10">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
-                  <Server className="w-4 h-4 text-amber-400" />
-                </div>
-                <div>
-                  <h2 className="text-sm sm:text-base font-extrabold text-white leading-tight">
-                    Select Streaming Server
-                  </h2>
-                  <p className="text-[10px] text-white/50">
-                    Switch servers instantly if one is slow or buffering
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsServerModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 text-white/70 hover:text-white transition cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2.5">
-              {/* Server 1 (Always Purple Gradient Identity) */}
-              {(() => {
-                const isSelected = selectedServer === 'server1';
-                const hasPrimary = Boolean(primaryServerUrl);
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleSelectServer('server1');
-                      setIsServerModalOpen(false);
-                      setToastMessage('Switched to Server 1');
-                      setTimeout(() => setToastMessage(null), 2500);
-                    }}
-                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer text-left ${
-                      isSelected
-                        ? 'bg-gradient-to-r from-[#8B5CF6]/35 via-[#6D28D9]/25 to-[#181822] border-[#8B5CF6] ring-1 ring-[#8B5CF6]/60 shadow-lg shadow-purple-950/50'
-                        : 'bg-gradient-to-r from-[#8B5CF6]/15 via-[#6D28D9]/10 to-[#14141d] border-purple-500/35 hover:border-purple-400/60'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-xs border bg-gradient-to-br from-[#8B5CF6] to-[#6D28D9] text-white border-purple-300/50 shadow-md shadow-purple-900/50">
-                        S1
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs sm:text-sm font-extrabold text-purple-200 truncate">
-                            Server 1
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                            hasPrimary
-                              ? 'bg-purple-500/20 text-purple-200 border-purple-400/40'
-                              : 'bg-white/10 text-white/50 border-white/15'
-                          }`}>
-                            {hasPrimary ? 'Ready' : 'Not configured'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-purple-200/70 mt-0.5 truncate">
-                          {hasPrimary
-                            ? 'High-Speed Primary Multi-Audio & Auto Quality Stream'
-                            : 'Server 1 is not configured for this title'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="shrink-0 ml-2">
-                      {isSelected ? (
-                        <div className="w-6 h-6 rounded-full bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] flex items-center justify-center text-white shadow-sm">
-                          <Check className="w-3.5 h-3.5 stroke-[3]" />
-                        </div>
-                      ) : (
-                        <span className="text-[10px] font-bold text-purple-200 px-2.5 py-1 rounded-lg bg-purple-500/20 border border-purple-400/30">
-                          Select
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })()}
-
-              {/* Server 2 (Always Gold/Amber Gradient Identity) */}
-              {(() => {
-                const isSelected = selectedServer === 'server2';
-                const hasSecondary = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
-                const isPrimaryAlreadyBackupCompatible = Boolean(
-                  primaryServerUrl && (
-                    primaryServerUrl.toLowerCase().includes('filemoon') ||
-                    primaryServerUrl.toLowerCase().includes('byse') ||
-                    primaryServerUrl.toLowerCase().includes('f16px') ||
-                    primaryServerUrl.toLowerCase().includes('n1mwq')
-                  )
-                );
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleSelectServer('server2');
-                      setIsServerModalOpen(false);
-                      setToastMessage(
-                        hasSecondary || isPrimaryAlreadyBackupCompatible
-                          ? 'Switched to Server 2'
-                          : 'Switched to Server 2 (Using available stream)'
-                      );
-                      setTimeout(() => setToastMessage(null), 2500);
-                    }}
-                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer text-left ${
-                      isSelected
-                        ? 'bg-gradient-to-r from-[#F59E0B]/35 via-[#D97706]/25 to-[#181822] border-[#F59E0B] ring-1 ring-[#F59E0B]/60 shadow-lg shadow-amber-950/50'
-                        : 'bg-gradient-to-r from-[#F59E0B]/15 via-[#D97706]/10 to-[#14141d] border-amber-500/35 hover:border-amber-400/60'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-xs border bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-black border-amber-300/60 shadow-md shadow-amber-900/50">
-                        S2
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs sm:text-sm font-extrabold text-amber-200 truncate">
-                            Server 2
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                            hasSecondary || isPrimaryAlreadyBackupCompatible
-                              ? 'bg-amber-500/20 text-amber-200 border-amber-400/40'
-                              : 'bg-white/10 text-white/50 border-white/15'
-                          }`}>
-                            {hasSecondary || isPrimaryAlreadyBackupCompatible ? 'Ready' : 'Not configured'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-amber-200/70 mt-0.5 truncate">
-                          {hasSecondary || isPrimaryAlreadyBackupCompatible
-                            ? 'Turbo Backup High-Speed Multi-Audio HLS Stream'
-                            : 'Server 2 is not configured for this title'}
-                        </p>
-                      </div>
-                    </div>
-                      <div className="shrink-0 ml-2">
-                        {isSelected ? (
-                          <div className="w-6 h-6 rounded-full bg-gradient-to-r from-[#F59E0B] to-[#D97706] flex items-center justify-center text-black shadow-sm">
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                          </div>
-                        ) : (
-                          <span className="text-[10px] font-bold text-amber-200 px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/30">
-                            Select
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })()}
-
-              {/* Server 3 (Crimson / Rose Gradient Identity — Streamtape Direct MP4/MKV) */}
-              {(() => {
-                const isSelected = selectedServer === 'server3';
-                const hasTertiary = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleSelectServer('server3');
-                      setIsServerModalOpen(false);
-                      setToastMessage(
-                        hasTertiary
-                          ? 'Switched to Server 3'
-                          : 'Switched to Server 3 (Using available stream)'
-                      );
-                      setTimeout(() => setToastMessage(null), 2500);
-                    }}
-                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer text-left ${
-                      isSelected
-                        ? 'bg-gradient-to-r from-[#E11D48]/35 via-[#BE123C]/25 to-[#181822] border-[#E11D48] ring-1 ring-[#E11D48]/60 shadow-lg shadow-rose-950/50'
-                        : 'bg-gradient-to-r from-[#E11D48]/15 via-[#BE123C]/10 to-[#14141d] border-rose-500/35 hover:border-rose-400/60'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-xs border bg-gradient-to-br from-[#E11D48] to-[#9F1239] text-white border-rose-300/60 shadow-md shadow-rose-900/50">
-                        S3
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs sm:text-sm font-extrabold text-rose-200 truncate">
-                            Server 3
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                            hasTertiary
-                              ? 'bg-rose-500/20 text-rose-200 border-rose-400/40'
-                              : 'bg-white/10 text-white/50 border-white/15'
-                          }`}>
-                            {hasTertiary ? 'Ready' : 'Not configured'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-rose-200/70 mt-0.5 truncate">
-                          {hasTertiary
-                            ? 'Direct High-Speed Streamtape MP4 / MKV Mirror'
-                            : 'Server 3 is not configured for this title'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="shrink-0 ml-2">
-                      {isSelected ? (
-                        <div className="w-6 h-6 rounded-full bg-gradient-to-r from-[#E11D48] to-[#9F1239] flex items-center justify-center text-white shadow-sm">
-                          <Check className="w-3.5 h-3.5 stroke-[3]" />
-                        </div>
-                      ) : (
-                        <span className="text-[10px] font-bold text-rose-200 px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-400/30">
-                          Select
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })()}
-            </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Instant Download Selection Modal */}
       <DownloadSelectionModal

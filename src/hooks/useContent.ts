@@ -4,7 +4,8 @@ import {
   subscribeToHeroBanners,
   subscribeToCategories,
   subscribeToScreensCategories,
-  subscribeToHomeRows
+  subscribeToHomeRows,
+  ANIMESALT_BRAND_NEW_CARD
 } from '../services/contentService';
 import { ContentItem } from '../types';
 
@@ -41,7 +42,10 @@ interface GlobalContentState {
   initialized: boolean;
 }
 
-const initialContentCache = loadFromCache<ContentItem[]>('maxplay_content_cache', []);
+const initialContentCacheRaw = loadFromCache<ContentItem[]>('maxplay_content_cache', []);
+const initialContentCache = initialContentCacheRaw.some(c => c.id === ANIMESALT_BRAND_NEW_CARD.id)
+  ? initialContentCacheRaw
+  : [ANIMESALT_BRAND_NEW_CARD, ...initialContentCacheRaw];
 const initialBannersCache = loadFromCache<any[]>('maxplay_hero_banners_cache', []);
 const initialRowsCache = loadFromCache<Record<string, any[]>>('maxplay_home_rows_cache', {});
 const initialScreensCatsCache = loadFromCache<Record<string, any[]>>('maxplay_screens_categories_cache', {});

@@ -21,7 +21,7 @@ export const AudioLangDrawer: React.FC<AudioLangDrawerProps> = React.memo(({
   const getLangBadge = (lang: string) => {
     const l = lang.toLowerCase();
     if (l.includes('hindi')) return { flag: '🇮🇳', tag: 'DUBBED' };
-    if (l.includes('english')) return { flag: '🇬🇧', tag: 'ORIGINAL' };
+    if (l.includes('english')) return { flag: '🇬🇧', tag: l.includes('orig') ? 'ORIGINAL' : 'DUBBED' };
     if (l.includes('tamil')) return { flag: '🇮🇳', tag: 'DUBBED' };
     if (l.includes('telugu')) return { flag: '🇮🇳', tag: 'DUBBED' };
     if (l.includes('malayalam')) return { flag: '🇮🇳', tag: 'DUBBED' };
@@ -31,6 +31,10 @@ export const AudioLangDrawer: React.FC<AudioLangDrawerProps> = React.memo(({
     if (l.includes('spanish')) return { flag: '🇪🇸', tag: 'DUBBED' };
     return { flag: '🌐', tag: 'AUDIO' };
   };
+
+  const effectiveLanguages = (availableLanguages && availableLanguages.length > 0)
+    ? availableLanguages
+    : ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
 
   return (
     <div
@@ -57,51 +61,38 @@ export const AudioLangDrawer: React.FC<AudioLangDrawerProps> = React.memo(({
         </div>
 
         <div className="flex flex-col gap-1.5 overflow-y-auto py-1">
-          {availableLanguages.length === 0 ? (
-            <div className="flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold border bg-[#38BDF8]/20 border-[#38BDF8]/50 text-white shadow-md shadow-sky-500/10">
-              <div className="flex items-center gap-2.5">
-                <span className="text-base">🌐</span>
-                <div className="flex flex-col text-left">
-                  <span className="text-sm font-extrabold tracking-wide">Default Audio</span>
-                  <span className="text-[9px] text-[#A1A1AA] font-normal">SOURCE TRACK</span>
-                </div>
-              </div>
-              <Check className="h-4 w-4 text-[#38BDF8]" />
-            </div>
-          ) : (
-            availableLanguages.map((lang) => {
-              const curLower = currentLanguage.toLowerCase().trim();
-              const langLower = lang.toLowerCase().trim();
-              const isActive = curLower === langLower ||
-                (curLower && (langLower.includes(curLower) || curLower.includes(langLower)));
-              const badge = getLangBadge(lang);
+          {effectiveLanguages.map((lang) => {
+            const curLower = currentLanguage.toLowerCase().trim();
+            const langLower = lang.toLowerCase().trim();
+            const isActive = curLower === langLower ||
+              (curLower && (langLower.includes(curLower) || curLower.includes(langLower)));
+            const badge = getLangBadge(lang);
 
-              return (
-                <button
-                  key={lang}
-                  type="button"
-                  onClick={() => {
-                    onSelectLanguage(lang);
-                    onClose();
-                  }}
-                  className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border ${
-                    isActive
-                      ? 'bg-[#38BDF8]/20 border-[#38BDF8]/50 text-white shadow-md shadow-sky-500/10'
-                      : 'border-transparent text-[#A1A1AA] hover:bg-[#1C1C1E] hover:text-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className="text-base">{badge.flag}</span>
-                    <div className="flex flex-col text-left">
-                      <span className="text-sm font-extrabold tracking-wide">{lang}</span>
-                      <span className="text-[9px] text-[#A1A1AA] font-normal">{badge.tag}</span>
-                    </div>
+            return (
+              <button
+                key={lang}
+                type="button"
+                onClick={() => {
+                  onSelectLanguage(lang);
+                  onClose();
+                }}
+                className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-bold transition-all cursor-pointer border ${
+                  isActive
+                    ? 'bg-[#38BDF8]/20 border-[#38BDF8]/50 text-white shadow-md shadow-sky-500/10'
+                    : 'border-transparent text-[#A1A1AA] hover:bg-[#1C1C1E] hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="text-base">{badge.flag}</span>
+                  <div className="flex flex-col text-left">
+                    <span className="text-sm font-extrabold tracking-wide">{lang}</span>
+                    <span className="text-[9px] text-[#A1A1AA] font-normal">{badge.tag}</span>
                   </div>
-                  {isActive && <Check className="h-4 w-4 text-[#38BDF8]" />}
-                </button>
-              );
-            })
-          )}
+                </div>
+                {isActive && <Check className="h-4 w-4 text-[#38BDF8]" />}
+              </button>
+            );
+          })}
         </div>
 
         <div className="mt-auto pt-3 border-t border-[#1C1C1E] flex items-center justify-center gap-1.5 text-[10px] text-[#71717A]">

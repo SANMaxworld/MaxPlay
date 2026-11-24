@@ -181,12 +181,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   // Pre-download summary confirmation step state
   const [showSummaryReview, setShowSummaryReview] = useState<boolean>(false);
 
-  // In-modal server selector (defaults to currently active player server, switchable inside modal!)
-  const [modalServer, setModalServer] = useState<'server1' | 'server2' | 'server3'>(selectedServer);
+  // In-modal server selector (Strictly locked to Server 1 — MaxPlay Primary)
+  const [modalServer, setModalServer] = useState<'server1' | 'server2' | 'server3'>('server1');
 
   useEffect(() => {
-    setModalServer(selectedServer);
-  }, [selectedServer, visible]);
+    setModalServer('server1');
+  }, [visible]);
 
   useEffect(() => {
     if (visible) {
@@ -235,10 +235,10 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     return /^(\d{3,4}p|4k|2k|8k|hd|fhd|uhd|sd|auto)$/i.test(val.trim());
   };
 
-  // Sanitize a qualityLinks dictionary and heal accidental 1080p clones when Admin only verified 720p/480p/360p
+  // Sanitize a qualityLinks dictionary
   const sanitizeQualityDict = (
     rawDict: Record<string, string> | undefined | null,
-    savedArr: any[] | undefined | null
+    _savedArr: any[] | undefined | null
   ): Record<string, string> => {
     if (!rawDict || typeof rawDict !== 'object') return {};
     const cleaned: Record<string, string> = {};
@@ -247,17 +247,6 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       const cleanV = SmartStreamService.sanitizeStreamUrl(v);
       if (cleanK && cleanV && isQualityKey(cleanK) && cleanK.toLowerCase() !== 'auto') {
         cleaned[cleanK] = cleanV;
-      }
-    }
-    if (cleaned['1080p']) {
-      const otherKeys = Object.keys(cleaned).filter((k) => k !== '1080p');
-      const isDuplicateOfLower = otherKeys.some((k) => cleaned[k] === cleaned['1080p']);
-      const savedHasOtherOnly =
-        Array.isArray(savedArr) &&
-        savedArr.length > 0 &&
-        !savedArr.some((q: any) => String(q?.id || '').trim().toLowerCase() === '1080p');
-      if (isDuplicateOfLower || (savedHasOtherOnly && otherKeys.length > 0)) {
-        delete cleaned['1080p'];
       }
     }
     return cleaned;
@@ -934,12 +923,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
     // 3. Merge live probed manifest/direct variants (only when applicable to this item)
     if (liveMetaForItem && Array.isArray(liveMetaForItem.downloadQualities)) {
-      const allowNewVariants = map.size === 0;
       for (const q of liveMetaForItem.downloadQualities) {
         const qId = String(q?.id || '').trim();
         if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
         const existing = map.get(qId);
-        if (!existing && !allowNewVariants) continue;
+        // Always allow 1080p from live probe if not already present, or if map is empty
+        if (!existing && map.size > 0 && !qId.toLowerCase().includes('1080')) continue;
         const realMb =
           existing?.sizeMb && existing.sizeMb > 0
             ? existing.sizeMb
@@ -998,6 +987,23 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
           bandwidth: 0,
           label: `${inferredQ} Direct File`,
           badge: 'Streamtape Direct',
+        });
+      }
+    }
+
+    // 5. If content specifies 1080p quality, ensure 1080p is in download qualities map
+    const rawQuals = (content as any)?.qualities || (content as any)?.quality || '';
+    const qualsStr = Array.isArray(rawQuals) ? rawQuals.join(' ') : String(rawQuals);
+    if (/1080/i.test(qualsStr) && !map.has('1080p')) {
+      const bestUrl = singleFallbackUrl || (map.size > 0 ? Array.from(map.values())[0].url : '');
+      if (bestUrl) {
+        map.set('1080p', {
+          id: '1080p',
+          url: bestUrl,
+          sizeMb: 0,
+          bandwidth: 0,
+          label: '1080p Full HD',
+          badge: 'Full HD',
         });
       }
     }
@@ -1836,12 +1842,25 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         initial={{ y: '100%' }}
         animate={{ y: 0, transition: { type: 'tween', ease: [0.22, 1, 0.36, 1], duration: 0.22 } }}
         exit={{ y: '100%', transition: { type: 'tween', ease: [0.4, 0, 1, 1], duration: 0.16 } }}
+        drag="y"
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={{ top: 0, bottom: 0.45 }}
+        onDragEnd={(_e, info) => {
+          if (info.offset.y > 85 || info.velocity.y > 260) {
+            NativeBridgeService.triggerHaptic('light');
+            onClose();
+          }
+        }}
         onClick={(e) => e.stopPropagation()}
         style={{ willChange: 'transform', transform: 'translate3d(0,0,0)' }}
         className="relative z-10 flex flex-col w-full h-full bg-[#101116] border-t border-white/10 rounded-t-2xl shadow-[0_-12px_40px_rgba(0,0,0,0.9)] overflow-hidden select-none text-left"
       >
+        {/* Swipe-Down Pill Indicator */}
+        <div className="w-full flex justify-center pt-2 pb-0.5 cursor-grab active:cursor-grabbing">
+          <div className="w-10 h-1 rounded-full bg-white/20" />
+        </div>
         {/* TOP HEADER: "Download" on left, "X" on right */}
-        <div className="flex items-center justify-between px-4 py-3.5 shrink-0">
+        <div className="flex items-center justify-between px-4 py-2.5 shrink-0">
           <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
             {showSummaryReview ? 'Confirm Download' : 'Download'}
           </h3>
@@ -1887,17 +1906,6 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2 mt-2">
-                <span
-                  className={`px-2.5 py-1 rounded-lg text-xs font-extrabold border ${
-                    modalServer === 'server3'
-                      ? 'bg-gradient-to-r from-[#E11D48] to-[#9F1239] text-white border-rose-400/50'
-                      : modalServer === 'server2'
-                      ? 'bg-gradient-to-r from-[#F59E0B] to-[#D97706] text-black border-amber-300/60'
-                      : 'bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] text-white border-purple-400/50'
-                  }`}
-                >
-                  {modalServer === 'server3' ? 'Server 3' : modalServer === 'server2' ? 'Server 2' : 'Server 1'}
-                </span>
                 <span className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-500/30 text-xs font-bold text-sky-300">
                   {selectedLanguage}
                 </span>
@@ -1941,7 +1949,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                         S{(selectedSeasonIdx + 1).toString().padStart(2, '0')} E{plan.epNumber.toString().padStart(2, '0')} • {plan.epTitle}
                       </div>
                       <div className="text-xs text-zinc-400 mt-0.5">
-                        {plan.resolvedQuality.toUpperCase()} • {plan.language} • {plan.resolvedServer === 'server3' ? 'Server 3' : plan.resolvedServer === 'server2' ? 'Server 2' : 'Server 1'}
+                        {plan.resolvedQuality.toUpperCase()} • {plan.language}
                       </div>
                     </div>
                     <button
@@ -2066,31 +2074,9 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                     />
                   </button>
                 )}
-
-                {/* 3. Server Selector Box (Purple for Server 1, Gold for Server 2, Crimson for Server 3) */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setOpenResourceDropdown((prev) => (prev === 'server' ? null : 'server'))
-                  }
-                  className={`shrink-0 inline-flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border text-xs font-extrabold transition cursor-pointer ${
-                    modalServer === 'server3'
-                      ? 'bg-gradient-to-r from-[#E11D48] to-[#9F1239] border-rose-400/50 text-white shadow-sm shadow-rose-950/40'
-                      : modalServer === 'server2'
-                      ? 'bg-gradient-to-r from-[#F59E0B] to-[#D97706] border-amber-300/60 text-black shadow-sm shadow-amber-950/40'
-                      : 'bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] border-purple-400/50 text-white shadow-sm shadow-purple-950/40'
-                  }`}
-                >
-                  <span>{modalServer === 'server3' ? 'Server 3' : modalServer === 'server2' ? 'Server 2' : 'Server 1'}</span>
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 transition-transform ${
-                      modalServer === 'server2' ? 'text-black' : 'text-white'
-                    } ${openResourceDropdown === 'server' ? 'rotate-180' : ''}`}
-                  />
-                </button>
               </div>
 
-              {/* Inline Expandable Dropdown Options when Language, Season, or Server box is clicked */}
+              {/* Inline Expandable Dropdown Options when Language or Season box is clicked */}
               {openResourceDropdown === 'language' && (
                 <div className="mt-2.5 pt-2.5 border-t border-white/10 flex flex-wrap gap-1.5 animate-in fade-in duration-150">
                   {availableLanguages.map((lang) => {
@@ -2138,62 +2124,6 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                       </button>
                     );
                   })}
-                </div>
-              )}
-
-              {openResourceDropdown === 'server' && (
-                <div className="mt-2.5 pt-2.5 border-t border-white/10 flex flex-wrap gap-2 animate-in fade-in duration-150">
-                  <button
-                    type="button"
-                    disabled={!hasServer1}
-                    onClick={() => {
-                      setModalServer('server1');
-                      setOpenResourceDropdown(null);
-                    }}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border transition cursor-pointer ${
-                      modalServer === 'server1'
-                        ? 'bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] border-purple-300 text-white ring-2 ring-purple-400/50 shadow-md'
-                        : hasServer1
-                        ? 'bg-gradient-to-r from-[#8B5CF6]/25 to-[#6D28D9]/25 border-purple-500/40 text-purple-200 hover:brightness-110'
-                        : 'bg-[#14151b] border-white/5 text-zinc-600 cursor-not-allowed'
-                    }`}
-                  >
-                    Server 1
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!hasServer2}
-                    onClick={() => {
-                      setModalServer('server2');
-                      setOpenResourceDropdown(null);
-                    }}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border transition cursor-pointer ${
-                      modalServer === 'server2'
-                        ? 'bg-gradient-to-r from-[#F59E0B] to-[#D97706] border-amber-300 text-black ring-2 ring-amber-400/50 shadow-md'
-                        : hasServer2
-                        ? 'bg-gradient-to-r from-[#F59E0B]/25 to-[#D97706]/25 border-amber-500/40 text-amber-200 hover:brightness-110'
-                        : 'bg-[#14151b] border-white/5 text-zinc-600 cursor-not-allowed'
-                    }`}
-                  >
-                    Server 2
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!hasServer3}
-                    onClick={() => {
-                      setModalServer('server3');
-                      setOpenResourceDropdown(null);
-                    }}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border transition cursor-pointer ${
-                      modalServer === 'server3'
-                        ? 'bg-gradient-to-r from-[#E11D48] to-[#9F1239] border-rose-300 text-white ring-2 ring-rose-400/50 shadow-md'
-                        : hasServer3
-                        ? 'bg-gradient-to-r from-[#E11D48]/25 to-[#9F1239]/25 border-rose-500/40 text-rose-200 hover:brightness-110'
-                        : 'bg-[#14151b] border-white/5 text-zinc-600 cursor-not-allowed'
-                    }`}
-                  >
-                    Server 3
-                  </button>
                 </div>
               )}
 

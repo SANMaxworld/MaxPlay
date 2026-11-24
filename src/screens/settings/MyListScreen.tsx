@@ -50,7 +50,7 @@ export const MyListScreen: React.FC<MyListScreenProps> = ({
         </div>
       </div>
 
-      <NativeBanner />
+      <NativeBanner screen="settings" />
 
       {/* LIST */}
       {loading ? (

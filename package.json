@@ -37,5 +37,10 @@
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
     "vite-plugin-pwa": "^2.0.0"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.68.4",
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.3.5",
+    "lightningcss-win32-x64-msvc": "^1.33.0"
   }
 }

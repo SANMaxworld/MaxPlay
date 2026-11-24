@@ -127,10 +127,19 @@ export const ThreeColumnRow: React.FC<ThreeColumnRowProps> = React.memo(({
         })}
       </div>
 
-      {/* LAZY LOADING SENTINEL */}
+      {/* SKELETON SHIMMER LOADING SENTINEL (Replaces spinner for instant smooth roll feel) */}
       {displayCount < items.length && (
-        <div ref={observerTarget} className="w-full h-10 mt-4 flex items-center justify-center">
-          <div className="w-5 h-5 border-2 border-[#8B5CF6] border-t-transparent rounded-full animate-spin"></div>
+        <div ref={observerTarget} className="grid grid-cols-3 gap-2.5 sm:gap-3.5 mt-3 select-none">
+          {[1, 2, 3].map((n) => (
+            <div key={`skel-lazy-${n}`} className="flex flex-col gap-1.5">
+              <div className="relative aspect-[2/3] w-full rounded-xl bg-[#18181F] overflow-hidden border border-white/5">
+                <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+              </div>
+              <div className="relative h-3 w-4/5 rounded bg-[#18181F] overflow-hidden">
+                <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

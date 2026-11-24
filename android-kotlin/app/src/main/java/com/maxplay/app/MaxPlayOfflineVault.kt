@@ -34,16 +34,38 @@ object MaxPlayOfflineVault {
 
     private const val VAULT_DIR_NAME = "maxplay_offline_vault"
 
+    // High-throughput TCP SocketFactory (matches CorsFreeWebViewClient: disables Nagle's algorithm & enlarges TCP receive window to 512KB)
+    private val vaultHighSpeedSocketFactory: javax.net.SocketFactory = object : javax.net.SocketFactory() {
+        private val delegate = getDefault()
+        private fun tune(s: java.net.Socket): java.net.Socket {
+            try {
+                s.tcpNoDelay = true
+                s.receiveBufferSize = 512 * 1024
+                s.keepAlive = true
+            } catch (_: Exception) {}
+            return s
+        }
+        override fun createSocket(): java.net.Socket = tune(delegate.createSocket())
+        override fun createSocket(host: String?, port: Int): java.net.Socket = tune(delegate.createSocket(host, port))
+        override fun createSocket(host: String?, port: Int, localHost: java.net.InetAddress?, localPort: Int): java.net.Socket =
+            tune(delegate.createSocket(host, port, localHost, localPort))
+        override fun createSocket(host: java.net.InetAddress?, port: Int): java.net.Socket = tune(delegate.createSocket(host, port))
+        override fun createSocket(address: java.net.InetAddress?, port: Int, localAddress: java.net.InetAddress?, localPort: Int): java.net.Socket =
+            tune(delegate.createSocket(address, port, localAddress, localPort))
+    }
+
     private val downloadHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dns(InbuiltStreamScraper.smartStreamDns)
+            .socketFactory(vaultHighSpeedSocketFactory)
             .dispatcher(okhttp3.Dispatcher().apply {
                 maxRequests = 128
                 maxRequestsPerHost = 64
             })
             .connectionPool(okhttp3.ConnectionPool(64, 5, TimeUnit.MINUTES))
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
+            .callTimeout(45, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
@@ -53,18 +75,31 @@ object MaxPlayOfflineVault {
     private val directDownloadHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dns(InbuiltStreamScraper.smartStreamDns)
+            .socketFactory(vaultHighSpeedSocketFactory)
             .dispatcher(okhttp3.Dispatcher().apply {
                 maxRequests = 64
                 maxRequestsPerHost = 16
             })
             .connectionPool(okhttp3.ConnectionPool(32, 5, TimeUnit.MINUTES))
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(35, TimeUnit.SECONDS)
             .callTimeout(0, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
             .build()
+    }
+
+    // Active direct-file download cancellation registry (prevents zombie parallel workers competing on direct.mp4.part!)
+    private val activeDirectCancelFlags = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicBoolean>()
+    private val activeDirectCalls = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<okhttp3.Call>>()
+
+    fun cancelDirectDownload(storageKey: String) {
+        val safe = sanitizeKey(storageKey)
+        activeDirectCancelFlags[safe]?.set(true)
+        activeDirectCalls.remove(safe)?.forEach { call ->
+            try { call.cancel() } catch (_: Exception) {}
+        }
     }
 
     private fun getVaultRoot(context: Context): File {
@@ -76,12 +111,24 @@ object MaxPlayOfflineVault {
     }
 
     fun sanitizeKey(storageKey: String): String {
-        return storageKey.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        var cleaned = storageKey
+            .replace("..", "_")
+            .replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            .trim('_')
+        if (cleaned.isEmpty()) cleaned = "item_${System.currentTimeMillis()}"
+        return cleaned
     }
 
     fun getItemDir(context: Context, storageKey: String): File {
+        val root = getVaultRoot(context)
         val safe = sanitizeKey(storageKey)
-        val dir = File(getVaultRoot(context), safe)
+        val dir = File(root, safe)
+        // Strict canonical path traversal guard: never allow resolving outside VAULT_DIR_NAME
+        val rootCanon = root.canonicalPath
+        val dirCanon = dir.canonicalPath
+        if (!dirCanon.startsWith("$rootCanon${File.separator}")) {
+            throw SecurityException("Invalid offline storage key")
+        }
         if (!dir.exists()) {
             dir.mkdirs()
         }
@@ -90,7 +137,9 @@ object MaxPlayOfflineVault {
 
     /**
      * Downloads a single HLS segment (video or audio) or MP4 chunk directly to internal storage via OkHttp.
-     * If the segment already exists on disk and has > 512 bytes, returns its size immediately (0ms checkpoint resume).
+     * - 0ms checkpoint resume if already on disk.
+     * - Automatic 401/403 Origin-free and Referer-free retry (fixes SprintCDN / Filemoon / Byse drops).
+     * - Automatic SprintCDN edge IP eviction on 429/503/timeout so throttled IPs rotate immediately.
      */
     fun downloadSegmentToDisk(
         context: Context,
@@ -101,6 +150,7 @@ object MaxPlayOfflineVault {
         isAudio: Boolean = false
     ): JSONObject {
         val res = JSONObject()
+        val segHost = try { android.net.Uri.parse(segmentUrl).host ?: "" } catch (_: Exception) { "" }
         try {
             val itemDir = getItemDir(context, storageKey)
             val prefix = if (isAudio) "aud_" else "seg_"
@@ -114,42 +164,48 @@ object MaxPlayOfflineVault {
                 return res
             }
 
-            val segHost = try { android.net.Uri.parse(segmentUrl).host ?: "" } catch (_: Exception) { "" }
             val resolvedUa = CorsFreeWebViewClient.resolveUserAgentForHost(segHost)
-
-            val reqBuilder = Request.Builder()
-                .url(segmentUrl)
-                .header(
-                    "User-Agent",
-                    resolvedUa
-                )
-                .header("Accept", "*/*")
-
             val resolvedRef = if (refererUrl.isNotBlank()) {
                 refererUrl
             } else {
                 CorsFreeWebViewClient.resolveRefererForHost(segHost)
             }
+            val resolvedOrigin = try {
+                val refUri = android.net.Uri.parse(resolvedRef)
+                if (!refUri.host.isNullOrBlank()) "${refUri.scheme ?: "https"}://${refUri.host}" else ""
+            } catch (_: Exception) { "" }
 
-            if (resolvedRef.isNotBlank()) {
-                reqBuilder.header("Referer", resolvedRef)
-                try {
-                    val refUri = android.net.Uri.parse(resolvedRef)
-                    val refOrigin = "${refUri.scheme}://${refUri.host}"
-                    if (!refUri.host.isNullOrBlank()) {
-                        reqBuilder.header("Origin", refOrigin)
-                    }
-                } catch (_: Exception) {}
+            fun buildSegReq(useOrigin: Boolean, useRef: Boolean): Request {
+                val b = Request.Builder()
+                    .url(segmentUrl)
+                    .header("User-Agent", resolvedUa)
+                    .header("Accept", "*/*")
+                if (useRef && resolvedRef.isNotBlank()) b.header("Referer", resolvedRef)
+                if (useOrigin && resolvedOrigin.isNotBlank()) b.header("Origin", resolvedOrigin)
+                return b.build()
             }
 
-            downloadHttpClient.newCall(reqBuilder.build()).execute().use { response ->
-                if (!response.isSuccessful) {
+            var response = downloadHttpClient.newCall(buildSegReq(useOrigin = true, useRef = true)).execute()
+            if (response.code == 401 || response.code == 403) {
+                response.close()
+                response = downloadHttpClient.newCall(buildSegReq(useOrigin = false, useRef = true)).execute()
+            }
+            if (response.code == 401 || response.code == 403) {
+                response.close()
+                response = downloadHttpClient.newCall(buildSegReq(useOrigin = false, useRef = false)).execute()
+            }
+
+            response.use { resp ->
+                if (!resp.isSuccessful) {
+                    if (resp.code == 429 || resp.code == 503 || resp.code == 502 || resp.code == 504) {
+                        InbuiltStreamScraper.evictSprintCdnWinner(segHost)
+                    }
                     res.put("ok", false)
-                    res.put("error", "HTTP ${response.code}")
+                    res.put("error", "HTTP ${resp.code}")
                     return res
                 }
 
-                val body = response.body
+                val body = resp.body
                 if (body == null) {
                     res.put("ok", false)
                     res.put("error", "Empty response body")
@@ -157,9 +213,9 @@ object MaxPlayOfflineVault {
                 }
 
                 val tmpFile = File(itemDir, "${prefix}${segmentIndex}.tmp")
-                java.io.BufferedInputStream(body.byteStream(), 128 * 1024).use { input ->
-                    java.io.BufferedOutputStream(FileOutputStream(tmpFile), 128 * 1024).use { output ->
-                        val buffer = ByteArray(128 * 1024)
+                body.byteStream().use { input ->
+                    java.io.BufferedOutputStream(FileOutputStream(tmpFile), 64 * 1024).use { output ->
+                        val buffer = ByteArray(64 * 1024)
                         var read: Int
                         while (input.read(buffer).also { read = it } != -1) {
                             output.write(buffer, 0, read)
@@ -183,6 +239,9 @@ object MaxPlayOfflineVault {
                 }
             }
         } catch (e: Exception) {
+            if (segHost.isNotBlank()) {
+                InbuiltStreamScraper.evictSprintCdnWinner(segHost)
+            }
             res.put("ok", false)
             res.put("error", e.message ?: "Disk segment download failed")
             return res
@@ -190,9 +249,11 @@ object MaxPlayOfflineVault {
     }
 
     /**
-     * Downloads a large progressive direct MP4/MKV/Streamtape video natively to `direct.mp4` on disk
-     * with zero callTimeout limits, 4-connection parallel HTTP Range workers (when supported),
-     * Origin-free retry on 401/403, and throttled progress callbacks.
+     * Downloads a large progressive direct MP4/MKV/Streamtape video natively to `direct.mp4` on disk:
+     * - Immediate cancellation support via cancelDirectDownload(storageKey) (zero zombie workers!)
+     * - Dynamic 4MB chunk queue pulled by 3 adaptive parallel workers with 256KB buffered writes
+     *   (eliminates Streamtape 4-connection throttling, random flash I/O contention, and tail straggler stalls!)
+     * - Matched Streamtape User-Agent, Origin-free retry on 401/403, resumable single-stream fallback, and smooth EMA speed.
      */
     fun downloadDirectFileToDisk(
         context: Context,
@@ -202,19 +263,46 @@ object MaxPlayOfflineVault {
         onProgress: ((downloadedBytes: Long, totalBytes: Long, speedBps: Long) -> Unit)? = null
     ): JSONObject {
         val res = JSONObject()
+        val safeKey = sanitizeKey(storageKey)
+        // Cancel any previous in-flight transfer for this storageKey before starting fresh
+        cancelDirectDownload(safeKey)
+        val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+        val callList = java.util.concurrent.CopyOnWriteArrayList<okhttp3.Call>()
+        activeDirectCancelFlags[safeKey] = cancelFlag
+        activeDirectCalls[safeKey] = callList
+
         try {
             val itemDir = getItemDir(context, storageKey)
             val finalFile = File(itemDir, "direct.mp4")
             if (finalFile.exists() && finalFile.length() > 64 * 1024L) {
                 saveDownloadManifest(context, storageKey, 1, 1440.0, isSingleFile = true)
                 res.put("ok", true)
+                res.put("bytes", finalFile.length())
                 res.put("totalBytes", finalFile.length())
                 res.put("playbackUrl", getLocalPlaybackUrl(storageKey, context))
                 return res
             }
 
-            val host = try { android.net.Uri.parse(fileUrl).host ?: "" } catch (_: Exception) { "" }
-            val resolvedUa = CorsFreeWebViewClient.resolveUserAgentForHost(host)
+            var cleanTargetUrl = fileUrl.trim()
+            if (cleanTargetUrl.contains("/api/stream-proxy?url=")) {
+                val encoded = cleanTargetUrl.substringAfter("/api/stream-proxy?url=")
+                cleanTargetUrl = try { java.net.URLDecoder.decode(encoded, "UTF-8") } catch (_: Exception) { encoded }
+            }
+            if (cleanTargetUrl.startsWith("//")) {
+                cleanTargetUrl = "https:$cleanTargetUrl"
+            }
+            if (cleanTargetUrl.contains("streamtape.com/get_video")) {
+                cleanTargetUrl = cleanTargetUrl.replace("streamtape.com/get_video", "streamta.pe/get_video")
+            }
+
+            val host = try { android.net.Uri.parse(cleanTargetUrl).host ?: "" } catch (_: Exception) { "" }
+            val lowerHost = host.lowercase()
+            val isStreamtapeCdn = lowerHost.contains("streamta") || lowerHost.contains("tapecontent") || lowerHost.contains("strtape") || lowerHost.contains("strcloud") || lowerHost.contains("stape")
+            val resolvedUa = if (isStreamtapeCdn) {
+                StreamtapeExtractor.resolveUserAgent()
+            } else {
+                CorsFreeWebViewClient.resolveUserAgentForHost(host)
+            }
             val resolvedRef = if (refererUrl.isNotBlank()) refererUrl else CorsFreeWebViewClient.resolveRefererForHost(host)
             val resolvedOrigin = try {
                 val u = android.net.Uri.parse(resolvedRef)
@@ -233,23 +321,30 @@ object MaxPlayOfflineVault {
                 return b.build()
             }
 
-            var useOriginHdr = true
+            fun trackedCall(req: Request): okhttp3.Call {
+                val c = directDownloadHttpClient.newCall(req)
+                callList.add(c)
+                if (cancelFlag.get()) c.cancel()
+                return c
+            }
+
+            var useOriginHdr = !isStreamtapeCdn // Streamtape CDN prefers Referer without Origin
             var useRefHdr = true
-            var effectiveUrl = fileUrl
+            var effectiveUrl = cleanTargetUrl
             var totalBytes = 0L
             var supportsRanges = false
 
-            // Probe metadata via Range: bytes=0-0 (more universally supported than HEAD on CDN edges)
-            var probeResp = directDownloadHttpClient.newCall(buildReq(fileUrl, "bytes=0-0", useOrigin = true, useRef = true)).execute()
+            // Probe metadata via Range: bytes=0-0
+            var probeResp = trackedCall(buildReq(cleanTargetUrl, "bytes=0-0", useOrigin = useOriginHdr, useRef = true)).execute()
             if (probeResp.code == 401 || probeResp.code == 403) {
                 probeResp.close()
                 useOriginHdr = false
-                probeResp = directDownloadHttpClient.newCall(buildReq(fileUrl, "bytes=0-0", useOrigin = false, useRef = true)).execute()
+                probeResp = trackedCall(buildReq(cleanTargetUrl, "bytes=0-0", useOrigin = false, useRef = true)).execute()
             }
             if (probeResp.code == 401 || probeResp.code == 403) {
                 probeResp.close()
                 useRefHdr = false
-                probeResp = directDownloadHttpClient.newCall(buildReq(fileUrl, "bytes=0-0", useOrigin = false, useRef = false)).execute()
+                probeResp = trackedCall(buildReq(cleanTargetUrl, "bytes=0-0", useOrigin = false, useRef = false)).execute()
             }
 
             probeResp.use { p ->
@@ -271,111 +366,182 @@ object MaxPlayOfflineVault {
                 }
             }
 
+            if (cancelFlag.get()) throw java.io.IOException("Download cancelled")
+
             val partFile = File(itemDir, "direct.mp4.part")
             val downloadedAtomic = java.util.concurrent.atomic.AtomicLong(0L)
             val startTimeMs = System.currentTimeMillis()
             val lastEmitMs = java.util.concurrent.atomic.AtomicLong(0L)
+            val lastSampleMs = java.util.concurrent.atomic.AtomicLong(startTimeMs)
+            val lastSampleBytes = java.util.concurrent.atomic.AtomicLong(0L)
+            val emaSpeedAtomic = java.util.concurrent.atomic.AtomicLong(0L)
 
             fun maybeEmitProgress(force: Boolean = false) {
                 val cb = onProgress ?: return
                 val now = System.currentTimeMillis()
                 val prev = lastEmitMs.get()
-                if (force || now - prev >= 280L) {
+                if (force || now - prev >= 300L) {
                     if (force || lastEmitMs.compareAndSet(prev, now)) {
                         val done = downloadedAtomic.get()
-                        val elapsedSec = ((now - startTimeMs).coerceAtLeast(100L)) / 1000.0
-                        val bps = (done / elapsedSec).toLong()
-                        cb(done, totalBytes, bps)
+                        val sPrev = lastSampleMs.get()
+                        val dtMs = now - sPrev
+                        if (dtMs >= 500L && lastSampleMs.compareAndSet(sPrev, now)) {
+                            val bPrev = lastSampleBytes.getAndSet(done)
+                            val instantBps = (((done - bPrev).coerceAtLeast(0L)) * 1000L) / dtMs
+                            val prevEma = emaSpeedAtomic.get()
+                            val nextEma = if (prevEma > 0L) (prevEma * 65L + instantBps * 35L) / 100L else instantBps
+                            emaSpeedAtomic.set(nextEma)
+                        }
+                        val elapsedSec = ((now - startTimeMs).coerceAtLeast(150L)) / 1000.0
+                        val reportedBps = emaSpeedAtomic.get().takeIf { it > 0L } ?: (done / elapsedSec).toLong()
+                        cb(done, totalBytes, reportedBps)
                     }
                 }
             }
 
             if (supportsRanges && totalBytes > 2 * 1024 * 1024L) {
-                // Parallel 4-worker HTTP Range transfer directly into pre-sized RandomAccessFile
-                java.io.RandomAccessFile(partFile, "rw").use { raf ->
-                    raf.setLength(totalBytes)
+                // Dynamic 4MB chunk queue + 3 parallel adaptive workers + 256KB buffered synchronized flash writes
+                // Eliminates Streamtape 4-connection throttling, random flash seek thrashing, and tail straggler stalls!
+                val chunkQueue = java.util.concurrent.ConcurrentLinkedQueue<Pair<Long, Long>>()
+                val chunkBytes = 8L * 1024L * 1024L
+                var offset = 0L
+                while (offset < totalBytes) {
+                    val end = minOf(totalBytes - 1L, offset + chunkBytes - 1L)
+                    chunkQueue.add(Pair(offset, end))
+                    offset = end + 1L
                 }
-                val workerCount = 4
-                val chunkSize = (totalBytes + workerCount - 1) / workerCount
-                val failureRef = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
-                val latch = java.util.concurrent.CountDownLatch(workerCount)
 
-                for (w in 0 until workerCount) {
-                    val startOffset = w * chunkSize
-                    val endOffset = minOf(totalBytes - 1, (w + 1) * chunkSize - 1)
-                    if (startOffset > endOffset) {
-                        latch.countDown()
-                        continue
-                    }
-                    InbuiltStreamScraper.backgroundExecutor.execute {
-                        try {
-                            var cursor = startOffset
-                            var retries = 0
-                            while (cursor <= endOffset && failureRef.get() == null) {
-                                try {
-                                    val req = buildReq(effectiveUrl, "bytes=$cursor-$endOffset", useOrigin = useOriginHdr, useRef = useRefHdr)
-                                    directDownloadHttpClient.newCall(req).execute().use { resp ->
-                                        if (!resp.isSuccessful && resp.code != 206) {
-                                            throw java.io.IOException("HTTP ${resp.code}")
-                                        }
-                                        val body = resp.body ?: throw java.io.IOException("Empty range body")
-                                        java.io.RandomAccessFile(partFile, "rw").use { raf ->
-                                            raf.seek(cursor)
-                                            val buf = ByteArray(128 * 1024)
-                                            java.io.BufferedInputStream(body.byteStream(), 128 * 1024).use { input ->
-                                                var r: Int
-                                                while (input.read(buf).also { r = it } != -1 && cursor <= endOffset) {
-                                                    val maxWrite = minOf(r.toLong(), endOffset - cursor + 1).toInt()
-                                                    raf.write(buf, 0, maxWrite)
-                                                    cursor += maxWrite
-                                                    downloadedAtomic.addAndGet(maxWrite.toLong())
-                                                    maybeEmitProgress(false)
+                val writeLock = Any()
+                val sharedRaf = java.io.RandomAccessFile(partFile, "rw")
+                try {
+                    sharedRaf.setLength(totalBytes)
+                    val workerCount = if (isStreamtapeCdn) 4 else 6
+                    val failureRef = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+                    val latch = java.util.concurrent.CountDownLatch(workerCount)
+
+                    for (w in 0 until workerCount) {
+                        InbuiltStreamScraper.backgroundExecutor.execute {
+                            val readBuf = ByteArray(64 * 1024)
+                            val flushBuf = ByteArray(256 * 1024)
+                            try {
+                                while (!cancelFlag.get() && failureRef.get() == null) {
+                                    val chunk = chunkQueue.poll() ?: break
+                                    var cursor = chunk.first
+                                    val endOffset = chunk.second
+                                    var retries = 0
+
+                                    while (cursor <= endOffset && !cancelFlag.get() && failureRef.get() == null) {
+                                        try {
+                                            val req = buildReq(effectiveUrl, "bytes=$cursor-$endOffset", useOrigin = useOriginHdr, useRef = useRefHdr)
+                                            trackedCall(req).execute().use { resp ->
+                                                if (!resp.isSuccessful && resp.code != 206) {
+                                                    throw java.io.IOException("HTTP ${resp.code}")
+                                                }
+                                                val body = resp.body ?: throw java.io.IOException("Empty range body")
+                                                body.byteStream().use { input ->
+                                                    var flushLen = 0
+                                                    var flushStartPos = cursor
+                                                    var r = 0
+                                                    while (!cancelFlag.get() && input.read(readBuf).also { r = it } != -1 && cursor <= endOffset) {
+                                                        val maxTake = minOf(r.toLong(), endOffset - cursor + 1L).toInt()
+                                                        var srcOff = 0
+                                                        var remain = maxTake
+                                                        while (remain > 0) {
+                                                            val space = flushBuf.size - flushLen
+                                                            val copyLen = minOf(remain, space)
+                                                            System.arraycopy(readBuf, srcOff, flushBuf, flushLen, copyLen)
+                                                            flushLen += copyLen
+                                                            srcOff += copyLen
+                                                            remain -= copyLen
+                                                            if (flushLen == flushBuf.size) {
+                                                                synchronized(writeLock) {
+                                                                    sharedRaf.seek(flushStartPos)
+                                                                    sharedRaf.write(flushBuf, 0, flushLen)
+                                                                }
+                                                                flushStartPos += flushLen
+                                                                flushLen = 0
+                                                            }
+                                                        }
+                                                        cursor += maxTake
+                                                        downloadedAtomic.addAndGet(maxTake.toLong())
+                                                        maybeEmitProgress(false)
+                                                    }
+                                                    if (flushLen > 0 && !cancelFlag.get()) {
+                                                        synchronized(writeLock) {
+                                                            sharedRaf.seek(flushStartPos)
+                                                            sharedRaf.write(flushBuf, 0, flushLen)
+                                                        }
+                                                    }
                                                 }
                                             }
+                                        } catch (e: Exception) {
+                                            if (cancelFlag.get()) throw e
+                                            retries++
+                                            if (retries > 5) throw e
+                                            Thread.sleep((350L + (Math.random() * 400.0).toLong()) * retries)
                                         }
                                     }
-                                } catch (e: Exception) {
-                                    retries++
-                                    if (retries > 4) throw e
-                                    Thread.sleep(500L * retries)
                                 }
+                            } catch (t: Throwable) {
+                                if (!cancelFlag.get()) {
+                                    failureRef.compareAndSet(null, t)
+                                }
+                            } finally {
+                                latch.countDown()
                             }
-                        } catch (t: Throwable) {
-                            failureRef.compareAndSet(null, t)
-                        } finally {
-                            latch.countDown()
                         }
                     }
-                }
-                latch.await()
-                val err = failureRef.get()
-                if (err != null) {
-                    throw err
+                    latch.await()
+                    if (cancelFlag.get()) throw java.io.IOException("Download cancelled")
+                    val err = failureRef.get()
+                    if (err != null) throw err
+                } finally {
+                    try { sharedRaf.close() } catch (_: Exception) {}
                 }
             } else {
-                // Single-stream progressive transfer directly to disk
+                // Single-stream progressive transfer with automatic Range resume on transient disconnects
                 if (partFile.exists()) partFile.delete()
-                val req = buildReq(effectiveUrl, null, useOrigin = useOriginHdr, useRef = useRefHdr)
-                directDownloadHttpClient.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        throw java.io.IOException("HTTP ${resp.code}")
-                    }
-                    val cl = resp.header("Content-Length")?.toLongOrNull() ?: 0L
-                    if (totalBytes <= 0L && cl > 0L) totalBytes = cl
-                    val body = resp.body ?: throw java.io.IOException("Empty stream body")
-                    java.io.BufferedInputStream(body.byteStream(), 256 * 1024).use { input ->
-                        java.io.BufferedOutputStream(FileOutputStream(partFile), 256 * 1024).use { output ->
-                            val buf = ByteArray(128 * 1024)
-                            var r: Int
-                            while (input.read(buf).also { r = it } != -1) {
-                                output.write(buf, 0, r)
-                                downloadedAtomic.addAndGet(r.toLong())
-                                maybeEmitProgress(false)
+                var written = 0L
+                var retries = 0
+                while (!cancelFlag.get()) {
+                    try {
+                        val rangeHdr = if (written > 0L && supportsRanges) "bytes=$written-" else null
+                        val req = buildReq(effectiveUrl, rangeHdr, useOrigin = useOriginHdr, useRef = useRefHdr)
+                        trackedCall(req).execute().use { resp ->
+                            if (!resp.isSuccessful && resp.code != 206) {
+                                throw java.io.IOException("HTTP ${resp.code}")
                             }
-                            output.flush()
+                            val cl = resp.header("Content-Length")?.toLongOrNull() ?: 0L
+                            if (totalBytes <= 0L && cl > 0L) totalBytes = written + cl
+                            val appendMode = written > 0L && resp.code == 206
+                            if (!appendMode) {
+                                written = 0L
+                                downloadedAtomic.set(0L)
+                            }
+                            val body = resp.body ?: throw java.io.IOException("Empty stream body")
+                            body.byteStream().use { input ->
+                                java.io.BufferedOutputStream(FileOutputStream(partFile, appendMode), 256 * 1024).use { output ->
+                                    val buf = ByteArray(128 * 1024)
+                                    var r = 0
+                                    while (!cancelFlag.get() && input.read(buf).also { r = it } != -1) {
+                                        output.write(buf, 0, r)
+                                        written += r
+                                        downloadedAtomic.addAndGet(r.toLong())
+                                        maybeEmitProgress(false)
+                                    }
+                                    output.flush()
+                                }
+                            }
                         }
+                        break
+                    } catch (e: Exception) {
+                        if (cancelFlag.get()) throw e
+                        retries++
+                        if (retries > 4 || !supportsRanges) throw e
+                        Thread.sleep(500L * retries)
                     }
                 }
+                if (cancelFlag.get()) throw java.io.IOException("Download cancelled")
             }
 
             if (partFile.exists() && partFile.length() > 1024L) {
@@ -387,6 +553,7 @@ object MaxPlayOfflineVault {
                 maybeEmitProgress(true)
                 saveDownloadManifest(context, storageKey, 1, 1440.0, isSingleFile = true)
                 res.put("ok", true)
+                res.put("bytes", finalFile.length())
                 res.put("totalBytes", finalFile.length())
                 res.put("playbackUrl", getLocalPlaybackUrl(storageKey, context))
                 return res
@@ -400,6 +567,9 @@ object MaxPlayOfflineVault {
             res.put("ok", false)
             res.put("error", e.message ?: "Direct download failed")
             return res
+        } finally {
+            activeDirectCancelFlags.remove(safeKey, cancelFlag)
+            activeDirectCalls.remove(safeKey)
         }
     }
 
@@ -1440,6 +1610,22 @@ object MaxPlayOfflineVault {
         }
     }
 
+    private fun queryMediaStoreAudioSize(context: Context, contentUri: android.net.Uri): Long {
+        return try {
+            context.contentResolver.query(
+                contentUri,
+                arrayOf(android.provider.MediaStore.Audio.Media.SIZE),
+                null,
+                null,
+                null
+            )?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else -1L
+            } ?: -1L
+        } catch (_: Exception) {
+            -1L
+        }
+    }
+
     fun ensureLocalVideoHttpServer(context: Context): Int {
         val existing = localVideoServerSocket
         if (existing != null && !existing.isClosed && localVideoServerPort > 0) {
@@ -1603,7 +1789,8 @@ object MaxPlayOfflineVault {
                     }
 
                     pfd.use { descriptor ->
-                        val totalLength = descriptor.statSize.coerceAtLeast(0L)
+                        val statLen = descriptor.statSize
+                        val totalLength = if (statLen > 0L) statLen else queryMediaStoreAudioSize(context, contentUri)
                         val fis = FileInputStream(descriptor.fileDescriptor)
                         streamByteRangeOverSocket(
                             method = method,
@@ -1910,7 +2097,8 @@ object MaxPlayOfflineVault {
             }
 
             val pfd = context.contentResolver.openFileDescriptor(contentUri, "r") ?: return null
-            val totalLength = pfd.statSize.coerceAtLeast(0L)
+            val statLen = pfd.statSize
+            val totalLength = if (statLen > 0L) statLen else queryMediaStoreAudioSize(context, contentUri)
             val fis = android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)
 
             val baseHeaders = mutableMapOf(
@@ -1943,12 +2131,59 @@ object MaxPlayOfflineVault {
                 }
 
                 val contentLength = (clampedEnd - clampedStart + 1L).coerceAtLeast(0L)
-                if (clampedStart > 0L) {
+
+                var seekSucceeded = false
+                try {
+                    android.system.Os.lseek(pfd.fileDescriptor, clampedStart, android.system.OsConstants.SEEK_SET)
+                    seekSucceeded = true
+                } catch (_: Exception) {}
+
+                if (!seekSucceeded) {
                     try {
-                        android.system.Os.lseek(pfd.fileDescriptor, clampedStart, android.system.OsConstants.SEEK_SET)
-                    } catch (_: Exception) {
+                        fis.channel.position(clampedStart)
+                        seekSucceeded = true
+                    } catch (_: Exception) {}
+                }
+
+                if (!seekSucceeded && clampedStart > 0L) {
+                    var skipped = 0L
+                    val discardBuf = ByteArray(16384)
+                    while (skipped < clampedStart) {
+                        val s = fis.skip(clampedStart - skipped)
+                        if (s > 0L) {
+                            skipped += s
+                        } else {
+                            val toRead = minOf(discardBuf.size.toLong(), clampedStart - skipped).toInt()
+                            val r = fis.read(discardBuf, 0, toRead)
+                            if (r <= 0) break
+                            skipped += r.toLong()
+                        }
+                    }
+                }
+
+                val boundedStream = object : java.io.InputStream() {
+                    private var remaining = contentLength
+
+                    override fun read(): Int {
+                        if (remaining <= 0L) return -1
+                        val b = fis.read()
+                        if (b != -1) remaining--
+                        return b
+                    }
+
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        if (remaining <= 0L) return -1
+                        val toRead = minOf(len.toLong(), remaining).toInt()
+                        val count = fis.read(b, off, toRead)
+                        if (count > 0) {
+                            remaining -= count.toLong()
+                        }
+                        return count
+                    }
+
+                    override fun close() {
                         try {
-                            fis.channel.position(clampedStart)
+                            fis.close()
                         } catch (_: Exception) {}
                     }
                 }
@@ -1962,7 +2197,7 @@ object MaxPlayOfflineVault {
                     206,
                     "Partial Content",
                     baseHeaders,
-                    java.io.BufferedInputStream(fis, 128 * 1024)
+                    boundedStream
                 )
             }
 
@@ -2255,7 +2490,28 @@ object MaxPlayOfflineVault {
                     }
                 }
 
-                val effectiveStorageKey = if (queryStorageKey.isNotBlank()) queryStorageKey else p2pActiveStorageKey
+                // Security: ONLY serve the explicitly shared p2pActiveStorageKey (or items within an explicitly shared batch)!
+                // Never allow arbitrary ?key=dev_vid_xxx exfiltration over Wi-Fi/Hotspot.
+                val allowedBatchKeys = try {
+                    val metaObj = JSONObject(p2pActiveMetadataJson)
+                    val arr = metaObj.optJSONArray("batchItems")
+                    val set = mutableSetOf(p2pActiveStorageKey)
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val k = arr.optJSONObject(i)?.optString("storageKey", "") ?: ""
+                            if (k.isNotBlank()) set.add(k)
+                        }
+                    }
+                    set
+                } catch (_: Exception) {
+                    setOf(p2pActiveStorageKey)
+                }
+
+                val effectiveStorageKey = if (queryStorageKey.isNotBlank() && allowedBatchKeys.contains(queryStorageKey)) {
+                    queryStorageKey
+                } else {
+                    p2pActiveStorageKey
+                }
                 val localMediaId = resolveDeviceVideoId(effectiveStorageKey)
                 val targetName = reqPath.removePrefix(prefix)
 

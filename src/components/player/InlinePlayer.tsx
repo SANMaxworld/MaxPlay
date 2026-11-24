@@ -888,7 +888,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       return ['auto', ...sortedCurrent, ...crossList];
     }
 
-    return ['auto'];
+    return ['auto', '1080p', '720p', '480p', '360p', '240p'];
   }, [videoSources, qualityLinks, currentLanguage, availableLanguages, hlsQualities, crossServerQualities, selectedServer]);
 
   // Pick the optimal video URL based on active server qualityLinks, language, and quality
@@ -2458,6 +2458,23 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                   setIsLoading(false);
                 });
               return;
+            }
+
+            // If activeVideoUrl failed with error code 4 or 2, attempt automatic fallback to verified backup stream
+            if (activeVideoUrl && (err?.code === 4 || err?.code === 2)) {
+              console.warn('[InlinePlayer] Video load error code', err.code, 'on URL:', activeVideoUrl, 'Attempting fallback...');
+              const fallbackCandidates = [
+                ...(qualityLinks ? Object.values(qualityLinks) : []),
+                ...(videoSources ? Object.values(videoSources).flatMap(v => typeof v === 'object' ? Object.values(v) : [v]) : [])
+              ].filter(u => typeof u === 'string' && u.trim().length > 0 && u !== activeVideoUrl);
+
+              if (fallbackCandidates.length > 0) {
+                const nextUrl = fallbackCandidates[0];
+                console.log('[InlinePlayer] Automatically falling back to backup stream:', nextUrl);
+                setResolvedStreamUrl(nextUrl);
+                setIsLoading(true);
+                return;
+              }
             }
 
             setIsLoading(false);

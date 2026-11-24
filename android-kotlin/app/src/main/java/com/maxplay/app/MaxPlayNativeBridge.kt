@@ -30,6 +30,35 @@ class MaxPlayNativeBridge(
     fun isNativeApp(): Boolean = true
 
     @JavascriptInterface
+    fun triggerHapticFeedback(patternType: String?) {
+        activity.runOnUiThread {
+            try {
+                val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    val vm = activity.getSystemService(android.content.Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+                    vm?.defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION")
+                    activity.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                } ?: return@runOnUiThread
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    val effect = when (patternType) {
+                        "light", "tick" -> android.os.VibrationEffect.createOneShot(12, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+                        "medium" -> android.os.VibrationEffect.createOneShot(26, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+                        "heavy" -> android.os.VibrationEffect.createOneShot(48, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+                        "double" -> android.os.VibrationEffect.createWaveform(longArrayOf(0, 15, 60, 15), -1)
+                        else -> android.os.VibrationEffect.createOneShot(16, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+                    }
+                    vibrator.vibrate(effect)
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(20)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    @JavascriptInterface
     fun getAppVersion(): String = "1.1.0-kotlin-native"
 
     @JavascriptInterface
@@ -46,6 +75,11 @@ class MaxPlayNativeBridge(
                 }
             } catch (_: Exception) {}
         }
+    }
+
+    @JavascriptInterface
+    fun extractStreamNative(sourceUrl: String): String {
+        return extractStreamNative(sourceUrl, "{}")
     }
 
     @JavascriptInterface
@@ -78,8 +112,9 @@ class MaxPlayNativeBridge(
                 }
             }
 
+            val safeCallbackId = JSONObject.quote(callbackId)
             val escapedJson = JSONObject.quote(resultJson.toString())
-            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult('$callbackId', $escapedJson);"
+            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult($safeCallbackId, $escapedJson);"
             activity.runOnUiThread {
                 webView.evaluateJavascript(jsCode, null)
             }
@@ -97,11 +132,28 @@ class MaxPlayNativeBridge(
                 }
             }
 
+            val safeCallbackId = JSONObject.quote(callbackId)
             val escapedJson = JSONObject.quote(resultJson.toString())
-            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult('$callbackId', $escapedJson);"
+            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult($safeCallbackId, $escapedJson);"
             activity.runOnUiThread {
                 webView.evaluateJavascript(jsCode, null)
             }
+        }
+    }
+
+    private fun isBlockedPrivateOrLoopbackHost(rawUrl: String): Boolean {
+        return try {
+            val u = android.net.Uri.parse(rawUrl)
+            val scheme = (u.scheme ?: "").lowercase()
+            if (scheme != "http" && scheme != "https") return true
+            val host = (u.host ?: "").lowercase().trim()
+            if (host.isEmpty() || host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0") return true
+            if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("169.254.") || host.startsWith("192.168.")) return true
+            if (Regex("^172\\.(1[6-9]|2\\d|3[0-1])\\.").containsMatchIn(host)) return true
+            if (host.endsWith(".local") || host.endsWith(".internal") || host == "metadata.google.internal") return true
+            false
+        } catch (_: Exception) {
+            true
         }
     }
 
@@ -130,6 +182,12 @@ class MaxPlayNativeBridge(
                     u.getQueryParameter("url")?.takeIf { it.isNotBlank() }?.let { effectiveUrl = it }
                     u.getQueryParameter("referer")?.takeIf { it.isNotBlank() }?.let { proxyReferer = it }
                 } catch (_: Exception) {}
+            }
+            if (isBlockedPrivateOrLoopbackHost(effectiveUrl)) {
+                out.put("ok", false)
+                out.put("status", 403)
+                out.put("error", "Blocked private/internal host")
+                return out.toString()
             }
             val headersMap = parseHeadersJson(headersJson)
             val host = try { java.net.URL(effectiveUrl).host } catch (_: Exception) { "" }
@@ -174,8 +232,9 @@ class MaxPlayNativeBridge(
     fun fetchUrlCorsFreeAsync(targetUrl: String, headersJson: String?, callbackId: String) {
         InbuiltStreamScraper.backgroundExecutor.execute {
             val resStr = fetchUrlCorsFree(targetUrl, headersJson)
+            val safeCallbackId = JSONObject.quote(callbackId)
             val escapedJson = JSONObject.quote(resStr)
-            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult('$callbackId', $escapedJson);"
+            val jsCode = "window.onMaxPlaySnifferResult && window.onMaxPlaySnifferResult($safeCallbackId, $escapedJson);"
             activity.runOnUiThread {
                 webView.evaluateJavascript(jsCode, null)
             }
@@ -191,6 +250,11 @@ class MaxPlayNativeBridge(
      */
     @JavascriptInterface
     fun probeSingleStreamBoxAsync(sourceUrl: String, forcedQuality: String?, callbackId: String) {
+        probeSingleStreamBoxWithDurationAsync(sourceUrl, forcedQuality, callbackId, 0)
+    }
+
+    @JavascriptInterface
+    fun probeSingleStreamBoxWithDurationAsync(sourceUrl: String, forcedQuality: String?, callbackId: String, requestedDurationSec: Int) {
         InbuiltStreamScraper.backgroundExecutor.execute {
             val cleanSource = sourceUrl.trim()
             val qualityHint = (forcedQuality ?: "").trim()
@@ -244,16 +308,21 @@ class MaxPlayNativeBridge(
                             put("engine", "KOTLIN_STREAMTAPE")
                             put("sourceUrl", cleanSource)
                             put("referer", ref)
-                            if (qualityHint.isNotBlank()) {
-                                val sizeMb = optInt("sizeMb", 950)
-                                val sizeBytes = optLong("sizeBytes", 0L)
-                                val cdnUrl = optString("cdnUrl", m3u8Url)
-                                val mimeType = optString("mimeType", "video/mp4")
-                                put("qualities", org.json.JSONArray().put(qualityHint))
-                                put("qualityLinks", JSONObject().put(qualityHint, cleanSource))
+                            val effectiveQ = qualityHint.ifBlank { optString("quality", "1080p") }
+                            val sizeMb = optInt("sizeMb", 950)
+                            val sizeBytes = optLong("sizeBytes", 0L)
+                            val cdnUrl = optString("cdnUrl", m3u8Url)
+                            val mimeType = optString("mimeType", "video/mp4")
+                            if (!has("qualities") || optJSONArray("qualities")?.length() == 0) {
+                                put("qualities", org.json.JSONArray().put(effectiveQ))
+                            }
+                            if (!has("qualityLinks") || optJSONObject("qualityLinks")?.length() == 0) {
+                                put("qualityLinks", JSONObject().put(effectiveQ, cleanSource))
+                            }
+                            if (!has("downloadQualities") || optJSONArray("downloadQualities")?.length() == 0) {
                                 put("downloadQualities", org.json.JSONArray().put(JSONObject().apply {
-                                    put("id", qualityHint)
-                                    put("label", "$qualityHint ${if (qualityHint.contains("1080")) "Full HD" else if (qualityHint.contains("720")) "HD" else "Standard"}")
+                                    put("id", effectiveQ)
+                                    put("label", "$effectiveQ ${if (effectiveQ.contains("1080")) "Full HD" else if (effectiveQ.contains("720")) "HD" else "Standard"}")
                                     put("sizeMb", sizeMb)
                                     put("sizeBytes", sizeBytes)
                                     put("url", cleanSource)
@@ -271,7 +340,8 @@ class MaxPlayNativeBridge(
                         m3u8Url,
                         ref,
                         qualityHint,
-                        stage1.optJSONObject("byseMeta")
+                        stage1.optJSONObject("byseMeta"),
+                        requestedDurationSec
                     )
                     if (enriched.optBoolean("ok")) {
                         enriched.put("engine", "KOTLIN_STAGE1")
@@ -296,16 +366,21 @@ class MaxPlayNativeBridge(
                                         put("engine", "KOTLIN_SNIFFER_DIRECT")
                                         put("sourceUrl", cleanSource)
                                         put("referer", ref)
-                                        if (qualityHint.isNotBlank()) {
-                                            val sizeMb = optInt("sizeMb", 950)
-                                            val sizeBytes = optLong("sizeBytes", 0L)
-                                            val cdnUrl = optString("cdnUrl", m3u8Url)
-                                            val mimeType = optString("mimeType", "video/mp4")
-                                            put("qualities", org.json.JSONArray().put(qualityHint))
-                                            put("qualityLinks", JSONObject().put(qualityHint, cleanSource))
+                                        val effectiveQ = qualityHint.ifBlank { optString("quality", "1080p") }
+                                        val sizeMb = optInt("sizeMb", 950)
+                                        val sizeBytes = optLong("sizeBytes", 0L)
+                                        val cdnUrl = optString("cdnUrl", m3u8Url)
+                                        val mimeType = optString("mimeType", "video/mp4")
+                                        if (!has("qualities") || optJSONArray("qualities")?.length() == 0) {
+                                            put("qualities", org.json.JSONArray().put(effectiveQ))
+                                        }
+                                        if (!has("qualityLinks") || optJSONObject("qualityLinks")?.length() == 0) {
+                                            put("qualityLinks", JSONObject().put(effectiveQ, cleanSource))
+                                        }
+                                        if (!has("downloadQualities") || optJSONArray("downloadQualities")?.length() == 0) {
                                             put("downloadQualities", org.json.JSONArray().put(JSONObject().apply {
-                                                put("id", qualityHint)
-                                                put("label", "$qualityHint ${if (qualityHint.contains("1080")) "Full HD" else if (qualityHint.contains("720")) "HD" else "Standard"}")
+                                                put("id", effectiveQ)
+                                                put("label", "$effectiveQ ${if (effectiveQ.contains("1080")) "Full HD" else if (effectiveQ.contains("720")) "HD" else "Standard"}")
                                                 put("sizeMb", sizeMb)
                                                 put("sizeBytes", sizeBytes)
                                                 put("url", cleanSource)
@@ -323,7 +398,8 @@ class MaxPlayNativeBridge(
                                     m3u8Url,
                                     ref,
                                     qualityHint,
-                                    stage2.optJSONObject("byseMeta")
+                                    stage2.optJSONObject("byseMeta"),
+                                    requestedDurationSec
                                 )
                                 enriched.put("engine", "KOTLIN_SNIFFER")
                                 finishWithResult(enriched)
@@ -365,22 +441,31 @@ class MaxPlayNativeBridge(
     private fun normalizeHlsLanguage(rawName: String, rawLang: String): String {
         val combined = "$rawLang $rawName".lowercase().trim()
         if (combined.isEmpty()) return ""
-        if (combined.contains("hin") || Regex("\\bhi\\b").containsMatchIn(combined)) return "Hindi"
+        if (combined.contains("hin") || Regex("\\bhi\\b").containsMatchIn(combined) || combined.contains("हिन्दी") || combined.contains("हिंदी")) return "Hindi"
+        if (combined.contains("urd") || Regex("\\bur\\b").containsMatchIn(combined) || combined.contains("اردو")) return "Urdu"
         if (combined.contains("eng") || Regex("\\ben\\b").containsMatchIn(combined)) return "English"
-        if (combined.contains("jpn") || combined.contains("jap") || Regex("\\bja\\b").containsMatchIn(combined)) return "Japanese"
-        if (combined.contains("tam") || Regex("\\bta\\b").containsMatchIn(combined)) return "Tamil"
-        if (combined.contains("tel") || Regex("\\bte\\b").containsMatchIn(combined)) return "Telugu"
-        if (combined.contains("mal") || Regex("\\bml\\b").containsMatchIn(combined)) return "Malayalam"
-        if (combined.contains("kan") || Regex("\\bkn\\b").containsMatchIn(combined)) return "Kannada"
-        if (combined.contains("kor") || Regex("\\bko\\b").containsMatchIn(combined)) return "Korean"
-        if (combined.contains("spa") || Regex("\\bes\\b").containsMatchIn(combined)) return "Spanish"
-        if (combined.contains("fre") || Regex("\\fra\\b").containsMatchIn(combined) || Regex("\\bfr\\b").containsMatchIn(combined)) return "French"
-        if (combined.contains("rus") || Regex("\\bru\\b").containsMatchIn(combined)) return "Russian"
-        if (combined.contains("ind") || Regex("\\bid\\b").containsMatchIn(combined)) return "Indonesian"
-        if (combined.contains("ara") || Regex("\\bar\\b").containsMatchIn(combined)) return "Arabic"
-        if (combined.contains("por") || Regex("\\bpt\\b").containsMatchIn(combined)) return "Portuguese"
-        if (combined.contains("ger") || combined.contains("deu") || Regex("\\bde\\b").containsMatchIn(combined)) return "German"
+        if (combined.contains("jpn") || combined.contains("jap") || Regex("\\bja\\b").containsMatchIn(combined) || combined.contains("日本語")) return "Japanese"
+        if (combined.contains("tam") || Regex("\\bta\\b").containsMatchIn(combined) || combined.contains("தமிழ்")) return "Tamil"
+        if (combined.contains("tel") || Regex("\\bte\\b").containsMatchIn(combined) || combined.contains("తెలుగు")) return "Telugu"
+        if (combined.contains("mal") || Regex("\\bml\\b").containsMatchIn(combined) || combined.contains("മലയാളം")) return "Malayalam"
+        if (combined.contains("kan") || Regex("\\bkn\\b").containsMatchIn(combined) || combined.contains("ಕನ್ನಡ")) return "Kannada"
+        if (combined.contains("ben") || Regex("\\bbn\\b").containsMatchIn(combined) || combined.contains("বাংলা") || combined.contains("bangla")) return "Bengali"
+        if (combined.contains("mar") || Regex("\\bmr\\b").containsMatchIn(combined) || combined.contains("मराठी")) return "Marathi"
+        if (combined.contains("guj") || Regex("\\bgu\\b").containsMatchIn(combined) || combined.contains("ગુજરાતી")) return "Gujarati"
+        if (combined.contains("pan") || Regex("\\bpa\\b").containsMatchIn(combined) || combined.contains("ਪੰਜਾਬੀ")) return "Punjabi"
+        if (combined.contains("kor") || Regex("\\bko\\b").containsMatchIn(combined) || combined.contains("한국어")) return "Korean"
+        if (combined.contains("zho") || combined.contains("chi") || Regex("\\bzh\\b").containsMatchIn(combined) || combined.contains("中文")) return "Chinese"
+        if (combined.contains("spa") || Regex("\\bes\\b").containsMatchIn(combined) || combined.contains("español")) return "Spanish"
+        if (combined.contains("fre") || combined.contains("fra") || Regex("\\bfr\\b").containsMatchIn(combined) || combined.contains("français")) return "French"
+        if (combined.contains("ger") || combined.contains("deu") || Regex("\\bde\\b").containsMatchIn(combined) || combined.contains("deutsch")) return "German"
+        if (combined.contains("rus") || Regex("\\bru\\b").containsMatchIn(combined) || combined.contains("русский")) return "Russian"
+        if (combined.contains("ind") || Regex("\\bid\\b").containsMatchIn(combined) || combined.contains("bahasa")) return "Indonesian"
+        if (combined.contains("ara") || Regex("\\bar\\b").containsMatchIn(combined) || combined.contains("العربية")) return "Arabic"
+        if (combined.contains("por") || Regex("\\bpt\\b").containsMatchIn(combined) || combined.contains("português")) return "Portuguese"
         if (combined.contains("ita") || Regex("\\bit\\b").containsMatchIn(combined)) return "Italian"
+        if (combined.contains("tur") || Regex("\\btr\\b").containsMatchIn(combined) || combined.contains("türkçe")) return "Turkish"
+        if (combined.contains("tha") || Regex("\\bth\\b").containsMatchIn(combined) || combined.contains("ไทย")) return "Thai"
+        if (combined.contains("vie") || Regex("\\bvi\\b").containsMatchIn(combined) || combined.contains("tiếng việt")) return "Vietnamese"
         return rawName.ifBlank { rawLang }.trim()
     }
 
@@ -538,18 +623,13 @@ class MaxPlayNativeBridge(
             return Pair(finalDuration, mb)
         }
 
-        // 2. If fallbackBandwidth is known from #EXT-X-STREAM-INF, compute from real stream bandwidth + duration
-        if (fallbackBandwidth > 50000L && finalDuration > 0) {
-            val bytes = (fallbackBandwidth.toDouble() * finalDuration.toDouble()) / 8.0
-            val mb = Math.max(1, Math.round(bytes / (1024.0 * 1024.0)).toInt())
-            return Pair(finalDuration, mb)
-        }
-
-        // 3. Otherwise sample up to 2 real segments (25%, 65%) via HEAD / Range / GET to measure real bytes/sec
+        // 2. Real Segment Probing: Sample 3 real segments across the video (15%, 50%, 85%) via HEAD / Range / GET
+        // to measure real bytes/sec without hardcoded assumptions
         if (segments.isNotEmpty() && finalDuration > 0) {
             val sampleIndices = listOf(
-                (segments.size * 0.25).toInt().coerceIn(0, segments.size - 1),
-                (segments.size * 0.65).toInt().coerceIn(0, segments.size - 1)
+                (segments.size * 0.15).toInt().coerceIn(0, segments.size - 1),
+                (segments.size * 0.50).toInt().coerceIn(0, segments.size - 1),
+                (segments.size * 0.85).toInt().coerceIn(0, segments.size - 1)
             ).distinct()
 
             var sampledBytes = 0L
@@ -570,6 +650,13 @@ class MaxPlayNativeBridge(
             }
         }
 
+        // 3. Fallback: Only if CDN rejected all segment probes, compute from variant manifest bandwidth
+        if (fallbackBandwidth > 50000L && finalDuration > 0) {
+            val bytes = (fallbackBandwidth.toDouble() * finalDuration.toDouble()) / 8.0
+            val mb = Math.max(1, Math.round(bytes / (1024.0 * 1024.0)).toInt())
+            return Pair(finalDuration, mb)
+        }
+
         return Pair(finalDuration, 0)
     }
 
@@ -578,7 +665,8 @@ class MaxPlayNativeBridge(
         m3u8Url: String,
         referer: String,
         forcedQuality: String,
-        fallbackByseMeta: JSONObject? = null
+        fallbackByseMeta: JSONObject? = null,
+        requestedDurationSec: Int = 0
     ): JSONObject {
         val out = JSONObject()
         val masterText = fetchHlsTextSync(m3u8Url, referer)
@@ -602,15 +690,19 @@ class MaxPlayNativeBridge(
                 else if (inferredQ.contains("720")) 1150000L
                 else if (inferredQ.contains("480")) 650000L
                 else 380000L
-                val estDur = if (metaSizeBytes in 1L..4294967294L && metaBitrateKbps > 0) {
+                val estDur = if (requestedDurationSec > 0) {
+                    requestedDurationSec
+                } else if (metaSizeBytes in 1L..4294967294L && metaBitrateKbps > 0) {
                     ((metaSizeBytes * 8L) / (metaBitrateKbps.toLong() * 1000L)).toInt()
                 } else {
-                    1440
+                    0
                 }
                 val estMb = if (metaSizeBytes in 1L..4294967294L) {
                     Math.max(1, (metaSizeBytes / (1024L * 1024L)).toInt())
+                } else if (estDur > 0 && bw > 0) {
+                    Math.max(1, ((bw * estDur) / (8L * 1024L * 1024L)).toInt())
                 } else {
-                    Math.max(15, ((bw * estDur) / (8L * 1024L * 1024L)).toInt())
+                    0
                 }
 
                 val qualitiesArr = org.json.JSONArray().put(inferredQ)
@@ -705,8 +797,9 @@ class MaxPlayNativeBridge(
             val qLabel = forcedQuality.ifBlank { "1080p" }
             val (dur, measuredMb) = measureMediaPlaylistSizeAndDuration(m3u8Url, masterText, referer, 0L)
             detectedDuration = dur
-            val fallbackBps = if (qLabel.contains("1080")) 2000000L else if (qLabel.contains("720")) 1100000L else if (qLabel.contains("480")) 650000L else 380000L
-            val sizeMb = if (measuredMb > 0) measuredMb else if (dur > 0) Math.max(5, ((fallbackBps * dur) / (8L * 1024L * 1024L)).toInt()) else 0
+            val effDur = if (dur > 0) dur else requestedDurationSec
+            val sizeMb = if (measuredMb > 0) measuredMb else 0
+            val realBps = if (effDur > 0 && sizeMb > 0) ((sizeMb.toLong() * 8L * 1024L * 1024L) / effDur.toLong()) else 0L
             qualitiesArr.put(qLabel)
             qualityLinksObj.put(qLabel, sourceUrl)
             downloadQualitiesArr.put(JSONObject().apply {
@@ -715,7 +808,7 @@ class MaxPlayNativeBridge(
                 put("sizeMb", sizeMb)
                 put("url", sourceUrl)
                 put("resolvedM3u8Url", m3u8Url)
-                put("bandwidth", if (dur > 0 && sizeMb > 0) ((sizeMb.toLong() * 8L * 1024L * 1024L) / dur.toLong()) else fallbackBps)
+                put("bandwidth", realBps)
             })
         } else if (variants.isNotEmpty()) {
             // When Admin verifies a specific quality box (e.g., 1080p box or 480p box), match that box's quality
@@ -731,55 +824,56 @@ class MaxPlayNativeBridge(
                 variants
             }
 
-            val firstVar = effectiveVariants[0]
-            val firstSubText = fetchHlsTextSync(firstVar.url, referer)
-            val (firstDur, firstMeasuredMb) = if (firstSubText.contains("#EXTINF:")) {
-                measureMediaPlaylistSizeAndDuration(firstVar.url, firstSubText, referer, firstVar.bandwidth)
-            } else {
-                Pair(0, 0)
-            }
-            detectedDuration = firstDur
-
-            if (audioPlaylistsFirstUrl.isNotEmpty() && detectedDuration > 0) {
-                separateAudioMb = Math.max(2, Math.round((128000.0 * detectedDuration.toDouble()) / (8.0 * 1024.0 * 1024.0)).toInt())
-            }
-
-            for ((idx, v) in effectiveVariants.withIndex()) {
+            // Real HLS Probe: Measure each variant's real duration and real segment sizes
+            for (v in effectiveVariants) {
                 var vSizeMb = 0
-                if (idx == 0 && firstMeasuredMb > 0) {
-                    vSizeMb = firstMeasuredMb + separateAudioMb
-                } else if (v.bandwidth > 50000L && detectedDuration > 0) {
-                    val bytes = (v.bandwidth.toDouble() * detectedDuration.toDouble()) / 8.0
-                    vSizeMb = Math.max(1, Math.round(bytes / (1024.0 * 1024.0)).toInt()) + separateAudioMb
-                } else {
-                    val subTxt = fetchHlsTextSync(v.url, referer)
-                    if (subTxt.contains("#EXTINF:")) {
-                        val (d, m) = measureMediaPlaylistSizeAndDuration(v.url, subTxt, referer, v.bandwidth)
-                        if (detectedDuration == 0 && d > 0) detectedDuration = d
-                        if (m > 0) vSizeMb = m + separateAudioMb
+                var vDuration = 0
+                var vBandwidth = v.bandwidth
+
+                try {
+                    val vText = fetchHlsTextSync(v.url, referer)
+                    if (vText.isNotBlank() && vText.contains("#EXTINF:")) {
+                        val (measuredDur, measuredMb) = measureMediaPlaylistSizeAndDuration(v.url, vText, referer, v.bandwidth)
+                        if (measuredDur > 0) {
+                            vDuration = measuredDur
+                            if (detectedDuration == 0) detectedDuration = measuredDur
+                        }
+                        if (measuredMb > 0) {
+                            vSizeMb = measuredMb
+                            if (vDuration > 0) {
+                                vBandwidth = Math.round((measuredMb.toDouble() * 1024.0 * 1024.0 * 8.0) / vDuration.toDouble())
+                            }
+                        }
                     }
+                } catch (_: Throwable) {}
+
+                val effDur = if (vDuration > 0) vDuration else if (detectedDuration > 0) detectedDuration else requestedDurationSec
+                if (vSizeMb == 0 && effDur > 0 && vBandwidth > 50000L) {
+                    val bytes = (vBandwidth.toDouble() * effDur.toDouble()) / 8.0
+                    vSizeMb = Math.max(1, Math.round(bytes / (1024.0 * 1024.0)).toInt())
                 }
 
-                if (vSizeMb <= 0 && detectedDuration > 0) {
-                    val fallbackBps = if (v.bandwidth > 50000L) v.bandwidth else if (v.quality.contains("1080")) 2000000L else if (v.quality.contains("720")) 1100000L else if (v.quality.contains("480")) 650000L else 380000L
-                    vSizeMb = Math.max(5, ((fallbackBps * detectedDuration) / (8L * 1024L * 1024L)).toInt()) + separateAudioMb
+                if (audioPlaylistsFirstUrl.isNotEmpty() && effDur > 0 && separateAudioMb == 0) {
+                    separateAudioMb = Math.max(1, Math.round((128000.0 * effDur.toDouble()) / (8.0 * 1024.0 * 1024.0)).toInt())
                 }
 
+                val finalMb = if (vSizeMb > 0) (vSizeMb + separateAudioMb) else 0
                 val isProviderSource = !sourceUrl.lowercase().contains(".m3u8")
                 val assignedUrl = if (isProviderSource || audioPlaylistsFirstUrl.isNotEmpty() || forcedQuality.isNotBlank() || effectiveVariants.size == 1) {
                     sourceUrl
                 } else {
                     v.url
                 }
+
                 qualitiesArr.put(v.quality)
                 qualityLinksObj.put(v.quality, assignedUrl)
                 downloadQualitiesArr.put(JSONObject().apply {
                     put("id", v.quality)
                     put("label", "${v.quality} ${if (v.quality.contains("1080")) "Full HD" else if (v.quality.contains("720")) "HD" else "Standard"}")
-                    put("sizeMb", vSizeMb)
+                    put("sizeMb", finalMb)
                     put("url", assignedUrl)
                     put("resolvedM3u8Url", v.url)
-                    put("bandwidth", v.bandwidth)
+                    put("bandwidth", vBandwidth)
                 })
             }
         }
@@ -801,7 +895,7 @@ class MaxPlayNativeBridge(
         out.put("sourceUrl", sourceUrl)
         out.put("m3u8Url", m3u8Url)
         out.put("referer", referer)
-        out.put("duration", detectedDuration)
+        out.put("duration", if (detectedDuration > 0) detectedDuration else (if (requestedDurationSec > 0) requestedDurationSec else 1440))
         out.put("audioTracks", audioArr)
         out.put("qualities", qualitiesArr)
         out.put("qualityLinks", qualityLinksObj)
@@ -1032,6 +1126,13 @@ class MaxPlayNativeBridge(
     }
 
     @JavascriptInterface
+    fun cancelDirectDownload(storageKey: String) {
+        try {
+            MaxPlayOfflineVault.cancelDirectDownload(storageKey)
+        } catch (_: Exception) {}
+    }
+
+    @JavascriptInterface
     fun saveOfflineManifest(
         storageKey: String,
         totalSegments: Int,
@@ -1224,6 +1325,28 @@ class MaxPlayNativeBridge(
     @JavascriptInterface
     fun isPopunderAdOpen(): Boolean {
         return activity.isNativePopunderAdOpen()
+    }
+
+    @JavascriptInterface
+    fun openExternalUrl(url: String): Boolean {
+        return try {
+            activity.runOnUiThread {
+                try {
+                    val clean = url.trim()
+                    if (clean.isNotEmpty()) {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(clean)).apply {
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        activity.startActivity(intent)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MaxPlayNativeBridge", "openExternalUrl error", e)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     @JavascriptInterface

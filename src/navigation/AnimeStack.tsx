@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { AnimeScreen } from '../screens/main/AnimeScreen';
 import { ContentDetailScreen } from '../screens/content/ContentDetailScreen';
+import { DetailErrorBoundary } from '../components/common/DetailErrorBoundary';
 import { ContentItem } from '../types';
+import { SmartStreamService } from '../services/smartStreamService';
 
 interface AnimeStackProps {
   onSelectContent?: (item: ContentItem) => void;
@@ -57,6 +59,7 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
 
   const handleSelect = (item: ContentItem) => {
     window.dispatchEvent(new CustomEvent('MAXPLAY_SAVE_SCROLL_ANIME'));
+    SmartStreamService.prefetchContentItem(item);
     push({ name: 'detail', item });
     if (onSelectContent) {
       onSelectContent(item);
@@ -76,12 +79,12 @@ export const AnimeStack: React.FC<AnimeStackProps> = ({
       {/* Detail Screen Overlay */}
       {current.name === 'detail' && (
         <div className="absolute inset-0 z-50 bg-[#0A0A0A] overflow-y-auto">
-          <ContentDetailScreen
+          <DetailErrorBoundary onBack={handleBack}><ContentDetailScreen
             key={`anime-detail-${current.item.id}-${stack.length}`}
             content={current.item}
             onBack={handleBack}
             onSelectContent={handleSelect}
-          />
+          /></DetailErrorBoundary>
         </div>
       )}
     </div>

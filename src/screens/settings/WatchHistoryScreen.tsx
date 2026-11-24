@@ -110,7 +110,7 @@ export const WatchHistoryScreen: React.FC<WatchHistoryScreenProps> = ({
         )}
       </div>
 
-      <NativeBanner />
+      <NativeBanner screen="settings" />
 
       {/* LIST GROUPED BY DATE */}
       {historyItems.length > 0 ? (

@@ -120,33 +120,8 @@ export interface DownloadCandidateInput {
  */
 export function orderDownloadCandidateUrls(input: DownloadCandidateInput): string[] {
   const s1 = (input.videoUrl || '').trim();
-  const s2 = (input.secondaryVideoUrl || '').trim();
-  const s3 = (input.tertiaryVideoUrl || '').trim();
-
-  let prioritized: string[];
-  if (input.selectedServer === 'server3') {
-    if (s3 && classifyStreamProvider(s1) !== 'STREAMTAPE' && classifyStreamProvider(s3) === 'STREAMTAPE') {
-      prioritized = [s3, s1, s2];
-    } else {
-      prioritized = [s1, s2, s3];
-    }
-  } else if (input.selectedServer === 'server2') {
-    if (s2 && classifyStreamProvider(s1) !== 'BYSE' && classifyStreamProvider(s2) === 'BYSE') {
-      prioritized = [s2, s1, s3];
-    } else {
-      prioritized = [s1, s2, s3];
-    }
-  } else {
-    prioritized = [s1, s2, s3];
-  }
-
-  const deduped = Array.from(new Set(prioritized.filter(Boolean)));
-  if (deduped.length <= 1) return deduped;
-
-  const rot = Math.max(0, Math.floor(input.preferFallbackRotationIndex || 0)) % deduped.length;
-  if (rot === 0) return deduped;
-
-  return [...deduped.slice(rot), ...deduped.slice(0, rot)];
+  // Server 1 (VOE.sx) is the sole active streaming and download provider
+  return s1 ? [s1] : [];
 }
 
 /**

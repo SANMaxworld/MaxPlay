@@ -76,6 +76,7 @@ const RotatingSearchPlaceholder: React.FC = React.memo(() => {
   useEffect(() => {
     if (searchTags.length <= 1) return;
     const interval = setInterval(() => {
+      if (document.hidden || (window as any).__maxplayIsHomeTopVisible === false) return;
       setTagIndex((prev) => (prev + 1) % searchTags.length);
     }, 4000);
     return () => clearInterval(interval);
@@ -305,13 +306,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
   const savedScrollTopRef = React.useRef<number>(0);
   const scrollSaveTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const scrollRafRef = React.useRef<number | null>(null);
 
   // Handle scroll event to toggle sticky header background without blocking 60fps frames with synchronous storage I/O
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const top = e.currentTarget.scrollTop;
     savedScrollTopRef.current = top;
-    const nextScrolled = top > 8;
-    setIsScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
+
+    if (scrollRafRef.current === null) {
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        const nextScrolled = savedScrollTopRef.current > 8;
+        setIsScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
+      });
+    }
 
     if (scrollSaveTimerRef.current) {
       clearTimeout(scrollSaveTimerRef.current);
@@ -320,7 +328,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       try {
         sessionStorage.setItem('MAXPLAY_HOME_SCROLL_TOP', String(savedScrollTopRef.current));
       } catch (_) {}
-    }, 200);
+    }, 250);
   }, []);
 
   // Restore exact scroll position when returning from ContentDetailScreen via Back button
@@ -448,7 +456,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     <div 
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden bg-[#0A0A0A] pb-24 md:pb-8 text-left select-none scrollbar-none relative"
+      style={{ transform: 'translateZ(0)', willChange: 'scroll-position', WebkitOverflowScrolling: 'touch' }}
+      className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden bg-[#0A0A0A] pb-24 md:pb-8 text-left select-none scrollbar-none relative overscroll-y-contain"
     >
       {/* Sticky Header Box (Header + Category Tabs: Search Bar + Trending, LIVE, Movies, TV, Anime) */}
       <div className="sticky top-0 left-0 right-0 z-50 pt-3 pb-3 px-4">
@@ -1019,7 +1028,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           if (isContinueWatchingRow) {
             if (continueWatchingItems.length === 0) return null;
             return (
-              <div key={row.id || row.title} className="mt-5 px-4">
+              <div key={row.id || row.title} className="mt-5 px-4" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 260px' }}>
                 <SectionHeader
                   title={row.title || 'Continue Watching'}
                   icon={icon}
@@ -1090,7 +1099,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             top10Items = top10Items.slice(0, 10);
             if (top10Items.length === 0) return null;
             return (
-              <div key={row.id || row.title} className="mt-5 px-4">
+              <div key={row.id || row.title} className="mt-5 px-4" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 260px' }}>
                 <SectionHeader
                   title={row.title || `Top 10 in ${activeTab}`}
                   icon={icon}
@@ -1102,13 +1111,34 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   {top10Items.map((item: any, index: number) => {
                     const displayPoster = item.customImage || item.posterUrl || item.backdropUrl;
                     const displayTitle = item.customTitle || item.title;
+                    const rank = index + 1;
+                    const strokeColor =
+                      rank === 1
+                        ? '#FBBF24' // Radiant Gold
+                        : rank === 2
+                        ? '#E2E8F0' // Sleek Silver
+                        : rank === 3
+                        ? '#FB923C' // Polished Bronze
+                        : '#C084FC'; // Vibrant Purple-White
+                    const glowColor =
+                      rank === 1
+                        ? 'rgba(251,191,36,0.35)'
+                        : rank === 2
+                        ? 'rgba(226,232,240,0.25)'
+                        : rank === 3
+                        ? 'rgba(251,146,60,0.25)'
+                        : 'rgba(192,132,252,0.2)';
+
                     return (
                       <div
                         key={`${item.id}-${index}`}
-                        onClick={() => handleContentClick(item)}
-                        className="group relative shrink-0 flex items-end pl-5 py-1 cursor-pointer select-none active:scale-95 transition-transform"
+                        onClick={() => {
+                          NativeBridgeService.triggerHaptic('light');
+                          handleContentClick(item);
+                        }}
+                        className="group relative shrink-0 flex items-end pl-6 sm:pl-7 py-1 cursor-pointer select-none active:scale-95 transition-transform"
                       >
-                        <div className="relative w-[124px] sm:w-[136px] aspect-[2/3] rounded-[12px] overflow-hidden bg-[#14161D] border border-white/10 shadow-[0_8px_20px_rgba(0,0,0,0.65)] z-10">
+                        <div className="relative w-[126px] sm:w-[138px] aspect-[2/3] rounded-[14px] overflow-hidden bg-[#14161D] border border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.75)] z-10">
                           <img
                             src={displayPoster}
                             alt={displayTitle}
@@ -1117,18 +1147,47 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                             draggable={false}
                             className="w-full h-full object-cover pointer-events-none transition-transform duration-300 group-hover:scale-105"
                           />
-                          <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/65 via-black/15 to-transparent pointer-events-none" />
+                          <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none" />
+
+                          {/* Top 10 Styled Badge Ribbon */}
+                          <div className="absolute top-1.5 left-1.5 z-20">
+                            <span
+                              className={`px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider text-black shadow-md border ${
+                                rank === 1
+                                  ? 'bg-gradient-to-r from-amber-400 to-yellow-300 border-amber-300'
+                                  : rank === 2
+                                  ? 'bg-gradient-to-r from-slate-200 to-zinc-300 border-slate-200'
+                                  : rank === 3
+                                  ? 'bg-gradient-to-r from-orange-400 to-amber-500 border-orange-400'
+                                  : 'bg-gradient-to-r from-purple-500 to-indigo-500 text-white border-purple-400/40'
+                              }`}
+                            >
+                              {rank <= 3 ? `TOP ${rank}` : 'TOP 10'}
+                            </span>
+                          </div>
+
+                          {/* Card Title on Bottom */}
+                          <div className="absolute inset-x-1.5 bottom-1.5 z-20">
+                            <p className="text-[11px] font-extrabold text-white truncate drop-shadow-md">
+                              {displayTitle}
+                            </p>
+                          </div>
                         </div>
+
+                        {/* Stylized 3D Netflix-Style Rank Number */}
                         <span
                           className="
-                            absolute left-0 bottom-0.5 z-20
-                            font-black text-[72px] sm:text-[80px] leading-[0.84] tracking-tighter
-                            text-[#0A0A0D] select-none pointer-events-none
-                            drop-shadow-[0_4px_10px_rgba(0,0,0,0.95)]
+                            absolute left-0 bottom-0 z-20
+                            font-black text-[76px] sm:text-[86px] leading-[0.8] tracking-tighter
+                            text-[#07070A] select-none pointer-events-none
                           "
-                          style={{ WebkitTextStroke: '4.5px #FFFFFF', paintOrder: 'stroke fill' }}
+                          style={{
+                            WebkitTextStroke: `5px ${strokeColor}`,
+                            paintOrder: 'stroke fill',
+                            filter: `drop-shadow(0 6px 14px ${glowColor}) drop-shadow(0 2px 4px rgba(0,0,0,0.95))`,
+                          }}
                         >
-                          {index + 1}
+                          {rank}
                         </span>
                       </div>
                     );
@@ -1153,7 +1212,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           }
 
           return (
-            <div key={row.id || row.title} className="mt-5 px-4">
+            <div key={row.id || row.title} className="mt-5 px-4" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 260px' }}>
               <SectionHeader
                 title={row.title}
                 icon={icon}

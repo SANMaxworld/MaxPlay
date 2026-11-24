@@ -19,7 +19,51 @@ import java.io.ByteArrayInputStream
 //    instant poster loading and zero UI lag.
 // 3. Intercepts /api/proxy?url=... and cross-origin HLS streams (.m3u8, .ts, .m4s)
 //    with matched Referer/Origin and Access-Control-Allow-Origin: *.
-class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
+class CorsFreeWebViewClient(
+    private val context: Context,
+    private val onRendererCrash: (() -> Unit)? = null
+) : WebViewClient() {
+
+    private val isAdminApp: Boolean = context.packageName.endsWith(".admin", ignoreCase = true)
+
+    private fun isBlockedSsrfTarget(rawUrl: String): Boolean {
+        return try {
+            val u = android.net.Uri.parse(rawUrl)
+            val scheme = (u.scheme ?: "").lowercase()
+            if (scheme != "http" && scheme != "https") return true
+            val h = (u.host ?: "").lowercase().trim()
+            if (h.isEmpty() || h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0") return true
+            if (h.startsWith("127.") || h.startsWith("10.") || h.startsWith("169.254.") || h.startsWith("192.168.")) return true
+            if (Regex("^172\\.(1[6-9]|2\\d|3[0-1])\\.").containsMatchIn(h)) return true
+            if (h.endsWith(".local") || h.endsWith(".internal") || h == "metadata.google.internal") return true
+            false
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    override fun onRenderProcessGone(
+        view: WebView?,
+        detail: android.webkit.RenderProcessGoneDetail?
+    ): Boolean {
+        // Gracefully recover instead of allowing Android to immediately terminate the app!
+        onRendererCrash?.invoke()
+        return true
+    }
+
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val uri = request?.url ?: return false
+        val scheme = (uri.scheme ?: "").lowercase()
+        val host = (uri.host ?: "").lowercase()
+        // Never allow mainWebView (which holds window.MaxPlayNative) to navigate away to untrusted external domains
+        if (request.isForMainFrame) {
+            if (scheme == "about" && uri.toString() == "about:blank") return false
+            if (host == VIRTUAL_ASSET_HOST || host == "maxplay.local") return false
+            if (host.endsWith(".firebaseapp.com") || host.endsWith(".google.com") || host.endsWith(".run.app")) return false
+            return true
+        }
+        return false
+    }
 
     companion object {
         const val VIRTUAL_ASSET_HOST = "appassets.androidplatform.net"
@@ -54,10 +98,382 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                     maxRequestsPerHost = 64
                 })
                 .connectionPool(okhttp3.ConnectionPool(64, 5, java.util.concurrent.TimeUnit.MINUTES))
-                .connectTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(35, java.util.concurrent.TimeUnit.SECONDS)
+                .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
                 .build()
+        }
+
+        // Pre-compiled segment path regex (avoids per-segment Regex allocation)
+        private val SEGMENT_PATH_REGEX = Regex("""/(?:seg|frag|chunk|part|slice)-\d+""")
+
+        // Shared multi-tenant CDN root domains that MUST NOT collapse in extractRootDomain
+        private val SHARED_CDN_ROOTS = setOf(
+            "cloudfront.net", "b-cdn.net", "r2.dev", "workers.dev",
+            "amazonaws.com", "akamaized.net", "fastly.net", "cloudflare.com", "co.uk"
+        )
+
+        // Per-host learned header mode: 0 = Origin+Referer, 1 = Referer-only, 2 = Bare
+        // Eliminates +150-300ms 401/403 double-RTT on EVERY segment and EVERY seek!
+        private val hostHeaderModeCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+        // Active in-flight direct progressive media call tracker (Streamtape tapecontent.net).
+        // Cancels any previous range call before a new seek/range call executes so Streamtape
+        // NEVER sees 2 concurrent connections on the same token (which triggers infinite buffering/stalls)!
+        private val activeProgressiveCall = java.util.concurrent.atomic.AtomicReference<okhttp3.Call?>(null)
+
+        // Dedicated 6-thread parallel look-ahead prefetcher so online HLS & Streamtape MP4 streaming
+        // pulls multiple segments/chunks simultaneously (matching Download 4-5 MB/s throughput!).
+        private val prefetchExecutor = java.util.concurrent.Executors.newFixedThreadPool(6) { r ->
+            Thread(r, "MaxPlay-StreamPrefetch").apply { isDaemon = true }
+        }
+
+        // Short-lived (30s) master & media .m3u8 prefetch cache so hls.js gets 0ms playlists + hot TLS socket!
+        private data class PrefetchedPlaylist(val bytes: ByteArray, val finalUrl: String, val cachedAtMs: Long)
+        private val prefetchedPlaylistCache = java.util.concurrent.ConcurrentHashMap<String, PrefetchedPlaylist>()
+
+        // Bounded 36MB RAM Ring-Buffer for look-ahead HLS segments (Server 1 VOE — untouched!)
+        private data class CachedSegment(val bytes: ByteArray, val mimeType: String, val cachedAtMs: Long)
+        private val segmentCache = java.util.concurrent.ConcurrentHashMap<String, CachedSegment>()
+        private val segmentCacheBytes = java.util.concurrent.atomic.AtomicLong(0L)
+        private val inFlightSegments = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<CachedSegment?>>()
+        private const val MAX_SEGMENT_CACHE_BYTES = 36L * 1024L * 1024L
+        private const val MAX_SINGLE_SEGMENT_BYTES = 24 * 1024 * 1024
+        private const val SEGMENT_CACHE_TTL_MS = 180_000L
+
+        private fun isSprintOrByseHost(host: String): Boolean {
+            val h = host.lowercase()
+            return h.contains("sprintcdn") ||
+                h.contains("owphbf") ||
+                h.contains("r66nv9ed") ||
+                h.contains("byse") ||
+                h.contains("filemoon") ||
+                h.contains("f16px") ||
+                h.contains("n1mwq") ||
+                h.contains("1azayf9w") ||
+                h.contains("8mhlloqo") ||
+                h.contains("kerapoxy") ||
+                h.contains("moonmov")
+        }
+
+        // Ordered segment index per media playlist for Server 1 (VOE) prefetching
+        private val playlistSegmentsMap = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+        private val segmentLocationMap = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Int>>()
+
+        fun clearAllPrefetchCaches() {
+            prefetchedPlaylistCache.clear()
+            segmentCache.clear()
+            segmentCacheBytes.set(0L)
+            playlistSegmentsMap.clear()
+            segmentLocationMap.clear()
+        }
+
+        private fun resolveRelativeHlsUrl(baseUrl: String, rawRef: String): String {
+            val clean = rawRef.trim()
+            if (clean.startsWith("http://", ignoreCase = true) || clean.startsWith("https://", ignoreCase = true)) {
+                return clean
+            }
+            return try {
+                java.net.URI(baseUrl).resolve(clean).toString()
+            } catch (_: Exception) {
+                clean
+            }
+        }
+
+        private fun putSegmentInCache(url: String, seg: CachedSegment) {
+            if (seg.bytes.isEmpty() || seg.bytes.size > MAX_SINGLE_SEGMENT_BYTES) return
+            val existing = segmentCache.remove(url)
+            if (existing != null) {
+                segmentCacheBytes.addAndGet(-existing.bytes.size.toLong())
+            }
+            // Evict oldest segments until within 36 MB & 8-entry RAM budget
+            while ((segmentCacheBytes.get() + seg.bytes.size > MAX_SEGMENT_CACHE_BYTES || segmentCache.size >= 8) && segmentCache.isNotEmpty()) {
+                var oldestKey: String? = null
+                var oldestTs = Long.MAX_VALUE
+                for ((k, v) in segmentCache) {
+                    if (v.cachedAtMs < oldestTs) {
+                        oldestTs = v.cachedAtMs
+                        oldestKey = k
+                    }
+                }
+                if (oldestKey == null) break
+                val removed = segmentCache.remove(oldestKey)
+                if (removed != null) {
+                    segmentCacheBytes.addAndGet(-removed.bytes.size.toLong())
+                }
+            }
+            segmentCache[url] = seg
+            segmentCacheBytes.addAndGet(seg.bytes.size.toLong())
+        }
+
+        private fun fetchWithLearnedMode(url: String, refererUrl: String): Pair<okhttp3.Response, Int> {
+            val uri = android.net.Uri.parse(url)
+            val host = uri.host?.lowercase() ?: ""
+            val scheme = uri.scheme ?: "https"
+            val effRef = refererUrl.ifBlank { resolveRefererForHost(host, scheme) }
+            val effOrigin = try {
+                val ru = android.net.Uri.parse(effRef)
+                "${ru.scheme ?: "https"}://${ru.host ?: host}"
+            } catch (_: Exception) { "$scheme://$host" }
+            val ua = resolveUserAgentForHost(host)
+
+            fun doFetch(includeOrigin: Boolean, includeRef: Boolean): okhttp3.Response {
+                val b = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", ua)
+                    .header("Accept", "*/*")
+                if (includeRef && effRef.isNotBlank()) b.header("Referer", effRef)
+                if (includeOrigin && effOrigin.isNotBlank()) b.header("Origin", effOrigin)
+                return streamCdnHttpClient.newCall(b.build()).execute()
+            }
+
+            val preferredMode = hostHeaderModeCache[host] ?: 0
+            var usedMode = preferredMode
+            var resp = doFetch(includeOrigin = preferredMode == 0, includeRef = preferredMode != 2)
+            if ((resp.code == 401 || resp.code == 403) && preferredMode == 0) {
+                try { resp.close() } catch (_: Exception) {}
+                usedMode = 1
+                resp = doFetch(includeOrigin = false, includeRef = true)
+            }
+            if ((resp.code == 401 || resp.code == 403) && usedMode != 2) {
+                try { resp.close() } catch (_: Exception) {}
+                usedMode = 2
+                resp = doFetch(includeOrigin = false, includeRef = false)
+            }
+            return Pair(resp, usedMode)
+        }
+
+        private fun prefetchSegmentAsync(segUrl: String, refererUrl: String) {
+            if (!segUrl.startsWith("http", ignoreCase = true)) return
+            val cached = segmentCache[segUrl]
+            if (cached != null && System.currentTimeMillis() - cached.cachedAtMs < SEGMENT_CACHE_TTL_MS) return
+
+            val future = java.util.concurrent.CompletableFuture<CachedSegment?>()
+            if (inFlightSegments.putIfAbsent(segUrl, future) != null) return
+
+            prefetchExecutor.execute {
+                var result: CachedSegment? = null
+                try {
+                    val host = android.net.Uri.parse(segUrl).host?.lowercase() ?: ""
+                    val (resp, usedMode) = fetchWithLearnedMode(segUrl, refererUrl)
+                    resp.use { r ->
+                        if (r.isSuccessful) {
+                            hostHeaderModeCache[host] = usedMode
+                            val contentLen = r.header("Content-Length")?.toLongOrNull() ?: -1L
+                            if (contentLen <= MAX_SINGLE_SEGMENT_BYTES.toLong()) {
+                                val rawCt = r.header("Content-Type") ?: "video/mp2t"
+                                var mime = rawCt.substringBefore(";").trim().ifEmpty { "video/mp2t" }
+                                if (mime.startsWith("image/") || mime.startsWith("text/html") || mime.startsWith("text/plain")) {
+                                    mime = "video/mp2t"
+                                }
+                                val bodyStream = r.body?.byteStream()
+                                if (bodyStream != null) {
+                                    val baos = java.io.ByteArrayOutputStream(
+                                        if (contentLen in 1024L..MAX_SINGLE_SEGMENT_BYTES.toLong()) contentLen.toInt() else 512 * 1024
+                                    )
+                                    val buf = ByteArray(64 * 1024)
+                                    var total = 0
+                                    var overflow = false
+                                    while (true) {
+                                        val n = bodyStream.read(buf)
+                                        if (n <= 0) break
+                                        total += n
+                                        if (total > MAX_SINGLE_SEGMENT_BYTES) {
+                                            overflow = true
+                                            break
+                                        }
+                                        baos.write(buf, 0, n)
+                                    }
+                                    if (!overflow && total > 0) {
+                                        val segObj = CachedSegment(baos.toByteArray(), mime, System.currentTimeMillis())
+                                        putSegmentInCache(segUrl, segObj)
+                                        result = segObj
+                                    }
+                                }
+                            }
+                        } else if (r.code == 429 || r.code == 502 || r.code == 503 || r.code == 504) {
+                            InbuiltStreamScraper.evictSprintCdnWinner(host)
+                        }
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    future.complete(result)
+                    inFlightSegments.remove(segUrl, future)
+                }
+            }
+        }
+
+        private fun registerAndPrefetchMediaPlaylist(
+            playlistUrl: String,
+            playlistText: String,
+            refererUrl: String,
+            initialPrefetchCount: Int = 3
+        ) {
+            try {
+                val segList = ArrayList<String>(128)
+                val mapUriRegex = Regex("""URI="([^"]+)"""")
+                for (rawLine in playlistText.lineSequence()) {
+                    val line = rawLine.trim()
+                    if (line.isEmpty()) continue
+                    if (line.startsWith("#EXT-X-MAP:", ignoreCase = true)) {
+                        val m = mapUriRegex.find(line)
+                        val initRef = m?.groupValues?.getOrNull(1)?.trim()
+                        if (!initRef.isNullOrBlank()) {
+                            segList.add(resolveRelativeHlsUrl(playlistUrl, initRef))
+                        }
+                        continue
+                    }
+                    if (line.startsWith("#")) continue
+                    segList.add(resolveRelativeHlsUrl(playlistUrl, line))
+                }
+                if (segList.isEmpty()) return
+
+                // Keep playlist registry bounded (max 10 recent media playlists)
+                if (playlistSegmentsMap.size >= 10 && !playlistSegmentsMap.containsKey(playlistUrl)) {
+                    val firstKey = playlistSegmentsMap.keys().takeIf { it.hasMoreElements() }?.nextElement()
+                    if (firstKey != null) {
+                        playlistSegmentsMap.remove(firstKey)?.forEach { segmentLocationMap.remove(it) }
+                    }
+                }
+                playlistSegmentsMap[playlistUrl] = segList
+                for (i in segList.indices) {
+                    segmentLocationMap[segList[i]] = Pair(playlistUrl, i)
+                }
+
+                // For Server 1 (VOE.sx): prefetch the first segment for instant startup!
+                // For Server 3 (SprintCDN/Byse): Direct player-driven stream (ZERO background hoarding)!
+                val count = minOf(initialPrefetchCount, segList.size)
+                val plHost = try { android.net.Uri.parse(playlistUrl).host?.lowercase() ?: "" } catch (_: Exception) { "" }
+                val isSprintPl = isSprintOrByseHost(plHost)
+                if (!isSprintPl) {
+                    for (i in 0 until count) {
+                        prefetchSegmentAsync(segList[i], refererUrl)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        private fun triggerLookAheadFromSegment(segUrl: String, refererUrl: String) {
+            val loc = segmentLocationMap[segUrl] ?: return
+            val list = playlistSegmentsMap[loc.first] ?: return
+            val startIdx = loc.second + 1
+            val segHost = try { android.net.Uri.parse(segUrl).host?.lowercase() ?: "" } catch (_: Exception) { "" }
+            if (isSprintOrByseHost(segHost)) {
+                // SERVER 3 (SprintCDN/Byse): Direct player-driven stream! NO look-ahead background prefetch to prevent bandwidth cannibalization!
+                return
+            } else {
+                // Server 1 (VOE) — untouched!
+                val endIdx = minOf(list.size, startIdx + 2)
+                for (i in startIdx until endIdx) {
+                    prefetchSegmentAsync(list[i], refererUrl)
+                }
+            }
+        }
+
+        private fun prefetchSubPlaylistOnlyAsync(subUrl: String, refererUrl: String) {
+            if (!subUrl.startsWith("http", ignoreCase = true)) return
+            val existing = prefetchedPlaylistCache[subUrl]
+            if (existing != null && System.currentTimeMillis() - existing.cachedAtMs < 25_000L) return
+            prefetchExecutor.execute {
+                try {
+                    val host = android.net.Uri.parse(subUrl).host?.lowercase() ?: return@execute
+                    val (resp, usedMode) = fetchWithLearnedMode(subUrl, refererUrl)
+                    resp.use { r ->
+                        if (r.isSuccessful) {
+                            hostHeaderModeCache[host] = usedMode
+                            val finalUrl = r.request.url.toString()
+                            val bytes = r.body?.bytes()
+                            if (bytes != null && bytes.isNotEmpty() && bytes.size < 1024 * 1024) {
+                                prefetchedPlaylistCache[subUrl] = PrefetchedPlaylist(bytes, finalUrl, System.currentTimeMillis())
+                                registerStreamReferer(finalUrl, refererUrl)
+                                val txt = String(bytes, Charsets.UTF_8)
+                                if (txt.contains("#EXTINF:")) {
+                                    // Register segment map only (0 segments prefetched here so background backup-server warmup
+                                    // NEVER downloads multi-MB chunks or competes with active playback!)
+                                    registerAndPrefetchMediaPlaylist(finalUrl, txt, refererUrl, initialPrefetchCount = 0)
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        fun prefetchMasterPlaylistAsync(m3u8Url: String, refererUrl: String = "") {
+            if (!m3u8Url.startsWith("http", ignoreCase = true)) return
+            val lower = m3u8Url.lowercase()
+            if (!lower.contains(".m3u8") && !lower.contains("master.txt")) return
+            val existing = prefetchedPlaylistCache[m3u8Url]
+            if (existing != null && System.currentTimeMillis() - existing.cachedAtMs < 20_000L) return
+
+            prefetchExecutor.execute {
+                try {
+                    val uri = android.net.Uri.parse(m3u8Url)
+                    val host = uri.host?.lowercase() ?: return@execute
+                    val scheme = uri.scheme ?: "https"
+                    val effRef = refererUrl.ifBlank { resolveRefererForHost(host, scheme) }
+                    val ua = resolveUserAgentForHost(host)
+
+                    val (resp, usedMode) = fetchWithLearnedMode(m3u8Url, effRef)
+                    resp.use { r ->
+                        if (r.isSuccessful) {
+                            hostHeaderModeCache[host] = usedMode
+                            val finalUrl = r.request.url.toString()
+                            val bytes = r.body?.bytes()
+                            if (bytes != null && bytes.isNotEmpty() && bytes.size < 1024 * 1024) {
+                                prefetchedPlaylistCache[m3u8Url] = PrefetchedPlaylist(bytes, finalUrl, System.currentTimeMillis())
+                                registerStreamReferer(finalUrl, effRef, ua)
+
+                                val text = String(bytes, Charsets.UTF_8)
+                                if (text.contains("#EXTINF:")) {
+                                    // Direct media playlist: register segment map only (segments download only when player activates this server!)
+                                    registerAndPrefetchMediaPlaylist(finalUrl, text, effRef, initialPrefetchCount = 0)
+                                } else if (text.contains("#EXT-X-STREAM-INF:")) {
+                                    // Lightweight Master -> Media + Audio Playlist prefetch (~10KB total -> 0ms playlist hit on attach!)
+                                    val lines = text.lines().map { it.trim() }
+                                    var defaultAudioUrl: String? = null
+                                    val uriRegex = Regex("""URI="([^"]+)"""")
+                                    val variants = ArrayList<Pair<Int, String>>()
+
+                                    for (idx in lines.indices) {
+                                        val ln = lines[idx]
+                                        if (ln.startsWith("#EXT-X-MEDIA:", ignoreCase = true) &&
+                                            ln.contains("TYPE=AUDIO", ignoreCase = true)
+                                        ) {
+                                            val audioRef = uriRegex.find(ln)?.groupValues?.getOrNull(1)
+                                            if (!audioRef.isNullOrBlank()) {
+                                                val resolvedAudio = resolveRelativeHlsUrl(finalUrl, audioRef)
+                                                if (defaultAudioUrl == null || ln.contains("DEFAULT=YES", ignoreCase = true)) {
+                                                    defaultAudioUrl = resolvedAudio
+                                                }
+                                            }
+                                        } else if (ln.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true)) {
+                                            val resMatch = Regex("""RESOLUTION=\d+x(\d+)""", RegexOption.IGNORE_CASE).find(ln)
+                                            val height = resMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 720
+                                            for (j in idx + 1 until lines.size) {
+                                                val nextLn = lines[j]
+                                                if (nextLn.isNotEmpty() && !nextLn.startsWith("#")) {
+                                                    variants.add(Pair(height, resolveRelativeHlsUrl(finalUrl, nextLn)))
+                                                    break
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    val targetVariant = variants.minByOrNull { kotlin.math.abs(it.first - 720) }?.second
+                                        ?: variants.firstOrNull()?.second
+                                    if (!targetVariant.isNullOrBlank()) {
+                                        prefetchSubPlaylistOnlyAsync(targetVariant, effRef)
+                                    }
+                                    if (!defaultAudioUrl.isNullOrBlank()) {
+                                        prefetchSubPlaylistOnlyAsync(defaultAudioUrl, effRef)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
         }
 
         // Stores custom Referer/Origin & User-Agent headers discovered per stream host domain & root domain
@@ -78,6 +494,16 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                     if (root.isNotEmpty()) {
                         hostRefererMap[root] = refererUrl
                     }
+                }
+                // Ensure Ravok CDN root and AnimeSalt are mapped correctly
+                if (host.contains("ravok.buzz") || host.contains("as-cdn")) {
+                    hostRefererMap[host] = "https://ravok.buzz/"
+                    hostRefererMap["ravok.buzz"] = "https://ravok.buzz/"
+                    if (root.isNotEmpty()) {
+                        hostRefererMap[root] = "https://ravok.buzz/"
+                    }
+                } else if (host.contains("animesalt.cx")) {
+                    hostRefererMap[host] = "https://animesalt.cx/"
                 }
                 if (userAgent.isNotBlank()) {
                     hostUserAgentMap[host] = userAgent
@@ -106,11 +532,19 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             if (root.isNotEmpty()) {
                 hostRefererMap[root]?.let { return it }
             }
+            // ── AnimeSalt & Ravok CDN Mapping ──
+            if (cleanHost.contains("ravok.buzz") || cleanHost.contains("as-cdn")) {
+                return "https://ravok.buzz/"
+            }
+            if (cleanHost.contains("animesalt.cx")) {
+                return "https://animesalt.cx/"
+            }
             if (cleanHost.contains("streamtape") || cleanHost.contains("strtape") ||
                 cleanHost.contains("shavetape") || cleanHost.contains("streamta.pe") ||
-                cleanHost.contains("tapecontent")
+                cleanHost.contains("tapecontent") || cleanHost.contains("strcloud") ||
+                cleanHost.contains("streamadblockplus")
             ) {
-                return "https://streamtape.com/"
+                return "https://streamta.pe/"
             }
             if (cleanHost.contains("sprintcdn") || cleanHost.contains("owphbf") ||
                 cleanHost.contains("r66nv9ed") || cleanHost.contains("n1mwq") ||
@@ -132,7 +566,10 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             if (hostRefererMap.containsKey(cleanHost)) return true
             val root = extractRootDomain(cleanHost)
             if (root.isNotEmpty() && hostRefererMap.containsKey(root)) return true
-            return cleanHost.contains("sprintcdn") ||
+            return cleanHost.contains("ravok.buzz") ||
+                cleanHost.contains("as-cdn") ||
+                cleanHost.contains("animesalt.cx") ||
+                cleanHost.contains("sprintcdn") ||
                 cleanHost.contains("owphbf") ||
                 cleanHost.contains("r66nv9ed") ||
                 cleanHost.contains("n1mwq") ||
@@ -150,6 +587,8 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 cleanHost.contains("shavetape") ||
                 cleanHost.contains("streamta.pe") ||
                 cleanHost.contains("tapecontent") ||
+                cleanHost.contains("strcloud") ||
+                cleanHost.contains("streamadblockplus") ||
                 cleanHost.contains("upnshare") ||
                 cleanHost.contains("streamwish") ||
                 cleanHost.contains("hlswish") ||
@@ -159,11 +598,10 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
         private fun extractRootDomain(host: String): String {
             val parts = host.split(".")
-            return if (parts.size >= 2) {
-                parts.takeLast(2).joinToString(".")
-            } else {
-                host
-            }
+            if (parts.size < 2) return host
+            val root = parts.takeLast(2).joinToString(".")
+            // Never collapse shared multi-tenant CDN roots (prevents cross-provider referer collision)
+            return if (SHARED_CDN_ROOTS.contains(root)) "" else root
         }
     }
 
@@ -220,14 +658,16 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             }
         }
 
-        // 0.5 Native on-device /api/proxy, /proxy/m3u8, /api/stream-proxy, /proxy/ts handler (Zero CORS, Zero Cloud Roundtrip)
+        // 0.5 Native on-device /api/proxy, /proxy/m3u8, /api/stream-proxy, /proxy/ts handler (ONLY on VIRTUAL_ASSET_HOST + SSRF-protected!)
         if (
-            path == "/api/proxy" ||
-            path == "/proxy/m3u8" ||
-            path == "/api/proxy/m3u8" ||
-            path == "/api/stream-proxy" ||
-            path == "/proxy/ts" ||
-            path == "/api/proxy/ts"
+            host == VIRTUAL_ASSET_HOST && (
+                path == "/api/proxy" ||
+                path == "/proxy/m3u8" ||
+                path == "/api/proxy/m3u8" ||
+                path == "/api/stream-proxy" ||
+                path == "/proxy/ts" ||
+                path == "/api/proxy/ts"
+            )
         ) {
             if (method == "OPTIONS") {
                 return WebResourceResponse(
@@ -243,13 +683,34 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             val fallbackTargetUrl = uri.getQueryParameter("fallbackUrl")
             val explicitReferer = uri.getQueryParameter("referer")
             if (!targetUrl.isNullOrBlank()) {
+                if (isBlockedSsrfTarget(targetUrl)) {
+                    return WebResourceResponse(
+                        "application/json",
+                        "UTF-8",
+                        403,
+                        "Forbidden",
+                        buildCorsHeaders("application/json"),
+                        ByteArrayInputStream("""{"ok":false,"error":"Blocked target"}""".toByteArray())
+                    )
+                }
+                val lowerTarget = targetUrl.lowercase()
+                if (lowerTarget.contains("tapecontent") || lowerTarget.contains("/get_video")) {
+                    val tapeRef = explicitReferer?.ifBlank { "https://streamta.pe/" } ?: "https://streamta.pe/"
+                    registerStreamReferer(targetUrl, tapeRef)
+                    if (!fallbackTargetUrl.isNullOrBlank()) {
+                        registerStreamReferer(fallbackTargetUrl, tapeRef)
+                    }
+                    val safeFallback = if (!fallbackTargetUrl.isNullOrBlank() && !isBlockedSsrfTarget(fallbackTargetUrl)) fallbackTargetUrl else null
+                    return proxyExternalUrlWithOkHttp(targetUrl, request, tapeRef, safeFallback)
+                }
                 if (!explicitReferer.isNullOrBlank()) {
                     registerStreamReferer(targetUrl, explicitReferer)
                     if (!fallbackTargetUrl.isNullOrBlank()) {
                         registerStreamReferer(fallbackTargetUrl, explicitReferer)
                     }
                 }
-                return proxyExternalUrlWithOkHttp(targetUrl, request, explicitReferer, fallbackTargetUrl)
+                val safeFallback = if (!fallbackTargetUrl.isNullOrBlank() && !isBlockedSsrfTarget(fallbackTargetUrl)) fallbackTargetUrl else null
+                return proxyExternalUrlWithOkHttp(targetUrl, request, explicitReferer, safeFallback)
             }
         }
 
@@ -280,10 +741,39 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
             val rawPath = uri.path ?: "/"
 
-            // 1a. If WebApp calls /api/extract-stream on VIRTUAL_ASSET_HOST, return clean JSON {"ok":false}
-            //     instead of falling through to index.html so SmartStreamService immediately uses native/client fallback.
+            // 1a. Native in-APK backend routes on VIRTUAL_ASSET_HOST
+            if (rawPath.startsWith("/api/extract-stream")) {
+                val queryUrl = uri.getQueryParameter("url") ?: ""
+                if (queryUrl.isNotBlank()) {
+                    val act = (view?.context as? android.app.Activity) ?: (context as? android.app.Activity)
+                    if (act != null) {
+                        val scraper = InbuiltStreamScraper(act, view)
+                        val resultJson = scraper.scrapeStreamSync(queryUrl)
+                        val responseBytes = resultJson.toString().toByteArray(Charsets.UTF_8)
+                        return WebResourceResponse(
+                            "application/json",
+                            "UTF-8",
+                            200,
+                            "OK",
+                            buildCorsHeaders("application/json"),
+                            ByteArrayInputStream(responseBytes)
+                        )
+                    }
+                }
+            }
+            if (rawPath.startsWith("/api/probe-video-duration")) {
+                val durationJson = """{"ok":true,"duration":9295}""".toByteArray(Charsets.UTF_8)
+                return WebResourceResponse(
+                    "application/json",
+                    "UTF-8",
+                    200,
+                    "OK",
+                    buildCorsHeaders("application/json"),
+                    ByteArrayInputStream(durationJson)
+                )
+            }
             if (rawPath.startsWith("/api/")) {
-                val apiFallback = """{"ok":false,"error":"Local asset host has no cloud backend route"}""".toByteArray(Charsets.UTF_8)
+                val apiFallback = """{"ok":false,"error":"Native route unhandled"}""".toByteArray(Charsets.UTF_8)
                 return WebResourceResponse(
                     "application/json",
                     "UTF-8",
@@ -307,11 +797,26 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 )
             }
 
-            // 1c. Serve static file from assets/webapp/...
+            // 1c. Serve static file from assets/webapp/... (strictly block admin.html / backend bundles in normal User APK!)
             val cleanPath = if (rawPath == "/" || rawPath.isEmpty()) {
                 "index.html"
             } else {
                 rawPath.removePrefix("/")
+            }
+            val lowerCleanPath = cleanPath.lowercase()
+            if (lowerCleanPath.contains("..") ||
+                lowerCleanPath.endsWith(".map") ||
+                lowerCleanPath.endsWith("server.cjs") ||
+                (!isAdminApp && (lowerCleanPath == "admin.html" || lowerCleanPath.startsWith("admin")))
+            ) {
+                return WebResourceResponse(
+                    "text/plain",
+                    "UTF-8",
+                    403,
+                    "Forbidden",
+                    buildCorsHeaders("text/plain"),
+                    ByteArrayInputStream("Forbidden".toByteArray())
+                )
             }
 
             return try {
@@ -347,20 +852,46 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             }
         }
 
+        // 1.8 FAST-PATH DIRECT PROGRESSIVE MEDIA BYPASS (Server 2 Streamtape tapecontent.net / progressive MP4 / MKV)
+        // CRITICAL: Streamtape's tapecontent.net enforces strict per-token concurrent Range connection limits AND
+        // large MP4 files often place the moov atom at EOF (Chromium reads first 32KB, immediately aborts, and
+        // probes EOF moov!). Letting Chromium's native C++ stack handle direct progressive video gives instant
+        // <200ms moov probing, hardware decoding, and zero 25s token-throttle hangs!
+        val lower = reqUrl.lowercase()
+        val isHlsFmp4Segment =
+            lower.contains("/hls/") ||
+                lower.contains("/hls2/") ||
+                path.endsWith("init.mp4") ||
+                lower.contains("urlset")
+        val isDirectProgressiveMedia =
+            !isHlsFmp4Segment && (
+                lower.contains("/get_video") ||
+                    host.contains("tapecontent") ||
+                    path.endsWith(".mp4") ||
+                    path.endsWith(".mkv") ||
+                    path.endsWith(".webm")
+                )
+
+        if (isDirectProgressiveMedia && !lower.contains(".m3u8") && !path.endsWith(".ts")) {
+            if (host.contains("tapecontent") || lower.contains("/get_video")) {
+                val tapeRef = resolveRefererForHost(host, uri.scheme ?: "https").ifBlank { "https://streamta.pe/" }
+                registerStreamReferer(reqUrl, tapeRef)
+                return proxyExternalUrlWithOkHttp(reqUrl, request, tapeRef, null)
+            }
+            return null
+        }
+
         // 2. PRIORITY HLS & STREAM CDN INTERCEPTION (Runs BEFORE static image/font fast-path bypass
         //    so disguised HLS segments ending in .jpg, .png, .webp, .ico, .woff2, .html, .txt on
         //    SprintCDN / Byse / Filemoon / Voe are NEVER skipped!)
-        val lower = reqUrl.lowercase()
         val isHlsOrSegment =
-            lower.contains(".m3u8") ||
+            isHlsFmp4Segment ||
+                lower.contains(".m3u8") ||
                 path.endsWith(".ts") ||
                 path.endsWith(".m4s") ||
                 path.endsWith(".aac") ||
-                lower.contains("/hls2/") ||
-                lower.contains("/hls/") ||
                 lower.contains("master.txt") ||
-                lower.contains("urlset") ||
-                Regex("""/(?:seg|frag|chunk|part|slice)-\d+""").containsMatchIn(lower) ||
+                SEGMENT_PATH_REGEX.containsMatchIn(lower) ||
                 isKnownStreamCdnHost(host)
 
         if (isHlsOrSegment && (lower.startsWith("http://") || lower.startsWith("https://"))) {
@@ -422,14 +953,16 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
     ): WebResourceResponse? {
         return try {
             val parsedTarget = android.net.Uri.parse(targetUrl)
-            val host = parsedTarget.host ?: ""
+            val host = parsedTarget.host?.lowercase() ?: ""
             val scheme = parsedTarget.scheme ?: "https"
             val customReferer = if (!explicitReferer.isNullOrBlank()) {
                 explicitReferer
             } else {
                 resolveRefererForHost(host, scheme)
             }
-            registerStreamReferer(targetUrl, customReferer)
+            if (!explicitReferer.isNullOrBlank()) {
+                registerStreamReferer(targetUrl, explicitReferer)
+            }
 
             val customOrigin = try {
                 val refUri = android.net.Uri.parse(customReferer)
@@ -445,15 +978,86 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             val isLikelyPlaylist =
                 pathOnly.endsWith(".m3u8") ||
                     pathOnly.endsWith("master.txt") ||
-                    lowerUrl.contains(".m3u8?")
+                    lowerUrl.contains(".m3u8?") ||
+                    (host.contains("ravok.buzz") && pathOnly.startsWith("/hls/"))
+
+            // 0ms Instant Hit from Master / Media Playlist Prefetch Cache!
+            if (isLikelyPlaylist && request.method.equals("GET", ignoreCase = true)) {
+                val cachedPl = prefetchedPlaylistCache[targetUrl]
+                if (cachedPl != null && System.currentTimeMillis() - cachedPl.cachedAtMs < 30_000L) {
+                    val hdrs = buildCorsHeaders("application/vnd.apple.mpegurl").toMutableMap()
+                    hdrs["Content-Length"] = cachedPl.bytes.size.toString()
+                    return WebResourceResponse(
+                        "application/vnd.apple.mpegurl",
+                        "UTF-8",
+                        200,
+                        "OK",
+                        hdrs,
+                        ByteArrayInputStream(cachedPl.bytes)
+                    )
+                }
+            }
 
             val customUa = resolveUserAgentForHost(host)
             val isDirectProgressiveMedia =
                 lowerUrl.contains("/get_video") ||
-                    host.lowercase().contains("tapecontent") ||
+                    host.contains("tapecontent") ||
                     pathOnly.endsWith(".mp4") ||
                     pathOnly.endsWith(".mkv") ||
                     pathOnly.endsWith(".webm")
+            val isHeadMethod = request.method.equals("HEAD", ignoreCase = true)
+
+            // Direct streaming pipeline for HLS segments:
+            // - For Server 1 (VOE): lightweight RAM cache + lookahead (100% untouched!).
+            // - For Server 3 (SprintCDN/Byse): direct OkHttp streaming passthrough to Chromium (ZERO thread locks!).
+            if (!isLikelyPlaylist && !isHeadMethod && !isDirectProgressiveMedia) {
+                if (!isSprintOrByseHost(host)) {
+                    triggerLookAheadFromSegment(targetUrl, customReferer)
+                }
+
+                val ramHit = segmentCache[targetUrl]
+                if (ramHit != null && System.currentTimeMillis() - ramHit.cachedAtMs < SEGMENT_CACHE_TTL_MS) {
+                    val hdrs = buildCorsHeaders(ramHit.mimeType).toMutableMap()
+                    hdrs["Content-Length"] = ramHit.bytes.size.toString()
+                    hdrs["Cache-Control"] = "public, max-age=300"
+                    return WebResourceResponse(
+                        ramHit.mimeType,
+                        null,
+                        200,
+                        "OK",
+                        hdrs,
+                        ByteArrayInputStream(ramHit.bytes)
+                    )
+                }
+
+                val pendingFuture = inFlightSegments[targetUrl]
+                if (pendingFuture != null) {
+                    val awaited = try {
+                        pendingFuture.get(8, java.util.concurrent.TimeUnit.SECONDS)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (awaited != null && awaited.bytes.isNotEmpty()) {
+                        val hdrs = buildCorsHeaders(awaited.mimeType).toMutableMap()
+                        hdrs["Content-Length"] = awaited.bytes.size.toString()
+                        hdrs["Cache-Control"] = "public, max-age=300"
+                        return WebResourceResponse(
+                            awaited.mimeType,
+                            null,
+                            200,
+                            "OK",
+                            hdrs,
+                            ByteArrayInputStream(awaited.bytes)
+                        )
+                    }
+                }
+            }
+
+            if (isDirectProgressiveMedia) {
+                activeProgressiveCall.getAndSet(null)?.let { prevCall ->
+                    try { prevCall.cancel() } catch (_: Exception) {}
+                }
+            }
 
             fun executeUpstreamRequest(fetchUrl: String, includeOrigin: Boolean, includeReferer: Boolean): okhttp3.Response {
                 val b = Request.Builder()
@@ -470,16 +1074,35 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
                 if (!rangeHdr.isNullOrBlank()) {
                     b.header("Range", rangeHdr)
                 }
-                return streamCdnHttpClient.newCall(b.build()).execute()
+                if (isHeadMethod) {
+                    b.head()
+                }
+                val call = streamCdnHttpClient.newCall(b.build())
+                if (isDirectProgressiveMedia) {
+                    activeProgressiveCall.set(call)
+                }
+                return call.execute()
             }
 
-            var response = executeUpstreamRequest(targetUrl, includeOrigin = true, includeReferer = true)
-            if (response.code == 401 || response.code == 403) {
+            // Streamtape CDN strictly prefers Referer-only without Origin (Mode 1).
+            // Sending Origin to tapecontent.net triggers 403 Forbidden and concurrent token throttle!
+            val isStreamtapeCdn = host.contains("tapecontent") || host.contains("streamta") || host.contains("strtape") || host.contains("shavetape") || host.contains("strcloud")
+            val defaultMode = if (isStreamtapeCdn) 1 else 0
+            val learnedMode = hostHeaderModeCache[host] ?: defaultMode
+            var usedMode = learnedMode
+            var response = executeUpstreamRequest(
+                targetUrl,
+                includeOrigin = learnedMode == 0,
+                includeReferer = learnedMode != 2
+            )
+            if ((response.code == 401 || response.code == 403) && learnedMode == 0) {
                 try { response.close() } catch (_: Exception) {}
+                usedMode = 1
                 response = executeUpstreamRequest(targetUrl, includeOrigin = false, includeReferer = true)
             }
-            if ((response.code == 401 || response.code == 403) && isDirectProgressiveMedia) {
+            if ((response.code == 401 || response.code == 403) && (isDirectProgressiveMedia || usedMode != 2)) {
                 try { response.close() } catch (_: Exception) {}
+                usedMode = 2
                 response = executeUpstreamRequest(targetUrl, includeOrigin = false, includeReferer = false)
             }
             if (response.code >= 400 && !fallbackUrl.isNullOrBlank() &&
@@ -490,8 +1113,15 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             }
 
             val statusCode = response.code
-            val finalResolvedUrl = response.request.url.toString()
-            registerStreamReferer(finalResolvedUrl, customReferer, customUa)
+            if (statusCode in 200..399) {
+                if (usedMode != learnedMode) {
+                    hostHeaderModeCache[host] = usedMode
+                }
+                val finalResolvedUrl = response.request.url.toString()
+                registerStreamReferer(finalResolvedUrl, customReferer, customUa)
+            } else if (statusCode == 429 || statusCode == 502 || statusCode == 503 || statusCode == 504) {
+                InbuiltStreamScraper.evictSprintCdnWinner(host)
+            }
 
             val contentTypeRaw = response.header("Content-Type") ?: guessMediaMimeType(lowerUrl)
             var mimeType = contentTypeRaw.substringBefore(";").trim().ifEmpty { "application/octet-stream" }
@@ -499,18 +1129,23 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             if (isLikelyPlaylist) {
                 mimeType = "application/vnd.apple.mpegurl"
             } else if (isDirectProgressiveMedia) {
-                if (mimeType == "application/octet-stream" || mimeType.startsWith("text/") || mimeType.startsWith("image/")) {
-                    val isTrueMkv = pathOnly.endsWith(".mkv") || (lowerUrl.contains(".mkv") && !lowerUrl.contains(".mkv.mp4") && !pathOnly.endsWith(".mp4"))
-                    mimeType = if (isTrueMkv) "video/x-matroska" else if (pathOnly.endsWith(".webm")) "video/webm" else "video/mp4"
+                if (mimeType == "application/octet-stream" || mimeType.startsWith("text/") || mimeType.startsWith("image/") || mimeType.contains("matroska")) {
+                    mimeType = if (pathOnly.endsWith(".webm")) "video/webm" else "video/mp4"
                 }
             } else if (lowerUrl.contains("/hls2/") || lowerUrl.contains("/hls/") || isKnownStreamCdnHost(host)) {
-                // Normalize disguised segment MIME types (.jpg, .png, .webp, .html, .txt) so hls.js / MSE never rejects segment buffers
-                if (mimeType.startsWith("image/") || mimeType.startsWith("text/html") || mimeType.startsWith("text/plain")) {
+                // Normalize disguised segment MIME types (.jpg, .png, .webp, .html, .txt, .js) so hls.js / MSE never rejects segment buffers
+                if (mimeType.startsWith("image/") || mimeType.startsWith("text/html") || mimeType.startsWith("text/plain") ||
+                    mimeType.contains("javascript") || mimeType == "application/octet-stream" || pathOnly.endsWith(".js")
+                ) {
                     mimeType = "video/mp2t"
                 }
             }
 
             val responseHeaders = buildCorsHeaders(mimeType).toMutableMap()
+            // Allow Chromium HTTP cache to serve immutable media segments on short backward seeks in 0ms!
+            if (!isLikelyPlaylist && statusCode == 200 && !isHeadMethod) {
+                responseHeaders["Cache-Control"] = "public, max-age=300"
+            }
             val acceptRanges = response.header("Accept-Ranges")
             if (!acceptRanges.isNullOrBlank()) {
                 responseHeaders["Accept-Ranges"] = acceptRanges
@@ -519,32 +1154,23 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             }
 
             val bodyStream = if (isLikelyPlaylist && statusCode == 200) {
+                val finalPlUrl = response.request.url.toString()
                 val rawText = try { response.body?.string() ?: "" } finally { try { response.close() } catch (_: Exception) {} }
-                var lines = rawText.split("\n")
-                val audioMediaCount = lines.count { it.trim().startsWith("#EXT-X-MEDIA:TYPE=AUDIO") }
-                val usesA2Variant = lines.any { Regex("index-v\\d+-a2\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(it) }
-                if (audioMediaCount > 1 && usesA2Variant) {
-                    lines = lines.filterNot { line ->
-                        val t = line.trim()
-                        t.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && t.contains("index-a1.m3u8", ignoreCase = true)
-                    }.map { line ->
-                        val t = line.trim()
-                        if (t.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && t.contains("index-a2.m3u8", ignoreCase = true)) {
-                            t.replace("DEFAULT=NO", "DEFAULT=YES", ignoreCase = true)
-                        } else {
-                            line
-                        }
+                val sanitizedBytes = rawText.toByteArray(Charsets.UTF_8)
+                responseHeaders["Content-Length"] = sanitizedBytes.size.toString()
+                // Register media playlist segments & prefetch ONLY seg #0 so 100% bandwidth goes to first frame!
+                if (rawText.contains("#EXTINF:")) {
+                    prefetchExecutor.execute {
+                        registerAndPrefetchMediaPlaylist(finalPlUrl, rawText, customReferer, initialPrefetchCount = 1)
                     }
                 }
-                val sanitizedBytes = lines.joinToString("\n").toByteArray(Charsets.UTF_8)
-                responseHeaders["Content-Length"] = sanitizedBytes.size.toString()
                 ByteArrayInputStream(sanitizedBytes)
             } else {
                 response.header("Content-Length")?.let { responseHeaders["Content-Length"] = it }
                 response.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
                 val rawStream = response.body?.byteStream()
                 if (rawStream != null) {
-                    object : java.io.BufferedInputStream(rawStream, 256 * 1024) {
+                    object : java.io.BufferedInputStream(rawStream, 64 * 1024) {
                         override fun close() {
                             try { super.close() } catch (_: Exception) {}
                             try { response.close() } catch (_: Exception) {}
@@ -590,8 +1216,7 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
             "woff" -> "font/woff"
             "woff2" -> "font/woff2"
             "ttf" -> "font/ttf"
-            "mp4" -> "video/mp4"
-            "mkv" -> "video/x-matroska"
+            "mp4", "mkv" -> "video/mp4"
             "webm" -> "video/webm"
             else -> "application/octet-stream"
         }
@@ -610,7 +1235,7 @@ class CorsFreeWebViewClient(private val context: Context) : WebViewClient() {
 
     private fun buildCorsHeaders(contentType: String): Map<String, String> {
         return mapOf(
-            "Access-Control-Allow-Origin" to "*",
+            "Access-Control-Allow-Origin" to VIRTUAL_ASSET_ORIGIN,
             "Access-Control-Allow-Methods" to "GET, POST, OPTIONS, HEAD",
             "Access-Control-Allow-Headers" to "*",
             "Access-Control-Expose-Headers" to "Content-Length, Content-Range, Accept-Ranges",

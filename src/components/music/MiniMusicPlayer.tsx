@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Music2, Pause, Play, SkipForward, X } from 'lucide-react';
 import { useMusic } from '../../context/MusicContext';
-import { getRainbowGradientForTrack } from '../../utils/musicUtils';
+import { getRainbowGradientForTrack, resolveTrackArtwork } from '../../utils/musicUtils';
 
 interface MiniMusicPlayerProps {
   hasBottomNav?: boolean;
@@ -73,7 +73,7 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({
 
   const progressPct =
     duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
-  const showArt = Boolean(currentTrack.artworkUrl && !imgFailed[currentTrack.id]);
+  const effectiveArtUrl = resolveTrackArtwork(currentTrack, imgFailed[currentTrack.id]);
   const rainbowFallback = getRainbowGradientForTrack(currentTrack.id);
 
   // SVG circle progress math (radius = 15, circumference = 94.25)
@@ -102,23 +102,21 @@ export const MiniMusicPlayer: React.FC<MiniMusicPlayerProps> = ({
           <div className="absolute inset-1 rounded-full border border-white/10 pointer-events-none" />
           <div className="absolute inset-2 rounded-full border border-white/5 pointer-events-none" />
 
-          {/* Center Label / Album Cover (uses vibrant rainbow gradient fallback when no cover art) */}
+          {/* Center Label / Album Cover */}
           <div
-            className={`w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br ${rainbowFallback} flex items-center justify-center border border-white/20`}
+            className="w-9 h-9 rounded-full overflow-hidden flex items-center justify-center border border-white/20 bg-zinc-900"
           >
-            {showArt ? (
-              <img
-                src={currentTrack.artworkUrl}
-                alt={currentTrack.title}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-                onError={() =>
-                  setImgFailed((prev) => ({ ...prev, [currentTrack.id]: true }))
+            <img
+              src={effectiveArtUrl}
+              alt={currentTrack.title}
+              referrerPolicy="no-referrer"
+              className="w-full h-full object-cover"
+              onError={() => {
+                if (!imgFailed[currentTrack.id]) {
+                  setImgFailed((prev) => ({ ...prev, [currentTrack.id]: true }));
                 }
-              />
-            ) : (
-              <Music2 className="w-4 h-4 text-white drop-shadow" />
-            )}
+              }}
+            />
           </div>
         </div>
 
