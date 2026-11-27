@@ -160,6 +160,7 @@ interface InlinePlayerProps {
   onDiscoveredQualities?: (qualities: string[]) => void;
   onRequestCrossServerLanguageSwitch?: (lang: string) => void;
   userInitiatedPlayTrigger?: number;
+  onPlaybackErrorFallback?: (failedServer: 'server1' | 'server2' | 'server3', reason: string) => void;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -193,6 +194,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   onDiscoveredQualities,
   onRequestCrossServerLanguageSwitch,
   userInitiatedPlayTrigger,
+  onPlaybackErrorFallback,
 }) => {
   const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -1904,6 +1906,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               } else {
                 setIsLoading(false);
                 setPlaybackError('Video stream connection temporarily lost. Please tap Retry.');
+                onPlaybackErrorFallback?.(selectedServer || 'server1', 'Network failure');
               }
               break;
             }
@@ -1924,6 +1927,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               setIsLoading(false);
               isSwitchingSourceRef.current = false;
               setPlaybackError('Stream failed to load: ' + data.type);
+              onPlaybackErrorFallback?.(selectedServer || 'server1', 'Fatal stream error');
               break;
           }
         }
@@ -2904,6 +2908,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             }
             console.error("Video Error Details:", err ? err.code : "null", "URL:", activeVideoUrl);
             setPlaybackError(msg);
+            onPlaybackErrorFallback?.(selectedServer || 'server1', msg);
           }}
         />
         )}

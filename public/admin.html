@@ -1872,6 +1872,70 @@
                 <div id="movie-animesalt-status" style="display:none; margin-top:10px;"></div>
               </div>
 
+              <!-- ANIMETWORLD HLS ENGINE MODE TOGGLE BANNER -->
+              <div style="background:linear-gradient(135deg, rgba(6,182,212,0.18), rgba(59,130,246,0.15)); border:1px solid rgba(14,165,233,0.45); border-radius:14px; padding:16px 20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; box-shadow:0 4px 20px rgba(6,182,212,0.15);">
+                <div style="display:flex; align-items:center; gap:14px; flex:1; min-width:260px;">
+                  <div style="width:42px; height:42px; border-radius:10px; background:linear-gradient(135deg, #06B6D4, #3B82F6); display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 0 15px rgba(6,182,212,0.5);">
+                    <i class="fa-solid fa-globe" style="font-size:20px; color:#fff;"></i>
+                  </div>
+                  <div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                      <span style="font-size:15px; font-weight:800; color:#fff; letter-spacing:0.3px;">🌍 AnimeWorld HLS Engine Mode</span>
+                      <span id="animeworld-mode-badge" style="font-size:10px; font-weight:800; text-transform:uppercase; padding:2px 8px; border-radius:10px; background:rgba(255,255,255,0.1); color:#aaa; letter-spacing:0.5px;">OFF</span>
+                    </div>
+                    <p style="font-size:12px; color:var(--text-secondary); margin:3px 0 0 0; line-height:1.4;">
+                      Multi-Audio Fallback Engine for Anime. Paste watch page or master.txt stream link. Auto-extracts 720p-240p and multi-audio (JP, EN, HI, TE, TA).
+                    </p>
+                  </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px;">
+                  <span id="animeworld-toggle-status-label" style="font-size:12px; font-weight:700; color:var(--text-tertiary);">Standard Server Mode</span>
+                  <label class="switch" style="position:relative; display:inline-block; width:50px; height:26px; margin:0; cursor:pointer;">
+                    <input type="checkbox" id="animeworld-mode-toggle" onchange="toggleAnimeWorldMode(this.checked)" style="opacity:0; width:0; height:0;">
+                    <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:#374151; transition:.3s; border-radius:26px;"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- ANIMETWORLD BASE DOMAIN & SECURITY CONFIG -->
+              <div id="animeworld-base-domain-box" style="background:rgba(6,182,212,0.1); border:1px solid rgba(14,165,233,0.35); border-radius:12px; padding:12px 18px; margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:240px;">
+                  <i class="fa-solid fa-shield-halved" style="color:#38BDF8; font-size:18px;"></i>
+                  <div>
+                    <span style="font-size:13px; font-weight:800; color:#BAE6FD;">AnimeWorld Base Domain (Dynamic Domain Security)</span>
+                    <p style="font-size:11px; color:var(--text-tertiary); margin:2px 0 0 0; line-height:1.4;">
+                      If AnimeWorld changes domains (e.g. .one &rarr; .org), update this base domain. Relative paths (like <code>/episode/fullmetal-alchemist-brotherhood-1x1/</code>) will dynamically resolve against this domain!
+                    </p>
+                  </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <input type="text" id="animeworld-base-domain-input" class="input-control" value="https://watchanimeworld.one" placeholder="https://watchanimeworld.one" style="font-family:monospace; font-size:12px; height:34px; width:220px; border-color:rgba(14,165,233,0.4);">
+                  <button type="button" class="btn-primary" onclick="saveAnimeWorldBaseDomainUI()" style="height:34px; padding:0 12px; font-size:11px; font-weight:700; white-space:nowrap; display:inline-flex; align-items:center; gap:5px; background:linear-gradient(135deg, #0284C7, #06B6D4); border:none;">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Domain
+                  </button>
+                </div>
+              </div>
+
+              <!-- ANIMETWORLD SINGLE MOVIE STREAM CONTAINER -->
+              <div id="movie-animeworld-container" style="display:none; background:rgba(6,182,212,0.08); border:1px solid rgba(14,165,233,0.45); border-radius:14px; padding:18px; margin-bottom:20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                  <label class="form-label" style="font-size:12px; font-weight:800; color:#7DD3FC; margin:0; display:flex; align-items:center; gap:6px;">
+                    <i class="fa-solid fa-globe" style="color:#0EA5E9;"></i> 🌍 AnimeWorld Master Stream Link (Secondary Fallback)
+                    <span style="font-size:9px; background:rgba(14,165,233,0.3); color:#fff; border:1px solid rgba(14,165,233,0.6); padding:2px 8px; border-radius:4px; font-weight:800;">FALLBACK MULTI-AUDIO</span>
+                  </label>
+                  <div style="display:flex; gap:8px;">
+                    <button type="button" id="btn-verify-movie-animeworld" class="btn-primary" onclick="verifyAnimeWorldMovieMasterStream()" style="white-space:nowrap; padding:0 14px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, #0284C7, #06B6D4); border:none;">
+                      <i class="fa-solid fa-bolt"></i> Verify AnimeWorld
+                    </button>
+                    <button type="button" class="btn-secondary" onclick="clearMovieAnimeWorld()" title="Clear AnimeWorld" style="white-space:nowrap; padding:0 10px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                      <i class="fa-solid fa-trash-can"></i> Clear
+                    </button>
+                  </div>
+                </div>
+                <input type="text" id="movie-animeworld-url" class="input-control" placeholder="Paste AnimeWorld episode/movie watch URL or master.txt stream link..." style="font-family:monospace; font-size:12px; height:38px; border-color:rgba(14,165,233,0.4);">
+                <div id="movie-animeworld-status" style="display:none; margin-top:10px;"></div>
+              </div>
+
               <!-- SMART HLS SINGLE MOVIE STREAM CONTAINER (ACTIVE WHEN TOGGLE IS ON AND MODE IS MOVIE) -->
               <div id="movie-hls-container" style="display:none; background:var(--bg-tertiary); border:1px solid rgba(168,85,247,0.3); border-radius:14px; padding:18px; margin-bottom:20px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
@@ -2194,10 +2258,30 @@
                   </div>
 
                   <p style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:10px;">
-                    Paste multiple episode stream links or paths separated by newlines. Line 1 = Episode 1, Line 2 = Episode 2, etc. If an episode box doesn't exist yet, it will be automatically created! Relative paths like <code>/episode/gravity-falls-1x1</code> will automatically attach the saved Base Domain.
+                    Paste multiple episode stream links or paths separated by newlines. Line 1 = Episode 1, Line 2 = Episode 2, etc. If both engines are active, enter AnimeSalt in Box 1 and AnimeWorld in Box 2 to empower automatic streaming fallback!
                   </p>
 
-                  <textarea id="bulk-season-links-input" class="input-control" rows="5" placeholder="/episode/gravity-falls-1x1&#10;/episode/gravity-falls-1x2&#10;/episode/gravity-falls-1x3&#10;or full URLs..." style="font-family:monospace; font-size:12px; width:100%; border-color:rgba(168,85,247,0.4); resize:vertical; margin-bottom:12px;"></textarea>
+                  <!-- CONTAINER 1: ANIMESALT BULK BOX (Visible when AnimeSalt Mode is ON, or default mode) -->
+                  <div id="bulk-box-animesalt-wrapper" style="margin-bottom:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                      <label style="font-size:12px; font-weight:800; color:#D8B4FE; display:flex; align-items:center; gap:6px;">
+                        <i class="fa-solid fa-bolt" style="color:#A855F7;"></i> ⚡ Box 1: AnimeSalt Season Links (Primary Multi-Audio HD)
+                      </label>
+                      <span style="font-size:10px; font-family:monospace; color:#A78BFA;">Base: <span id="bulk-animesalt-domain-badge">https://animesalt.cx</span></span>
+                    </div>
+                    <textarea id="bulk-season-links-input" class="input-control" rows="4" placeholder="/episode/gravity-falls-1x1&#10;/episode/gravity-falls-1x2&#10;or full URLs..." style="font-family:monospace; font-size:12px; width:100%; border-color:rgba(168,85,247,0.4); resize:vertical;"></textarea>
+                  </div>
+
+                  <!-- CONTAINER 2: ANIMETWORLD BULK BOX (Visible when AnimeWorld Mode is ON) -->
+                  <div id="bulk-box-animeworld-wrapper" style="display:none; margin-bottom:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                      <label style="font-size:12px; font-weight:800; color:#7DD3FC; display:flex; align-items:center; gap:6px;">
+                        <i class="fa-solid fa-globe" style="color:#0EA5E9;"></i> 🌍 Box 2: AnimeWorld Season Links (Fallback Multi-Audio HD)
+                      </label>
+                      <span style="font-size:10px; font-family:monospace; color:#38BDF8;">Base: <span id="bulk-animeworld-domain-badge">https://watchanimeworld.one</span></span>
+                    </div>
+                    <textarea id="bulk-animeworld-links-input" class="input-control" rows="4" placeholder="/episode/fullmetal-alchemist-brotherhood-1x1/&#10;/episode/fullmetal-alchemist-brotherhood-1x2/&#10;or full URLs..." style="font-family:monospace; font-size:12px; width:100%; border-color:rgba(14,165,233,0.4); resize:vertical;"></textarea>
+                  </div>
 
                   <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
                     <button type="button" class="btn-primary" onclick="applyBulkEpisodeLinksToSeason()" style="height:36px; padding:0 18px; font-size:12px; font-weight:800; display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, var(--accent-purple), var(--accent-cyan)); border:none;">
@@ -6265,6 +6349,11 @@
         const movieSaltInp = document.getElementById('movie-animesalt-url');
         if (movieSaltInp) movieSaltInp.value = item.videoUrl || '';
       }
+      window.toggleAnimeWorldMode(Boolean(item.isAnimeWorld || item.animeWorldUrl || (firstSeriesEp && (firstSeriesEp.isAnimeWorld || firstSeriesEp.animeWorldUrl))));
+      if ((item.isAnimeWorld || item.animeWorldUrl) && item.type === 'movie') {
+        const movieWorldInp = document.getElementById('movie-animeworld-url');
+        if (movieWorldInp) movieWorldInp.value = item.animeWorldUrl || item.secondaryVideoUrl || '';
+      }
 
       // Video Links / Episodes
       if (item.type === 'movie') {
@@ -6840,6 +6929,224 @@
       showToast('AnimeSalt movie stream cleared');
     };
 
+    // ============================================================================
+    // 🌍 ANIMETWORLD ENGINE STATE & CONTROLLER
+    // ============================================================================
+    window.isAnimeWorldMode = false;
+
+    window.toggleAnimeWorldMode = function(enabled) {
+      window.isAnimeWorldMode = !!enabled;
+      const toggle = document.getElementById('animeworld-mode-toggle');
+      if (toggle && toggle.checked !== window.isAnimeWorldMode) {
+        toggle.checked = window.isAnimeWorldMode;
+      }
+      const badge = document.getElementById('animeworld-mode-badge');
+      const statusLabel = document.getElementById('animeworld-toggle-status-label');
+      if (badge) {
+        badge.innerText = window.isAnimeWorldMode ? 'ACTIVE' : 'OFF';
+        badge.style.background = window.isAnimeWorldMode ? 'rgba(6,182,212,0.35)' : 'rgba(255,255,255,0.1)';
+        badge.style.color = window.isAnimeWorldMode ? '#BAE6FD' : '#aaa';
+      }
+      if (statusLabel) {
+        statusLabel.innerText = window.isAnimeWorldMode ? '🌍 AnimeWorld HLS Engine Active' : 'Standard Server Mode';
+        statusLabel.style.color = window.isAnimeWorldMode ? '#38BDF8' : 'var(--text-tertiary)';
+      }
+
+      // If AnimeWorld is active, ensure Smart HLS is active
+      if (window.isAnimeWorldMode && !window.isSmartHlsMode) {
+        window.toggleSmartHlsMode(true);
+      }
+
+      window.applyHlsModeVisibility();
+
+      if (window.currentUploadMode !== 'movie') {
+        window.renderEpisodesList();
+      }
+    };
+
+    window.getAnimeWorldBaseDomain = function() {
+      let saved = (localStorage.getItem('maxplay_animeworld_base_domain') || 'https://watchanimeworld.one').trim();
+      if (!saved) saved = 'https://watchanimeworld.one';
+      return saved.replace(/\/+$/, '');
+    };
+
+    window.saveAnimeWorldBaseDomainUI = function() {
+      const inp = document.getElementById('animeworld-base-domain-input');
+      let val = inp ? inp.value.trim() : '';
+      if (!val) val = 'https://watchanimeworld.one';
+      if (!val.startsWith('http://') && !val.startsWith('https://')) {
+        val = 'https://' + val;
+      }
+      val = val.replace(/\/+$/, '');
+      localStorage.setItem('maxplay_animeworld_base_domain', val);
+      if (inp) inp.value = val;
+      try {
+        fetch('/api/animeworld-domain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseDomain: val })
+        }).catch(() => {});
+      } catch {}
+      showToast('AnimeWorld Base Domain saved: ' + val);
+    };
+
+    window.resolveAnimeWorldUrl = function(rawPathOrUrl) {
+      if (!rawPathOrUrl || typeof rawPathOrUrl !== 'string') return '';
+      const trimmed = rawPathOrUrl.trim();
+      if (/^https?:\/\//i.test(trimmed)) {
+        return trimmed;
+      }
+      const base = window.getAnimeWorldBaseDomain();
+      const path = trimmed.startsWith('/') ? trimmed : '/' + trimmed;
+      return base + path;
+    };
+
+    window.verifyAnimeWorldMovieMasterStream = async function() {
+      const inp = document.getElementById('movie-animeworld-url');
+      const statusEl = document.getElementById('movie-animeworld-status');
+      const btn = document.getElementById('btn-verify-movie-animeworld');
+      const rawInput = inp?.value.trim();
+      if (!rawInput) {
+        showToast('Please enter an AnimeWorld watch URL or master.txt stream link first!');
+        return;
+      }
+      const rawUrl = window.resolveAnimeWorldUrl(rawInput);
+      const movieDurInputVal = document.getElementById('movie-verified-duration')?.value.trim() || '';
+      const movieDurSec = (typeof window.parseDurationStringToSeconds === 'function')
+        ? (window.parseDurationStringToSeconds(movieDurInputVal, true) || 0)
+        : 0;
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+      }
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.innerHTML = '<span style="color:#38BDF8;"><i class="fa-solid fa-spinner fa-spin"></i> Reading AnimeWorld master playlist, probing qualities & audio languages...</span>';
+      }
+
+      try {
+        const result = await window.probeSingleQualityBoxSmart(rawUrl, '', movieDurSec);
+
+        if (result && result.ok) {
+          const qualities = result.qualities && result.qualities.length > 0 ? result.qualities : ['720p', '480p', '360p', '240p'];
+          const rawAudioTracks = Array.isArray(result.audioTracks)
+            ? result.audioTracks.map(a => String(a || '').trim()).filter(a => a && a.toLowerCase() !== 'default' && a.toLowerCase() !== 'default audio')
+            : [];
+          const audioTracks = rawAudioTracks.length > 0 ? rawAudioTracks : ['Japanese', 'English', 'Hindi', 'Telugu', 'Tamil'];
+
+          const permanentUrl = (result && result.correctedUrl) ? result.correctedUrl : rawUrl;
+          if (result && result.correctedUrl && inp && inp.value.trim() !== result.correctedUrl) {
+            inp.value = result.correctedUrl;
+          }
+          const qMap = {};
+          qualities.forEach(q => { qMap[q] = permanentUrl; });
+
+          const durSec = Number(result.duration) > 0 ? Number(result.duration) : (movieDurSec > 0 ? movieDurSec : 7200);
+          const bwMap = { '1080p': 3600000, '720p': 2048000, '480p': 750000, '360p': 276000, '240p': 150000 };
+          const incomingDqMap = new Map();
+          if (Array.isArray(result.downloadQualities)) {
+            result.downloadQualities.forEach(d => {
+              if (d && d.id) incomingDqMap.set(String(d.id).toLowerCase(), d);
+            });
+          }
+          const finalDq = qualities.map(q => {
+            const matched = incomingDqMap.get(String(q).toLowerCase());
+            const bw = (matched && Number(matched.bandwidth) > 0) ? Number(matched.bandwidth) : (bwMap[q] || 1000000);
+            const estMb = Math.max(15, Math.round((bw * durSec) / (8 * 1024 * 1024)));
+            const sizeMb = (matched && Number(matched.sizeMb) > 0) ? Math.round(Number(matched.sizeMb)) : estMb;
+            return {
+              id: q,
+              label: (matched && matched.label) ? matched.label : (q + (q === '720p' ? ' HD Ready' : q === '480p' ? ' Standard' : ' Data Saver')),
+              sizeMb,
+              bandwidth: bw,
+              url: permanentUrl
+            };
+          });
+
+          window.extractedMovieAnimeWorldM3u8Url = result.m3u8Url || permanentUrl;
+          window.extractedMovieAnimeWorldQualities = qualities;
+          window.extractedMovieAnimeWorldQualityLinks = qMap;
+          window.extractedMovieAnimeWorldAudioTracks = audioTracks;
+          window.extractedMovieAnimeWorldDownloadQualities = finalDq;
+
+          // If in pure AnimeWorld mode, also set primary extracted movie fields
+          if (window.isAnimeWorldMode && !window.isAnimeSaltMode) {
+            window.extractedMovieM3u8Url = result.m3u8Url || permanentUrl;
+            window.extractedMovieQualities = qualities;
+            window.extractedMovieQualityLinks = qMap;
+            window.extractedMovieAudioTracks = audioTracks;
+            window.extractedMovieVerifiedDownloadLanguages = audioTracks;
+            window.extractedMovieDownloadQualities = finalDq;
+          }
+
+          if (result.duration && result.duration > 0) {
+            window.movieTotalDuration = result.duration;
+            const h = Math.floor(result.duration / 3600);
+            const m = Math.floor((result.duration % 3600) / 60);
+            const s = (result.duration % 60).toString().padStart(2, '0');
+            const formattedDur = h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s}` : `${m}:${s}`;
+            const durInp = document.getElementById('movie-verified-duration');
+            if (durInp) durInp.value = formattedDur;
+            const durDisplay = document.getElementById('movie-total-duration-text');
+            if (durDisplay) {
+              durDisplay.innerHTML = `<span style="color:#10B981; font-weight:900;"><i class="fa-solid fa-circle-check"></i> ${formattedDur}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${result.duration}s)</span>`;
+            }
+          }
+
+          if (statusEl) {
+            statusEl.innerHTML = `
+              <div style="background:rgba(6,182,212,0.12); border:1px solid rgba(14,165,233,0.4); border-radius:8px; padding:10px 12px; margin-top:8px;">
+                <div style="color:#38BDF8; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+                  <span><i class="fa-solid fa-circle-check"></i> AnimeWorld Verified (Qualities, MB & Languages)</span>
+                  <span style="font-size:10px; background:rgba(6,182,212,0.2); color:#38BDF8; padding:2px 8px; border-radius:99px;">${result.engine || 'ANIMETWORLD'}</span>
+                </div>
+                <div style="font-size:11px; color:#D1D5DB; margin-top:4px; line-height:1.5;">
+                  <b>Audio Languages (${audioTracks.length}):</b> ${audioTracks.join(', ')}<br/>
+                  <b>Qualities (${qualities.length}):</b> ${qualities.join(', ')}<br/>
+                  <b>Source Link:</b> <span style="font-family:monospace; color:#7DD3FC;">${permanentUrl}</span>
+                </div>
+              </div>
+            `;
+          }
+          showToast('AnimeWorld Verified! ' + finalDq.length + ' qualities & ' + audioTracks.length + ' languages ready.');
+        } else {
+          if (statusEl) {
+            const errMsg = (result && result.error) || 'Stream unreachable or extractor blocked';
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+              ? window.renderAdminVerifyErrorHtml('Movie AnimeWorld Verification Failed', errMsg, 'verifyAnimeWorldMovieMasterStream()')
+              : `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Verification failed: ${errMsg}</span>`;
+          }
+        }
+      } catch (err) {
+        if (statusEl) {
+          const errMsg = (err && err.message) || 'Stream extraction network error';
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+            ? window.renderAdminVerifyErrorHtml('Movie AnimeWorld Verification Error', errMsg, 'verifyAnimeWorldMovieMasterStream()')
+            : `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Error: ${errMsg}</span>`;
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-bolt"></i> Verify AnimeWorld';
+        }
+      }
+    };
+
+    window.clearMovieAnimeWorld = function() {
+      const inp = document.getElementById('movie-animeworld-url');
+      if (inp) inp.value = '';
+      const statusEl = document.getElementById('movie-animeworld-status');
+      if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
+      window.extractedMovieAnimeWorldQualityLinks = {};
+      window.extractedMovieAnimeWorldQualities = [];
+      window.extractedMovieAnimeWorldDownloadQualities = [];
+      window.extractedMovieAnimeWorldAudioTracks = [];
+      showToast('AnimeWorld movie stream cleared');
+    };
+
     window.toggleSmartHlsMode = function(enabled) {
       window.isSmartHlsMode = !!enabled;
       const toggle = document.getElementById('hls-mode-toggle');
@@ -6871,28 +7178,61 @@
       const movieNormal = document.getElementById('movie-links-container');
       const movieHls = document.getElementById('movie-hls-container');
       const movieAnimeSalt = document.getElementById('movie-animesalt-container');
+      const movieAnimeWorld = document.getElementById('movie-animeworld-container');
       const seriesContainer = document.getElementById('series-episodes-container');
 
       if (window.currentUploadMode === 'movie') {
         if (seriesContainer) seriesContainer.style.display = 'none';
-        if (window.isAnimeSaltMode) {
+        const isAnyAnime = window.isAnimeSaltMode || window.isAnimeWorldMode;
+        if (isAnyAnime) {
           if (movieNormal) movieNormal.style.display = 'none';
           if (movieHls) movieHls.style.display = 'none';
-          if (movieAnimeSalt) movieAnimeSalt.style.display = 'block';
+          if (movieAnimeSalt) movieAnimeSalt.style.display = window.isAnimeSaltMode ? 'block' : 'none';
+          if (movieAnimeWorld) movieAnimeWorld.style.display = window.isAnimeWorldMode ? 'block' : 'none';
         } else if (window.isSmartHlsMode) {
           if (movieNormal) movieNormal.style.display = 'none';
           if (movieHls) movieHls.style.display = 'block';
           if (movieAnimeSalt) movieAnimeSalt.style.display = 'none';
+          if (movieAnimeWorld) movieAnimeWorld.style.display = 'none';
         } else {
           if (movieNormal) movieNormal.style.display = 'block';
           if (movieHls) movieHls.style.display = 'none';
           if (movieAnimeSalt) movieAnimeSalt.style.display = 'none';
+          if (movieAnimeWorld) movieAnimeWorld.style.display = 'none';
         }
       } else {
         if (movieNormal) movieNormal.style.display = 'none';
         if (movieHls) movieHls.style.display = 'none';
         if (movieAnimeSalt) movieAnimeSalt.style.display = 'none';
+        if (movieAnimeWorld) movieAnimeWorld.style.display = 'none';
         if (seriesContainer) seriesContainer.style.display = 'block';
+      }
+
+      // Governs the bulk containers
+      const bulkSaltWrapper = document.getElementById('bulk-box-animesalt-wrapper');
+      const bulkWorldWrapper = document.getElementById('bulk-box-animeworld-wrapper');
+      
+      if (bulkSaltWrapper && bulkWorldWrapper) {
+        if (window.isAnimeSaltMode && window.isAnimeWorldMode) {
+          bulkSaltWrapper.style.display = 'block';
+          bulkWorldWrapper.style.display = 'block';
+        } else if (window.isAnimeWorldMode && !window.isAnimeSaltMode) {
+          bulkSaltWrapper.style.display = 'none';
+          bulkWorldWrapper.style.display = 'block';
+        } else {
+          bulkSaltWrapper.style.display = 'block';
+          bulkWorldWrapper.style.display = 'none';
+        }
+      }
+
+      // Update domain badges
+      const saltBadge = document.getElementById('bulk-animesalt-domain-badge');
+      if (saltBadge && typeof window.getAnimeSaltBaseDomain === 'function') {
+        saltBadge.innerText = window.getAnimeSaltBaseDomain();
+      }
+      const worldBadge = document.getElementById('bulk-animeworld-domain-badge');
+      if (worldBadge && typeof window.getAnimeWorldBaseDomain === 'function') {
+        worldBadge.innerText = window.getAnimeWorldBaseDomain();
       }
     };
 
@@ -9409,6 +9749,228 @@
       showToast(`Episode ${epIdx + 1} AnimeSalt stream cleared`, 'info');
     };
 
+    window.renderEpisodeAnimeWorldStatusHtml = function(ep, epIdx, epWorldUrl, engineLabel) {
+      if (!ep) return '';
+      const dqs = Array.isArray(ep.animeWorldDownloadQualities) && ep.animeWorldDownloadQualities.length > 0
+        ? ep.animeWorldDownloadQualities
+        : (Array.isArray(ep.downloadQualities) ? ep.downloadQualities : []);
+      const langs = Array.isArray(ep.animeWorldAudioTracks) && ep.animeWorldAudioTracks.length > 0
+        ? ep.animeWorldAudioTracks
+        : (Array.isArray(ep.audioTracks) && ep.audioTracks.length > 0 ? ep.audioTracks : ['Japanese', 'English', 'Hindi', 'Telugu', 'Tamil']);
+      if (dqs.length === 0 && langs.length === 0) return '';
+      const sourceUrl = epWorldUrl || ep.secondaryVideoUrl || ep.secondaryServerUrl || '';
+      const dlRowsHtml = dqs.map((q, idx) => {
+        const sizeMb = Math.max(1, Math.round(Number(q.sizeMb || 0)));
+        const sizeDisplay = sizeMb >= 1000 ? `${(sizeMb / 1024).toFixed(2)} GB` : `${sizeMb} MB`;
+        return `
+          <div style="display:grid; grid-template-columns: 78px 135px 1fr; gap:6px; align-items:center; background:rgba(0,0,0,0.3); padding:5px 8px; border-radius:6px; margin-bottom:4px; border:1px solid rgba(14,165,233,0.2);">
+            <span style="font-weight:800; color:#38BDF8; font-size:11px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+            <div style="display:flex; align-items:center; gap:4px;">
+              <input type="number" class="input-control ep-world-dl-size-input" data-quality="${q.id}" data-ep="${epIdx}" data-idx="${idx}" value="${sizeMb}" style="height:24px; width:64px; padding:2px 6px; font-size:10px; text-align:right;" oninput="updateEpisodeDownloadSize(${epIdx}, ${idx}, this.value)">
+              <span style="font-size:10px; color:#38BDF8; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+            </div>
+            <input type="text" class="input-control" value="${q.url || sourceUrl}" readonly style="height:24px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || sourceUrl}">
+          </div>
+        `;
+      }).join('');
+      return `
+        <div style="background:rgba(6,182,212,0.12); border:1px solid rgba(14,165,233,0.4); border-radius:8px; padding:10px 12px; margin-top:8px;">
+          <div style="color:#38BDF8; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+            <span><i class="fa-solid fa-circle-check"></i> AnimeWorld Master Stream Verified Successfully!</span>
+            ${engineLabel ? `<span style="font-size:9px; background:rgba(6,182,212,0.18); color:#38BDF8; padding:1px 6px; border-radius:99px;">${engineLabel}</span>` : ''}
+          </div>
+          <div style="font-size:11px; color:#D1D5DB; margin-top:4px; line-height:1.5; margin-bottom:6px;">
+            <b>Audio Tracks (${langs.length}):</b> ${langs.join(', ')}<br/>
+            <b>Source Link:</b> <span style="font-family:monospace; color:#7DD3FC;">${sourceUrl}</span>
+          </div>
+          <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:6px;">
+            ${dlRowsHtml}
+          </div>
+        </div>
+      `;
+    };
+
+    window.verifyEpisodeAnimeWorld = async function(btn, epIdx) {
+      const card = btn ? btn.closest('.episode-card') : document.querySelectorAll('#season-episodes-list .episode-card')[epIdx];
+      if (!card) return false;
+      const effBtn = btn || card.querySelector('.btn-ep-verify-animeworld') || { disabled: false, innerHTML: '' };
+      const inp = card.querySelector('.ep-animeworld-input');
+      const statusEl = card.querySelector('.ep-animeworld-status');
+      const rawInput = inp?.value.trim();
+      if (!rawInput) {
+        showToast('Please enter an AnimeWorld watch URL or master stream link first!');
+        if (statusEl) {
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = window.renderAdminVerifyErrorHtml('Missing Stream URL', 'Please enter a valid episode link or path before verifying.', `verifyEpisodeAnimeWorld(this.closest('.episode-card')?.querySelector('.btn-ep-verify-animeworld'), ${epIdx})`);
+        }
+        return false;
+      }
+      const rawUrl = window.resolveAnimeWorldUrl(rawInput);
+
+      effBtn.disabled = true;
+      effBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.innerHTML = '<span style="color:#38BDF8;"><i class="fa-solid fa-spinner fa-spin"></i> Reading AnimeWorld master playlist, qualities &amp; audio tracks...</span>';
+      }
+
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      const ep = activeSeason?.episodes?.[epIdx];
+      const cardDurSec = typeof window.parseDurationStringToSeconds === 'function'
+        ? window.parseDurationStringToSeconds(card.querySelector('.ep-input-dur')?.value || ep?.duration || 0, false)
+        : Number(ep?.duration || 0);
+
+      try {
+        let result = null;
+        let lastErr = '';
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt > 0) {
+            if (statusEl) {
+              statusEl.innerHTML = `<span style="color:#FBBF24;"><i class="fa-solid fa-rotate-right fa-spin"></i> Retrying verification (attempt 2/2)...</span>`;
+            }
+            await new Promise(r => setTimeout(r, 900));
+          }
+          try {
+            result = await window.probeSingleQualityBoxSmart(rawUrl, '', cardDurSec);
+            if (result && result.ok) break;
+            lastErr = (result && result.error) || 'Stream extraction returned empty result';
+          } catch (probeErr) {
+            lastErr = (probeErr && probeErr.message) || 'Network or extractor error';
+          }
+        }
+
+        if (result && result.ok) {
+          if (!ep) return false;
+          delete ep._lastVerifyError;
+          const permanentUrl = (result && result.correctedUrl) ? result.correctedUrl : rawUrl;
+          if (result && result.correctedUrl && inp && inp.value.trim() !== result.correctedUrl) {
+            inp.value = result.correctedUrl;
+          }
+          const rawQuals = result.qualities && result.qualities.length > 0 ? result.qualities : ['720p', '480p', '360p', '240p'];
+          const qualities = Array.from(new Set([
+            ...rawQuals,
+            ...((Array.isArray(result.downloadQualities) ? result.downloadQualities.map(d => d && d.id).filter(Boolean) : []))
+          ])).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
+          const audioTracks = result.audioTracks && result.audioTracks.length > 0
+            ? result.audioTracks
+            : ['Japanese', 'English', 'Hindi', 'Telugu', 'Tamil'];
+
+          const qMap = {};
+          qualities.forEach(q => { qMap[q] = permanentUrl; });
+
+          const durSec = Number(result.duration) > 0 ? Number(result.duration) : (cardDurSec > 0 ? cardDurSec : 1440);
+          const bwMap = { '1080p': 3600000, '720p': 2048000, '480p': 750000, '360p': 276000, '240p': 150000 };
+          const incomingDqMap = new Map();
+          if (Array.isArray(result.downloadQualities)) {
+            result.downloadQualities.forEach(d => {
+              if (d && d.id) incomingDqMap.set(String(d.id).toLowerCase(), d);
+            });
+          }
+          const finalDq = qualities.map(q => {
+            const matched = incomingDqMap.get(String(q).toLowerCase());
+            const bw = (matched && Number(matched.bandwidth) > 0) ? Number(matched.bandwidth) : (bwMap[q] || 1000000);
+            const estMb = Math.max(10, Math.round((bw * durSec) / (8 * 1024 * 1024)));
+            const sizeMb = (matched && Number(matched.sizeMb) > 0) ? Math.round(Number(matched.sizeMb)) : estMb;
+            return {
+              id: q,
+              label: (matched && matched.label) ? matched.label : (q + (q === '720p' ? ' HD Ready' : q === '480p' ? ' Standard' : ' Data Saver')),
+              sizeMb,
+              bandwidth: bw,
+              url: permanentUrl
+            };
+          });
+
+          ep.isAnimeWorld = true;
+          ep.isSmartHls = true;
+          ep.secondaryVideoUrl = permanentUrl;
+          ep.secondaryServerUrl = permanentUrl;
+          ep.secondaryQualityLinks = qMap;
+          ep.animeWorldQualityLinks = qMap;
+          ep.animeWorldAudioTracks = audioTracks;
+          ep.animeWorldDownloadQualities = finalDq;
+
+          // If AnimeWorld alone is used without AnimeSalt, promote to primary fields
+          if (!ep.videoUrl && window.isAnimeWorldMode && !window.isAnimeSaltMode) {
+            ep.videoUrl = permanentUrl;
+            ep.qualities = qualities;
+            ep.qualityLinks = qMap;
+            ep.audioTracks = audioTracks;
+            ep.verifiedDownloadLanguages = audioTracks;
+            ep.downloadAudioTracks = audioTracks;
+            ep.downloadQualities = finalDq;
+          }
+
+          if (result.duration && Number(result.duration) > 0) {
+            ep.duration = Number(result.duration);
+            const mm = Math.floor(ep.duration / 60);
+            const ss = (ep.duration % 60).toString().padStart(2, '0');
+            ep.verifiedDuration = `${mm}:${ss}`;
+            const durInp = card.querySelector('.ep-input-dur');
+            if (durInp) durInp.value = `${mm}:${ss}`;
+            const durTxt = card.querySelector('.ep-total-duration-text');
+            if (durTxt) {
+              durTxt.innerHTML = `<span style="color:#10B981; font-weight:900; display:inline-flex; align-items:center; gap:6px;"><i class="fa-solid fa-circle-check"></i> ${mm}:${ss}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${ep.duration}s)</span>`;
+            }
+          }
+
+          if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = window.renderEpisodeAnimeWorldStatusHtml(ep, epIdx, permanentUrl, result.engine || 'ANIMETWORLD');
+          }
+          showToast('Episode ' + (epIdx + 1) + ': AnimeWorld Verified (' + finalDq.length + ' qualities, ' + audioTracks.length + ' languages)!');
+          return true;
+        } else {
+          const reason = lastErr || (result && result.error) || 'Stream unreachable or blocked upstream';
+          if (ep) ep._lastVerifyError = reason;
+          if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = window.renderAdminVerifyErrorHtml(
+              `Episode ${epIdx + 1} AnimeWorld Verification Failed`,
+              reason,
+              `verifyEpisodeAnimeWorld(this.closest('.episode-card')?.querySelector('.btn-ep-verify-animeworld'), ${epIdx})`
+            );
+          }
+          return false;
+        }
+      } catch (err) {
+        const reason = (err && err.message) || 'Unexpected verification error';
+        if (ep) ep._lastVerifyError = reason;
+        if (statusEl) {
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = window.renderAdminVerifyErrorHtml(
+            `Episode ${epIdx + 1} AnimeWorld Error`,
+            reason,
+            `verifyEpisodeAnimeWorld(this.closest('.episode-card')?.querySelector('.btn-ep-verify-animeworld'), ${epIdx})`
+          );
+        }
+        return false;
+      } finally {
+        effBtn.disabled = false;
+        effBtn.innerHTML = '<i class="fa-solid fa-bolt"></i> Verify AnimeWorld';
+      }
+    };
+
+    window.clearEpisodeAnimeWorld = function(btn, epIdx) {
+      const card = btn.closest('.episode-card');
+      if (!card) return;
+      const inp = card.querySelector('.ep-animeworld-input');
+      if (inp) inp.value = '';
+      const statusEl = card.querySelector('.ep-animeworld-status');
+      if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (activeSeason && activeSeason.episodes[epIdx]) {
+        delete activeSeason.episodes[epIdx].isAnimeWorld;
+        activeSeason.episodes[epIdx].secondaryVideoUrl = '';
+        activeSeason.episodes[epIdx].secondaryServerUrl = '';
+        activeSeason.episodes[epIdx].secondaryQualityLinks = {};
+        activeSeason.episodes[epIdx].animeWorldQualityLinks = {};
+        activeSeason.episodes[epIdx].animeWorldAudioTracks = [];
+        activeSeason.episodes[epIdx].animeWorldDownloadQualities = [];
+      }
+      showToast(`Episode ${epIdx + 1} AnimeWorld stream cleared`, 'info');
+    };
+
     window.applyBulkEpisodeLinksToSeason = function() {
       if (typeof syncEpisodesFromDOM === 'function') syncEpisodesFromDOM();
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
@@ -9416,49 +9978,77 @@
         showToast('No active season found!');
         return;
       }
-      const bulkInput = document.getElementById('bulk-season-links-input');
-      const text = bulkInput ? bulkInput.value : '';
-      const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-      if (lines.length === 0) {
-        showToast('Please paste at least one episode link or path into the bulk box!');
+
+      const saltInput = document.getElementById('bulk-season-links-input');
+      const worldInput = document.getElementById('bulk-animeworld-links-input');
+
+      const saltLines = (saltInput && saltInput.value)
+        ? saltInput.value.split('\n').map(l => l.trim()).filter(l => l.length > 0)
+        : [];
+      const worldLines = (worldInput && worldInput.value && window.isAnimeWorldMode)
+        ? worldInput.value.split('\n').map(l => l.trim()).filter(l => l.length > 0)
+        : [];
+
+      const totalLines = Math.max(saltLines.length, worldLines.length);
+      if (totalLines === 0) {
+        showToast('Please paste at least one episode link or path into the active bulk box!');
         return;
       }
 
       if (!activeSeason.episodes) activeSeason.episodes = [];
       const posterUrl = document.getElementById('up-poster')?.value || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800';
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const fullUrl = (typeof window.resolveAnimeSaltUrl === 'function') ? window.resolveAnimeSaltUrl(line) : line;
+      for (let i = 0; i < totalLines; i++) {
+        const rawSalt = saltLines[i] || '';
+        const rawWorld = worldLines[i] || '';
+
+        const saltUrl = rawSalt ? (typeof window.resolveAnimeSaltUrl === 'function' ? window.resolveAnimeSaltUrl(rawSalt) : rawSalt) : '';
+        const worldUrl = rawWorld ? (typeof window.resolveAnimeWorldUrl === 'function' ? window.resolveAnimeWorldUrl(rawWorld) : rawWorld) : '';
         const epNum = i + 1;
 
-        if (activeSeason.episodes[i]) {
-          const ep = activeSeason.episodes[i];
-          ep.videoUrl = fullUrl;
-          ep.isAnimeSalt = true;
-          ep.isSmartHls = true;
-          if (!ep.qualityLinks) ep.qualityLinks = {};
-          ep.qualityLinks['1080p'] = fullUrl;
-        } else {
-          // Create new episode card
-          activeSeason.episodes.push({
+        let ep = activeSeason.episodes[i];
+        if (!ep) {
+          ep = {
             id: 'ep-' + Date.now() + '-' + epNum,
             episodeNumber: epNum,
             title: 'Episode ' + epNum,
             duration: 1440,
             thumbnailUrl: posterUrl,
             videoSources: {},
-            videoLinks: [],
-            isAnimeSalt: true,
-            isSmartHls: true,
-            videoUrl: fullUrl,
-            qualityLinks: { '1080p': fullUrl }
-          });
+            videoLinks: []
+          };
+          activeSeason.episodes.push(ep);
+        }
+
+        // Apply AnimeSalt if line provided or in pure AnimeSalt mode
+        if (saltUrl) {
+          ep.videoUrl = saltUrl;
+          ep.isAnimeSalt = true;
+          ep.isSmartHls = true;
+          if (!ep.qualityLinks) ep.qualityLinks = {};
+          ep.qualityLinks['1080p'] = saltUrl;
+        }
+
+        // Apply AnimeWorld if line provided or in pure AnimeWorld mode
+        if (worldUrl) {
+          ep.secondaryVideoUrl = worldUrl;
+          ep.secondaryServerUrl = worldUrl;
+          ep.isAnimeWorld = true;
+          ep.isSmartHls = true;
+          if (!ep.secondaryQualityLinks) ep.secondaryQualityLinks = {};
+          ep.secondaryQualityLinks['720p'] = worldUrl;
+          
+          // If AnimeWorld alone is used without AnimeSalt, promote worldUrl to primary
+          if (!saltUrl && window.isAnimeWorldMode && !window.isAnimeSaltMode) {
+            ep.videoUrl = worldUrl;
+            if (!ep.qualityLinks) ep.qualityLinks = {};
+            ep.qualityLinks['720p'] = worldUrl;
+          }
         }
       }
 
       renderEpisodesList();
-      showToast(`Applied ${lines.length} episode links to ${activeSeason.seasonTitle || ('Season ' + (window.currentSeasonIdx + 1))}!`);
+      showToast(`Applied ${totalLines} episode links (Salt: ${saltLines.length}, World: ${worldLines.length}) to ${activeSeason.seasonTitle || ('Season ' + (window.currentSeasonIdx + 1))}!`);
     };
 
     window.renderBulkVerifyErrorSummary = function(failedItems) {
@@ -9518,18 +10108,41 @@
       try {
         const animeBtn = card.querySelector('.btn-ep-verify-animesalt') || card.querySelector('button[onclick*="verifyEpisodeAnimeSalt"]');
         const epInp = card.querySelector('.ep-animesalt-input');
+        const worldBtn = card.querySelector('.btn-ep-verify-animeworld') || card.querySelector('button[onclick*="verifyEpisodeAnimeWorld"]');
+        const worldInp = card.querySelector('.ep-animeworld-input');
         const s1Btn = card.querySelector('.btn-ep-verify-s1') || card.querySelector('button[onclick*="testAndExtractEpisodeStream"]');
         const s2Btn = card.querySelector('.btn-ep-verify-s2') || card.querySelector('button[onclick*="testAndExtractEpisodeSecondaryStream"]');
         const s3Btn = card.querySelector('.btn-ep-verify-s3') || card.querySelector('button[onclick*="testAndExtractEpisodeTertiaryStream"]');
+
+        let saltAttempted = false;
+        let saltSuccess = true;
+        let worldAttempted = false;
+        let worldSuccess = true;
 
         if (window.isAnimeSaltMode || (animeBtn && epInp)) {
           const hasUrl = Boolean(epInp && epInp.value.trim());
           if (hasUrl && animeBtn && typeof window.verifyEpisodeAnimeSalt === 'function') {
             attempted = true;
+            saltAttempted = true;
             if (statusLabelEl) statusLabelEl.innerText = `Episode ${epIdx + 1}: Verifying AnimeSalt Master stream...`;
-            success = Boolean(await window.verifyEpisodeAnimeSalt(animeBtn, epIdx));
-            if (!success) reason = ep._lastVerifyError || 'AnimeSalt extractor failed or timed out';
+            saltSuccess = Boolean(await window.verifyEpisodeAnimeSalt(animeBtn, epIdx));
+            if (!saltSuccess) reason = ep._lastVerifyError || 'AnimeSalt extractor failed or timed out';
           }
+        }
+
+        if (window.isAnimeWorldMode || (worldBtn && worldInp)) {
+          const hasWorldUrl = Boolean(worldInp && worldInp.value.trim());
+          if (hasWorldUrl && worldBtn && typeof window.verifyEpisodeAnimeWorld === 'function') {
+            attempted = true;
+            worldAttempted = true;
+            if (statusLabelEl) statusLabelEl.innerText = `Episode ${epIdx + 1}: Verifying AnimeWorld Master stream...`;
+            worldSuccess = Boolean(await window.verifyEpisodeAnimeWorld(worldBtn, epIdx));
+            if (!worldSuccess) reason = (reason ? reason + ' | ' : '') + (ep._lastVerifyError || 'AnimeWorld extractor failed or timed out');
+          }
+        }
+
+        if (saltAttempted || worldAttempted) {
+          success = (saltAttempted ? saltSuccess : true) && (worldAttempted ? worldSuccess : true);
         } else {
           const hasS1 = Array.from(card.querySelectorAll('.ep-s1-q-input')).some(inp => {
             const row = inp.closest('.server-q-row');
@@ -10576,7 +11189,39 @@
             }
             if (hlsInp) hlsInp.value = masterUrl;
           }
-        } else if (window.isSmartHlsMode) {
+        }
+
+        if (window.isAnimeWorldMode) {
+          const animeWorldInp = card.querySelector('.ep-animeworld-input');
+          const rawVal = animeWorldInp ? window.sanitizeAdminStreamUrl(animeWorldInp.value) : (ep.secondaryVideoUrl || ep.secondaryServerUrl || '');
+          const worldUrl = (rawVal && typeof window.resolveAnimeWorldUrl === 'function')
+            ? window.resolveAnimeWorldUrl(rawVal)
+            : rawVal;
+          if (animeWorldInp && animeWorldInp.value !== rawVal) animeWorldInp.value = rawVal;
+
+          if (worldUrl) {
+            ep.isAnimeWorld = true;
+            ep.isSmartHls = true;
+            ep.secondaryVideoUrl = worldUrl;
+            ep.secondaryServerUrl = worldUrl;
+            const prevWorldQuals = (ep.animeWorldQualityLinks && Object.keys(ep.animeWorldQualityLinks).length > 0)
+              ? Object.keys(ep.animeWorldQualityLinks)
+              : ['720p', '480p', '360p', '240p'];
+            const nextWorldQMap = {};
+            prevWorldQuals.forEach(q => { nextWorldQMap[q] = worldUrl; });
+            ep.secondaryQualityLinks = nextWorldQMap;
+            ep.animeWorldQualityLinks = nextWorldQMap;
+
+            // If AnimeWorld alone is used without AnimeSalt, promote to primary fields
+            if (!ep.videoUrl && window.isAnimeWorldMode && !window.isAnimeSaltMode) {
+              ep.videoUrl = worldUrl;
+              ep.qualityLinks = nextWorldQMap;
+              if (hlsInp) hlsInp.value = worldUrl;
+            }
+          }
+        }
+
+        if (!window.isAnimeSaltMode && !window.isAnimeWorldMode && window.isSmartHlsMode) {
           const s1Links = {};
           card.querySelectorAll('.ep-s1-q-input').forEach(qInp => {
             const row = qInp.closest('.server-q-row');
@@ -11047,7 +11692,37 @@
                   </div>
                 </div>
               `;
-            })() : window.isSmartHlsMode ? (() => {
+            })() : ''}
+
+            ${window.isAnimeWorldMode ? (() => {
+              const epWorldUrl = ep.secondaryVideoUrl || ep.secondaryServerUrl || (ep.secondaryQualityLinks && Object.values(ep.secondaryQualityLinks)[0]) || '';
+              return `
+                <div class="form-group" style="background:rgba(6,182,212,0.1); padding:14px; border-radius:12px; border:1px solid rgba(14,165,233,0.45); margin-top:10px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                    <label class="form-label" style="font-size:12px; font-weight:800; color:#7DD3FC; margin:0; display:flex; align-items:center; gap:6px;">
+                      <i class="fa-solid fa-globe" style="color:#0EA5E9;"></i> 🌍 AnimeWorld Master Stream Link (Secondary / Fallback)
+                      <span style="font-size:9px; background:rgba(14,165,233,0.3); color:#fff; border:1px solid rgba(14,165,233,0.6); padding:2px 8px; border-radius:4px; font-weight:800;">AUTO MULTI-AUDIO</span>
+                    </label>
+                    <div style="display:flex; gap:8px;">
+                      <button type="button" class="btn-primary btn-ep-verify-animeworld" onclick="verifyEpisodeAnimeWorld(this, ${epIdx})" style="white-space:nowrap; padding:0 14px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, #0284C7, #06B6D4); border:none;">
+                        <i class="fa-solid fa-bolt"></i> Verify AnimeWorld
+                      </button>
+                      <button type="button" class="btn-secondary" onclick="clearEpisodeAnimeWorld(this, ${epIdx})" title="Clear AnimeWorld" style="white-space:nowrap; padding:0 10px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                        <i class="fa-solid fa-trash-can"></i>
+                      </button>
+                    </div>
+                  </div>
+                  <input type="text" class="input-control ep-animeworld-input" value="${epWorldUrl}" placeholder="Paste AnimeWorld episode URL or master.txt stream link..." onchange="syncEpisodesFromDOM()" style="font-family:monospace; font-size:12px; height:36px; border-color:rgba(14,165,233,0.4);">
+                  <div class="ep-animeworld-status" style="${(ep.isAnimeWorld && ((ep.animeWorldDownloadQualities && ep.animeWorldDownloadQualities.length > 0) || (ep.animeWorldAudioTracks && ep.animeWorldAudioTracks.length > 0))) ? 'display:block;' : 'display:none;'} margin-top:8px;">
+                    ${(ep.isAnimeWorld && ((ep.animeWorldDownloadQualities && ep.animeWorldDownloadQualities.length > 0) || (ep.animeWorldAudioTracks && ep.animeWorldAudioTracks.length > 0)) && typeof window.renderEpisodeAnimeWorldStatusHtml === 'function')
+                      ? window.renderEpisodeAnimeWorldStatusHtml(ep, epIdx, epWorldUrl, 'ANIMETWORLD')
+                      : ''}
+                  </div>
+                </div>
+              `;
+            })() : ''}
+
+            ${(!window.isAnimeSaltMode && !window.isAnimeWorldMode && window.isSmartHlsMode) ? (() => {
               const s1Candidates = [
                 ep.qualityLinks,
                 ep.videoSources?.Default,
@@ -11135,7 +11810,7 @@
                 </div>
               </div>
               `;
-            })() : `
+            })() : (!window.isAnimeSaltMode && !window.isAnimeWorldMode) ? `
               <div style="margin-top:4px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div style="font-size:13px; font-weight:800; color:var(--text-secondary);"><i class="fa-solid fa-play"></i> Main Video Links (Part 1)</div>
@@ -11152,7 +11827,7 @@
                   <i class="fa-solid fa-plus"></i> Add Splitted Part to Episode
                 </button>
               </div>
-            `}
+            ` : ''}
 
             <div style="margin-top: 10px; background: rgba(255,255,255,0.02); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
               <div class="ep-total-duration-text" style="font-size: 12px; font-weight: 700; color: var(--text-tertiary);">
@@ -11889,6 +12564,41 @@
                 rawDoc.audioTracks = verifiedMovieLangs;
               }
               rawDoc.videoLinks = [rawDoc.videoUrl];
+            }
+          }
+          if (window.isAnimeWorldMode) {
+            const rawAnimeWorldMovieInput = window.sanitizeAdminStreamUrl(document.getElementById('movie-animeworld-url')?.value || '');
+            const animeWorldMovieUrl = (rawAnimeWorldMovieInput && typeof window.resolveAnimeWorldUrl === 'function')
+              ? window.resolveAnimeWorldUrl(rawAnimeWorldMovieInput)
+              : rawAnimeWorldMovieInput;
+            if (animeWorldMovieUrl) {
+              rawDoc.animeWorldUrl = animeWorldMovieUrl;
+              rawDoc.secondaryVideoUrl = animeWorldMovieUrl;
+              rawDoc.isAnimeWorld = true;
+              if (window.extractedMovieAnimeWorldQualityLinks && Object.keys(window.extractedMovieAnimeWorldQualityLinks).length > 0) {
+                const qMapPermanent = {};
+                Object.keys(window.extractedMovieAnimeWorldQualityLinks).forEach(q => {
+                  qMapPermanent[q] = animeWorldMovieUrl;
+                });
+                rawDoc.animeWorldQualityLinks = qMapPermanent;
+                rawDoc.secondaryQualityLinks = qMapPermanent;
+              } else {
+                rawDoc.animeWorldQualityLinks = { '720p': animeWorldMovieUrl };
+                rawDoc.secondaryQualityLinks = { '720p': animeWorldMovieUrl };
+              }
+              const verifiedWorldLangs = (window.extractedMovieAnimeWorldVerifiedDownloadLanguages && window.extractedMovieAnimeWorldVerifiedDownloadLanguages.length > 0)
+                ? window.extractedMovieAnimeWorldVerifiedDownloadLanguages
+                : (window.extractedMovieAnimeWorldAudioTracks && window.extractedMovieAnimeWorldAudioTracks.length > 0 ? window.extractedMovieAnimeWorldAudioTracks : ['Japanese', 'English', 'Hindi', 'Telugu', 'Tamil']);
+              rawDoc.animeWorldAudioTracks = verifiedWorldLangs;
+              if (!rawDoc.videoUrl) {
+                rawDoc.videoUrl = animeWorldMovieUrl;
+                rawDoc.isSmartHls = true;
+                rawDoc.qualityLinks = rawDoc.animeWorldQualityLinks;
+                rawDoc.verifiedDownloadLanguages = verifiedWorldLangs;
+                rawDoc.downloadAudioTracks = verifiedWorldLangs;
+                rawDoc.audioTracks = verifiedWorldLangs;
+                rawDoc.videoLinks = [animeWorldMovieUrl];
+              }
             }
           }
           // Box 2 (Streamtape, #movie-secondary-hls-url / .movie-s2-q-input) -> canonical Firestore tertiary* schema

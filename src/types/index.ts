@@ -70,6 +70,12 @@ export interface ContentItem {
   secondaryVideoUrl?: string;
   secondaryServerUrl?: string;
   isAnimeSalt?: boolean;
+  isAnimeWorld?: boolean;
+  animeWorldUrl?: string;
+  animeWorldBaseDomain?: string;
+  animeWorldQualityLinks?: Record<string, string>;
+  animeWorldDownloadQualities?: any[];
+  animeWorldAudioTracks?: string[];
   tertiaryVideoUrl?: string;
   tertiaryServerUrl?: string;
   isSmartHls?: boolean;
@@ -113,6 +119,12 @@ export interface Episode {
   secondaryVideoUrl?: string;
   secondaryServerUrl?: string;
   isAnimeSalt?: boolean;
+  isAnimeWorld?: boolean;
+  animeWorldUrl?: string;
+  animeWorldBaseDomain?: string;
+  animeWorldQualityLinks?: Record<string, string>;
+  animeWorldDownloadQualities?: any[];
+  animeWorldAudioTracks?: string[];
   tertiaryVideoUrl?: string;
   tertiaryServerUrl?: string;
   isSmartHls?: boolean;

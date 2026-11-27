@@ -360,6 +360,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
   }
 
   let globalAnimeSaltBaseDomain = "https://animesalt.cx";
+  let globalAnimeWorldBaseDomain = "https://watchanimeworld.one";
 
   // Security: Global SSRF & Private/Metadata Network Guard for all proxy / probe / extract endpoints
   const isBlockedSsrfUrl = (raw: unknown): boolean => {
@@ -1047,6 +1048,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         isSprintEdge = h.includes('sprintcdn') || h.includes('owphbf') || h.includes('r66nv9ed');
         if (h.includes('ravok') || h.includes('as-cdn')) {
           referer = 'https://ravok.buzz/';
+        } else if (h.includes('play.zephyrix.org') || h.includes('zephyrix.org') || h.includes('zn-grid') || h.includes('watchanimeworld')) {
+          referer = 'https://play.zephyrix.org/';
         } else if (h.includes('animesalt')) {
           referer = 'https://animesalt.cx/';
         } else if (h.includes('megaplay') || h.includes('nexabloom') || h.includes('distantdaydreams') || h.includes('emeralddrift')) {
@@ -3004,6 +3007,221 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     }
   }
 
+  // ============================================================================
+  // 🌍 DEDICATED ANIMETWORLD HLS ENGINE EXTRACTOR (Multi-Audio & HD Master Stream)
+  // ============================================================================
+  function isAnimeWorldUrl(rawUrl: string): boolean {
+    if (!rawUrl || typeof rawUrl !== "string") return false;
+    const lower = rawUrl.toLowerCase().trim();
+    return (
+      lower.includes("watchanimeworld.") ||
+      lower.includes("play.zephyrix.org") ||
+      lower.includes("zephyrix.org") ||
+      lower.includes("zn-grid")
+    );
+  }
+
+  async function extractAnimeWorldStream(
+    sourceUrl: string,
+    skipSubPlaylistProbe: boolean = false,
+    requestedDuration: number = 0
+  ): Promise<{
+    ok: boolean;
+    m3u8Url?: string;
+    rawM3u8Url?: string;
+    qualities?: string[];
+    audioTracks?: string[];
+    downloadQualities?: any[];
+    duration?: number;
+    bandwidthMap?: Record<string, number>;
+    headers?: Record<string, string>;
+    error?: string;
+  }> {
+    try {
+      const trimmed = sourceUrl.trim();
+      let masterUrl: string | null = null;
+      let audioTracks: string[] = [];
+      let qualities: string[] = [];
+      let zephyrixVideoId: string | null = null;
+      const manifestReferer = "https://play.zephyrix.org/";
+      const rawEffectiveUrl = trimmed;
+
+      // Case 1: Already a master.txt or .m3u8
+      if (trimmed.includes("master.txt") || trimmed.includes(".m3u8")) {
+        masterUrl = trimmed;
+      }
+      // Case 2: Direct play.zephyrix.org URL (video or embed)
+      else if (trimmed.includes("zephyrix.org")) {
+        const match = trimmed.match(/(?:video|embed)\/([a-f0-9]+)/i);
+        if (match) zephyrixVideoId = match[1];
+      }
+      // Case 3: watchanimeworld.one page URL
+      else if (trimmed.includes("watchanimeworld.")) {
+        let pageRef = "https://watchanimeworld.one/";
+        try { pageRef = new URL(rawEffectiveUrl).origin + "/"; } catch {}
+        const pageRes = await fetchUpstreamWithRetry(
+          rawEffectiveUrl,
+          {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              "Referer": pageRef
+            }
+          },
+          { timeoutMs: 15000, maxRetries: 2, label: "AnimeWorld page" }
+        );
+
+        if (!pageRes.ok) {
+          throw new Error(`AnimeWorld page failed (HTTP ${pageRes.status}${pageRes.status === 404 ? " - Episode URL not found" : ""})`);
+        }
+        const html = await pageRes.text();
+
+        // Look for play.zephyrix.org iframe or video embed link
+        const zMatch = html.match(/https?:\/\/(?:play\.)?zephyrix\.org\/(?:video|embed)\/([a-f0-9]+)/i);
+        if (zMatch) {
+          zephyrixVideoId = zMatch[1];
+        } else {
+          const idMatch = html.match(/(?:video|embed)\/([a-f0-9]{20,})/i);
+          if (idMatch) {
+            zephyrixVideoId = idMatch[1];
+          }
+        }
+      }
+
+      // If we have zephyrixVideoId and no masterUrl yet, call getVideo API
+      if (zephyrixVideoId && !masterUrl) {
+        const gvRes = await fetchUpstreamWithRetry(
+          `https://play.zephyrix.org/player/index.php?data=${zephyrixVideoId}&do=getVideo`,
+          {
+            method: "POST",
+            headers: {
+              "Referer": `https://play.zephyrix.org/video/${zephyrixVideoId}`,
+              "X-Requested-With": "XMLHttpRequest",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            }
+          },
+          { timeoutMs: 15000, maxRetries: 2, label: "Zephyrix video API" }
+        );
+        if (gvRes.ok) {
+          const gvData: any = await gvRes.json();
+          masterUrl = gvData.videoSource || gvData.securedLink || null;
+        } else {
+          throw new Error(`Zephyrix video API failed (HTTP ${gvRes.status})`);
+        }
+      }
+
+      if (!masterUrl) {
+        return { ok: false, error: "Could not locate Zephyrix embed or master .txt/.m3u8 on this AnimeWorld page" };
+      }
+
+      const normalizeWorldLang = (raw: string): string => {
+        const clean = raw.replace(/\[.*?\]|\(.*?\)/g, "").trim();
+        if (!clean) return "";
+        const lower = clean.toLowerCase();
+        if (lower.includes("japan") || lower === "ja" || lower === "jpn") return "Japanese";
+        if (lower.includes("english") || lower === "en" || lower === "eng") return "English";
+        if (lower.includes("hindi") || lower === "hi" || lower === "hin") return "Hindi";
+        if (lower.includes("telugu") || lower === "te" || lower === "tel") return "Telugu";
+        if (lower.includes("tamil") || lower === "ta" || lower === "tam") return "Tamil";
+        if (lower.includes("malayalam") || lower === "ml" || lower === "mal") return "Malayalam";
+        if (lower.includes("kannada") || lower === "kn" || lower === "kan") return "Kannada";
+        if (lower.includes("bengali") || lower === "bn" || lower === "ben") return "Bengali";
+        if (lower.includes("marathi") || lower === "mr" || lower === "mar") return "Marathi";
+        if (lower.includes("korean") || lower === "ko" || lower === "kor") return "Korean";
+        if (lower.includes("chinese") || lower === "zh") return "Chinese";
+        if (lower.includes("spanish") || lower === "es") return "Spanish";
+        if (lower.includes("french") || lower === "fr") return "French";
+        return clean;
+      };
+
+      const hlsMeta = await parseHlsManifestMetadata(
+        masterUrl,
+        requestedDuration,
+        manifestReferer,
+        skipSubPlaylistProbe,
+        "",
+        rawEffectiveUrl
+      );
+
+      if (Array.isArray(hlsMeta.qualities) && hlsMeta.qualities.length > 0) {
+        qualities = [...hlsMeta.qualities];
+      }
+      const mergedAudioTracks: string[] = [];
+      const addNormTrack = (rawL: string) => {
+        const norm = normalizeWorldLang(rawL);
+        if (
+          norm &&
+          norm.toLowerCase() !== "default" &&
+          norm.toLowerCase() !== "default audio" &&
+          norm.toLowerCase() !== "original audio" &&
+          !mergedAudioTracks.some((x) => x.toLowerCase() === norm.toLowerCase())
+        ) {
+          mergedAudioTracks.push(norm);
+        }
+      };
+
+      if (Array.isArray(hlsMeta.audioTracks)) {
+        hlsMeta.audioTracks.forEach(addNormTrack);
+      }
+
+      const fallbackDur = requestedDuration > 0
+        ? requestedDuration
+        : (trimmed.toLowerCase().includes("/episode/") ? 1440 : 5400);
+      const finalDur = hlsMeta.duration && hlsMeta.duration > 0 ? hlsMeta.duration : fallbackDur;
+
+      if (qualities.length === 0) qualities = ["720p", "480p", "360p", "240p"];
+      const bandwidthMap: Record<string, number> = {};
+      const bandwidthDefaults: Record<string, number> = {
+        "1080p": 3600000,
+        "720p": 2048000,
+        "480p": 750000,
+        "360p": 276000,
+        "240p": 150000
+      };
+
+      let finalDownloadQualities = Array.isArray(hlsMeta.downloadQualities) ? [...hlsMeta.downloadQualities] : [];
+      if (finalDownloadQualities.length === 0) {
+        finalDownloadQualities = qualities.map((q) => {
+          const bw = bandwidthDefaults[q.toLowerCase()] || 1000000;
+          bandwidthMap[q] = bw;
+          return {
+            id: q,
+            label: `${q} ${q.includes("720") ? "HD Ready" : q.includes("480") ? "Standard" : "Data Saver"}`,
+            sizeMb: Math.max(1, Math.round((bw * finalDur) / (8 * 1024 * 1024))),
+            bandwidth: bw,
+            url: rawEffectiveUrl
+          };
+        });
+      } else {
+        finalDownloadQualities = finalDownloadQualities.map((dq: any) => {
+          const bw = Number(dq.bandwidth) || bandwidthDefaults[String(dq.id).toLowerCase()] || 1000000;
+          bandwidthMap[dq.id] = bw;
+          const mb = dq.sizeMb && dq.sizeMb > 0 ? dq.sizeMb : Math.max(1, Math.round((bw * finalDur) / (8 * 1024 * 1024)));
+          return { ...dq, sizeMb: mb, bandwidth: bw, url: rawEffectiveUrl };
+        });
+      }
+
+      const finalAudios = mergedAudioTracks.length > 0 ? mergedAudioTracks : ["Japanese", "English", "Hindi", "Telugu", "Tamil"];
+
+      return {
+        ok: true,
+        m3u8Url: masterUrl,
+        rawM3u8Url: masterUrl,
+        qualities,
+        audioTracks: finalAudios,
+        downloadQualities: finalDownloadQualities,
+        duration: finalDur,
+        bandwidthMap,
+        headers: {
+          "Referer": manifestReferer,
+          "Origin": "https://play.zephyrix.org",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+      };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || "AnimeWorld extraction failed" };
+    }
+  }
+
   const handleExtractStream = async (req: any, res: any) => {
     try {
       const sourceUrl = (req.body?.url || req.query?.url) as string;
@@ -3140,6 +3358,94 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             ok: false,
             error: asResult.error || "AnimeSalt stream extraction failed",
             provider: "ANIMESALT"
+          });
+          return;
+        }
+      }
+
+      // ====================================================================
+      // 🌍 DEDICATED ANIMETWORLD HLS ENGINE FAST PATH (Zephyrix Multi-Audio)
+      // ====================================================================
+      if (isAnimeWorldUrl(trimmedUrl)) {
+        const awResult = await extractAnimeWorldStream(trimmedUrl, skipSubPlaylistProbe, requestedDuration);
+        if (awResult.ok && awResult.m3u8Url) {
+          const ttlMs = 25 * 60 * 1000;
+          const expiresAt = now + ttlMs;
+          const customRef = awResult.headers?.["Referer"] || "https://play.zephyrix.org/";
+          const host = req.get("host") || "localhost:3000";
+          const reqOrigin = String(req.headers.origin || "");
+          const isExternalCrossOrigin = Boolean(reqOrigin && !reqOrigin.includes(host) && host.includes("hf.space"));
+          const serverOrigin = isExternalCrossOrigin ? `https://${host}` : "";
+          const refParam = customRef ? `&referer=${encodeURIComponent(customRef)}` : "";
+          const proxiedMaster = `${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(awResult.m3u8Url)}${refParam}`;
+
+          const effectivePermanentUrl = trimmedUrl;
+          const permanentQualityLinks: Record<string, string> = {};
+          const qualList = (awResult.qualities && awResult.qualities.length > 0)
+            ? awResult.qualities
+            : ["720p", "480p", "360p", "240p"];
+          for (const q of qualList) {
+            permanentQualityLinks[q] = effectivePermanentUrl;
+          }
+          const finalDuration = requestedDuration > 0 ? requestedDuration : (awResult.duration || (trimmedUrl.includes('/episode/') ? 1440 : 5400));
+          const bandwidthDefaults: Record<string, number> = {
+            "1080p": 3600000,
+            "720p": 2048000,
+            "480p": 750000,
+            "360p": 276000,
+            "240p": 150000
+          };
+          const downloadQualities = Array.isArray(awResult.downloadQualities) && awResult.downloadQualities.length > 0
+            ? awResult.downloadQualities
+            : qualList.map(q => {
+                const bw = (awResult as any).bandwidthMap?.[q] || bandwidthDefaults[q] || 1000000;
+                const sizeMb = Math.max(1, Math.round((bw * finalDuration) / (8 * 1024 * 1024)));
+                return {
+                  id: q,
+                  label: `${q} ${q.includes("720") ? "HD Ready" : q.includes("480") ? "Standard" : "Data Saver"}`,
+                  sizeMb,
+                  bandwidth: bw,
+                  url: effectivePermanentUrl
+                };
+              });
+
+          streamExtractionCache.set(cacheKey, {
+            m3u8Url: proxiedMaster,
+            rawM3u8Url: awResult.m3u8Url,
+            rawQualityLinks: permanentQualityLinks,
+            headers: awResult.headers,
+            expiresAt,
+            cachedAt: now,
+            qualities: qualList,
+            qualityLinks: permanentQualityLinks,
+            downloadQualities,
+            audioTracks: awResult.audioTracks,
+            duration: finalDuration
+          } as any);
+
+          res.json({
+            ok: true,
+            m3u8Url: proxiedMaster,
+            rawM3u8Url: awResult.m3u8Url,
+            qualities: qualList,
+            qualityLinks: permanentQualityLinks,
+            rawQualityLinks: permanentQualityLinks,
+            downloadQualities,
+            audioTracks: awResult.audioTracks,
+            duration: finalDuration,
+            durationFormatted: Math.floor(finalDuration / 60) + ":" + (finalDuration % 60).toString().padStart(2, "0"),
+            headers: awResult.headers,
+            provider: "ANIMETWORLD",
+            cached: false,
+            expiresAt,
+            remainingSeconds: Math.round(ttlMs / 1000)
+          });
+          return;
+        } else {
+          res.status(200).json({
+            ok: false,
+            error: awResult.error || "AnimeWorld stream extraction failed",
+            provider: "ANIMETWORLD"
           });
           return;
         }
@@ -3685,6 +3991,19 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     res.json({ ok: true, baseDomain: globalAnimeSaltBaseDomain });
   });
 
+  app.get(["/api/animeworld-domain", "/animeworld-domain"], (_req: any, res: any) => {
+    res.json({ ok: true, baseDomain: globalAnimeWorldBaseDomain });
+  });
+  app.post(["/api/animeworld-domain", "/animeworld-domain"], (req: any, res: any) => {
+    const newDomain = req.body?.baseDomain || req.body?.domain;
+    if (newDomain && typeof newDomain === "string" && newDomain.trim()) {
+      let clean = newDomain.trim();
+      if (!clean.startsWith("http://") && !clean.startsWith("https://")) clean = "https://" + clean;
+      globalAnimeWorldBaseDomain = clean.replace(/\/+$/, "");
+    }
+    res.json({ ok: true, baseDomain: globalAnimeWorldBaseDomain });
+  });
+
   // Real offline media download stream endpoint (converts HLS to MP4 stream on the fly via ffmpeg -c copy)
   const handleDownloadMedia = async (req: any, res: any) => {
     try {
@@ -3906,6 +4225,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             referer = "https://voe.sx/";
           } else if (h.includes("ravok") || h.includes("as-cdn") || h.includes("animesalt")) {
             referer = "https://animesalt.cx/";
+          } else if (h.includes("play.zephyrix.org") || h.includes("zephyrix.org") || h.includes("zn-grid") || h.includes("watchanimeworld")) {
+            referer = "https://play.zephyrix.org/";
           } else if (h.includes("megaplay") || h.includes("nexabloom") || h.includes("distantdaydreams") || h.includes("emeralddrift")) {
             referer = "https://megaplay.buzz/";
           } else {
@@ -3986,7 +4307,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           if (
             expectVariantStreamUrl ||
             pathBeforeQuery.endsWith(".m3u8") ||
-            pathBeforeQuery.endsWith("master.txt")
+            pathBeforeQuery.endsWith("master.txt") ||
+            pathBeforeQuery.includes("/m3/")
           ) {
             expectVariantStreamUrl = false;
             rewrittenLines.push(`${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(fullUrl)}${refParam}`);
@@ -4039,6 +4361,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             referer = "https://voe.sx/";
           } else if (h.includes("ravok") || h.includes("as-cdn") || h.includes("animesalt")) {
             referer = "https://animesalt.cx/";
+          } else if (h.includes("play.zephyrix.org") || h.includes("zephyrix.org") || h.includes("zn-grid") || h.includes("watchanimeworld")) {
+            referer = "https://play.zephyrix.org/";
           } else if (h.includes("megaplay") || h.includes("nexabloom") || h.includes("distantdaydreams") || h.includes("emeralddrift")) {
             referer = "https://megaplay.buzz/";
           } else {
@@ -4073,8 +4397,15 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       const normalizeSegmentMime = (rawCt: string | null): string => {
         if (!rawCt) return "video/mp2t";
         const lowerCt = rawCt.toLowerCase();
-        // Disguised HLS segments on SprintCDN / VOE / Filemoon often return image/jpeg, image/png, text/html, or text/plain
-        if (lowerCt.startsWith("image/") || lowerCt.startsWith("text/html") || lowerCt.startsWith("text/plain")) {
+        // Disguised HLS segments on SprintCDN / VOE / Filemoon / AnimeWorld often return image/jpeg, image/png, text/html, text/plain, javascript, or css
+        if (
+          lowerCt.startsWith("image/") ||
+          lowerCt.startsWith("text/html") ||
+          lowerCt.startsWith("text/plain") ||
+          lowerCt.includes("javascript") ||
+          lowerCt.includes("text/css") ||
+          lowerCt.includes("application/x-javascript")
+        ) {
           return "video/mp2t";
         }
         return rawCt;

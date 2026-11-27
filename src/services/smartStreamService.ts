@@ -45,6 +45,16 @@ export function getAnimeSaltBaseDomain(): string {
   return "https://animesalt.cx";
 }
 
+export function getAnimeWorldBaseDomain(): string {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem("maxplay_animeworld_base_domain");
+      if (saved && saved.trim()) return saved.trim().replace(/\/+$/, "");
+    }
+  } catch {}
+  return "https://watchanimeworld.one";
+}
+
 export class SmartStreamService {
   /**
    * Detects if a URL is an extractable source (e.g. VOE or external streaming host)
@@ -124,6 +134,10 @@ export class SmartStreamService {
       lower.includes("animesalt") ||
       lower.includes("ravok.buzz") ||
       lower.includes("as-cdn") ||
+      lower.includes("watchanimeworld.") ||
+      lower.includes("play.zephyrix.org") ||
+      lower.includes("zephyrix.org") ||
+      lower.includes("zn-grid") ||
       /https?:\/\/[^\/]+\/(?:e|d|v|bkg)\/[a-z0-9_-]{6,}/i.test(lower)
     ) {
       return true;
@@ -566,6 +580,14 @@ export class SmartStreamService {
       lower.includes("as-cdn")
     ) {
       return "https://ravok.buzz/";
+    }
+    if (
+      lower.includes("play.zephyrix.org") ||
+      lower.includes("zephyrix.org") ||
+      lower.includes("zn-grid") ||
+      lower.includes("watchanimeworld")
+    ) {
+      return "https://play.zephyrix.org/";
     }
     if (lower.includes("animesalt")) {
       const base = getAnimeSaltBaseDomain();
@@ -1527,6 +1549,11 @@ export class SmartStreamService {
       lowerUrl.includes("animesalt.") ||
       lowerUrl.includes("ravok.buzz") ||
       lowerUrl.includes("as-cdn");
+    const isAnimeWorld =
+      lowerUrl.includes("watchanimeworld.") ||
+      lowerUrl.includes("play.zephyrix.org") ||
+      lowerUrl.includes("zephyrix.org") ||
+      lowerUrl.includes("zn-grid");
 
     // 1.1 Priority Tier (Android APK): Run high-speed Native Kotlin Scraper directly on device (Zero CORS)
     // for ALL servers (Server 1 VOE, Server 2 Streamtape, Server 3 Byse/Filemoon, and AnimeSalt).
@@ -1543,7 +1570,7 @@ export class SmartStreamService {
           new Promise<null>((resolve) => setTimeout(() => resolve(null), nativeTimeoutMs)),
         ]);
         if (nativeRes && nativeRes.ok && nativeRes.m3u8Url) {
-          const ttlMs = isStreamtape ? 30 * 60 * 1000 : (isAnimeSalt ? 20 * 60 * 1000 : 170 * 60 * 1000);
+          const ttlMs = isStreamtape ? 30 * 60 * 1000 : (isAnimeSalt || isAnimeWorld ? 25 * 60 * 1000 : 170 * 60 * 1000);
           const expiresAt = Date.now() + ttlMs;
           const refHeader = nativeRes.headers?.Referer || nativeRes.headers?.referer || this.resolveEmbedReferer(trimmed);
           this.registerStreamHostReferer(nativeRes.m3u8Url, refHeader);

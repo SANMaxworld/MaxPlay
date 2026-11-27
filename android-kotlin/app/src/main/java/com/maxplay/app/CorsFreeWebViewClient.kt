@@ -575,6 +575,12 @@ class CorsFreeWebViewClient(
                 } else if (host.contains("animesalt")) {
                     val s = android.net.Uri.parse(streamUrl).scheme ?: "https"
                     hostRefererMap[host] = "$s://$host/"
+                } else if (host.contains("play.zephyrix.org") || host.contains("zephyrix.org") || host.contains("zn-grid") || host.contains("watchanimeworld")) {
+                    hostRefererMap[host] = "https://play.zephyrix.org/"
+                    hostRefererMap["play.zephyrix.org"] = "https://play.zephyrix.org/"
+                    if (root.isNotEmpty()) {
+                        hostRefererMap[root] = "https://play.zephyrix.org/"
+                    }
                 }
                 if (userAgent.isNotBlank()) {
                     hostUserAgentMap[host] = userAgent
@@ -604,6 +610,9 @@ class CorsFreeWebViewClient(
                 hostRefererMap[root]?.let { return it }
             }
             // ── AnimeSalt, Ravok & Megaplay CDN Mapping ──
+            if (cleanHost.contains("play.zephyrix.org") || cleanHost.contains("zephyrix.org") || cleanHost.contains("zn-grid") || cleanHost.contains("watchanimeworld")) {
+                return "https://play.zephyrix.org/"
+            }
             if (cleanHost.contains("ravok.buzz") || cleanHost.contains("as-cdn")) {
                 return "https://ravok.buzz/"
             }
@@ -642,6 +651,10 @@ class CorsFreeWebViewClient(
             if (root.isNotEmpty() && hostRefererMap.containsKey(root)) return true
             return cleanHost.contains("ravok.buzz") ||
                 cleanHost.contains("as-cdn") ||
+                cleanHost.contains("play.zephyrix.org") ||
+                cleanHost.contains("zephyrix.org") ||
+                cleanHost.contains("zn-grid") ||
+                cleanHost.contains("watchanimeworld") ||
                 cleanHost.contains("animesalt.cx") ||
                 cleanHost.contains("sprintcdn") ||
                 cleanHost.contains("owphbf") ||
@@ -1058,6 +1071,7 @@ class CorsFreeWebViewClient(
                 pathOnly.endsWith(".m3u8") ||
                     pathOnly.endsWith("master.txt") ||
                     lowerUrl.contains(".m3u8?") ||
+                    lowerUrl.contains("/m3/") ||
                     (host.contains("ravok.buzz") && pathOnly.startsWith("/hls/"))
 
             // 0ms Instant Hit from Master / Media Playlist Prefetch Cache!
@@ -1211,10 +1225,11 @@ class CorsFreeWebViewClient(
                 if (mimeType == "application/octet-stream" || mimeType.startsWith("text/") || mimeType.startsWith("image/") || mimeType.contains("matroska")) {
                     mimeType = if (pathOnly.endsWith(".webm")) "video/webm" else "video/mp4"
                 }
-            } else if (lowerUrl.contains("/hls2/") || lowerUrl.contains("/hls/") || isKnownStreamCdnHost(host)) {
-                // Normalize disguised segment MIME types (.jpg, .png, .webp, .html, .txt, .js) so hls.js / MSE never rejects segment buffers
+            } else if (lowerUrl.contains("/hls2/") || lowerUrl.contains("/hls/") || lowerUrl.contains("zn-grid") || isKnownStreamCdnHost(host)) {
+                // Normalize disguised segment MIME types (.jpg, .png, .webp, .html, .txt, .js, .css) so hls.js / MSE never rejects segment buffers
                 if (mimeType.startsWith("image/") || mimeType.startsWith("text/html") || mimeType.startsWith("text/plain") ||
-                    mimeType.contains("javascript") || mimeType == "application/octet-stream" || pathOnly.endsWith(".js")
+                    mimeType.startsWith("text/css") || mimeType.contains("javascript") || mimeType == "application/octet-stream" ||
+                    pathOnly.endsWith(".js") || pathOnly.endsWith(".css")
                 ) {
                     mimeType = "video/mp2t"
                 }

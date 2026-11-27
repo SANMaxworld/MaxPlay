@@ -553,6 +553,8 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       isAnime ||
       content?.type === 'anime' ||
       (content as any)?.isAnimeSalt ||
+      (content as any)?.isAnimeWorld ||
+      (content as any)?.animeWorldUrl ||
       (Array.isArray(content?.genres) && content.genres.some((g: any) => typeof g === 'string' && g.toLowerCase().includes('anime'))) ||
       (typeof content?.category === 'string' && content.category.toLowerCase().includes('anime')) ||
       (typeof (content as any)?.genre === 'string' && (content as any).genre.toLowerCase().includes('anime'))
@@ -833,6 +835,35 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [reportCategory, setReportCategory] = useState<string>('spoiler');
   const [reportReasonDetails, setReportReasonDetails] = useState<string>('');
   const [isSubmittingReport, setIsSubmittingReport] = useState<boolean>(false);
+
+  // Automatic Server Fallback handler (auto-switch server1 -> server2 -> server3)
+  const handleAutomaticServerFallback = useCallback((failedServer: 'server1' | 'server2' | 'server3', reason: string) => {
+    console.warn(`[ContentDetailScreen] Stream failure on ${failedServer}: ${reason}. Attempting fallback...`);
+    if (failedServer === 'server1') {
+      const hasS2Stream = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
+      if (hasS2Stream) {
+        setToastMessage('Switching to AnimeWorld (Backup Server)...');
+        setTimeout(() => setToastMessage(null), 3500);
+        handleSelectServer('server2');
+        return;
+      }
+      const hasS3Stream = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
+      if (hasS3Stream) {
+        setToastMessage('Switching to Backup Server...');
+        setTimeout(() => setToastMessage(null), 3500);
+        handleSelectServer('server3');
+        return;
+      }
+    } else if (failedServer === 'server2') {
+      const hasS3Stream = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
+      if (hasS3Stream) {
+        setToastMessage('Switching to Backup Server...');
+        setTimeout(() => setToastMessage(null), 3500);
+        handleSelectServer('server3');
+        return;
+      }
+    }
+  }, [secondaryServerUrl, secondaryServerQualityLinks, tertiaryServerUrl, tertiaryServerQualityLinks, handleSelectServer]);
   
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1600,21 +1631,27 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       secondaryServerQualityLinks = extractNonEmptyQualityMap(
         (currentEpisode as any).secondaryServerQualityLinks,
         currentEpisode.secondaryQualityLinks,
+        (currentEpisode as any).animeWorldQualityLinks,
         epPart0?.secondaryServerQualityLinks,
         epPart0?.secondaryQualityLinks,
+        (epPart0 as any)?.animeWorldQualityLinks,
         (content as any).secondaryServerQualityLinks,
-        content.secondaryQualityLinks
+        content.secondaryQualityLinks,
+        (content as any).animeWorldQualityLinks
       );
       secondaryServerUrl = firstNonEmptyUrl(
         secondaryServerQualityLinks,
         (currentEpisode as any).secondaryServerUrl,
         currentEpisode.secondaryVideoUrl,
+        (currentEpisode as any).animeWorldUrl,
         (currentEpisode as any).secondaryUrl,
         epPart0?.secondaryServerUrl,
         epPart0?.secondaryVideoUrl,
+        (epPart0 as any)?.animeWorldUrl,
         epPart0?.secondaryUrl,
         (content as any).secondaryServerUrl,
         content.secondaryVideoUrl,
+        (content as any).animeWorldUrl,
         (content as any).secondaryUrl
       );
       if ((currentEpisode as any).secondaryVideoSources && typeof (currentEpisode as any).secondaryVideoSources === 'object') {
@@ -1664,21 +1701,26 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         moviePart0?.secondaryServerQualityLinks,
         moviePart0?.secondaryQualityLinks,
         (content as any).secondaryServerQualityLinks,
-        content.secondaryQualityLinks
+        content.secondaryQualityLinks,
+        (content as any).animeWorldQualityLinks
       );
       secondaryServerUrl = firstNonEmptyUrl(
         secondaryServerQualityLinks,
         activeMoviePart.secondaryServerUrl,
         activeMoviePart.secondaryVideoUrl,
+        (activeMoviePart as any).animeWorldUrl,
         activeMoviePart.secondaryUrl,
         contentPart0?.secondaryServerUrl,
         contentPart0?.secondaryVideoUrl,
+        (contentPart0 as any)?.animeWorldUrl,
         contentPart0?.secondaryUrl,
         moviePart0?.secondaryServerUrl,
         moviePart0?.secondaryVideoUrl,
+        (moviePart0 as any)?.animeWorldUrl,
         moviePart0?.secondaryUrl,
         (content as any).secondaryServerUrl,
         content.secondaryVideoUrl,
+        (content as any).animeWorldUrl,
         (content as any).secondaryUrl
       );
       if (activeMoviePart.secondaryVideoSources && typeof activeMoviePart.secondaryVideoSources === 'object') {
@@ -1720,12 +1762,14 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     } else {
       secondaryServerQualityLinks = extractNonEmptyQualityMap(
         (content as any).secondaryServerQualityLinks,
-        content.secondaryQualityLinks
+        content.secondaryQualityLinks,
+        (content as any).animeWorldQualityLinks
       );
       secondaryServerUrl = firstNonEmptyUrl(
         secondaryServerQualityLinks,
         (content as any).secondaryServerUrl,
         content.secondaryVideoUrl,
+        (content as any).animeWorldUrl,
         (content as any).secondaryUrl
       );
       if ((content as any).secondaryVideoSources && typeof (content as any).secondaryVideoSources === 'object') {
@@ -3173,6 +3217,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
               initialTime={playbackPosition}
               autoPlay={true}
               userInitiatedPlayTrigger={userInitiatedPlayTrigger}
+              onPlaybackErrorFallback={handleAutomaticServerFallback}
               timeOffset={activePartOffset}
               globalDuration={totalEpisodeDuration}
               verifiedDuration={
@@ -3389,21 +3434,36 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             );
           })()}
 
-          {/* 4. Comments Pill Action Button (Placed at the very end) */}
+          {/* 4. Server Pill Action Button (Replaces Comments button in action dock per spec) */}
           <button 
+            ref={serverTriggerRef}
+            data-selector-trigger="server"
             type="button"
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               adManager.handleActionDockClick(!!user?.isPremium);
-              setActiveTab('comments');
-              setTimeout(() => {
-                commentsSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
-              }, 50);
+              setIsLanguageModalOpen(false);
+              setIsQualityModalOpen(false);
+              setIsSeasonModalOpen(false);
+              setIsServerModalOpen(prev => !prev);
             }}
             className="shrink-0 flex items-center justify-center gap-2 h-[38px] px-4 rounded-full bg-[#1e2029] hover:bg-[#262936] text-[#e4e6eb] text-[13px] font-medium transition-colors cursor-pointer active:scale-95"
-            title="Comments"
+            title="Switch Streaming Server"
           >
-            <MessageSquare className="w-4 h-4 text-[#b0b3b8] stroke-[2] shrink-0" />
-            <span>Comments</span>
+            <Server className="w-4 h-4 text-[#A78BFA] stroke-[2] shrink-0" />
+            <span>
+              {isAnimeContent
+                ? selectedServer === 'server2'
+                  ? 'AnimeWorld'
+                  : selectedServer === 'server3'
+                  ? 'Server 1 (Backup)'
+                  : 'AnimeSalt'
+                : selectedServer === 'server2'
+                ? 'Server 2'
+                : selectedServer === 'server3'
+                ? 'Server 3'
+                : 'Server 1'}
+            </span>
           </button>
         </div>
 
@@ -3601,6 +3661,17 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                       localStorage.setItem('maxplay_video_quality', cleanQ);
                     } catch {}
                   }}
+                />
+
+                <SoloLevelingSelectorModal
+                  isOpen={isServerModalOpen}
+                  onClose={() => setIsServerModalOpen(false)}
+                  triggerRef={serverTriggerRef}
+                  type="server"
+                  isAnime={isAnimeContent}
+                  selectedServer={selectedServer}
+                  onSelectServer={handleSelectServer}
+                  contentTitle={content.title}
                 />
 
 

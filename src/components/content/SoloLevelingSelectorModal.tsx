@@ -254,32 +254,46 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                         {
                           id: 'server1' as const,
                           name: '⚡ AnimeSalt (Multi-Audio HD)',
-                          badge: 'PRIMARY RECOMMENDED',
+                          badge: '',
                           description: 'Single-Source Master • Multi-Audio (JP, EN, HI, TE, TA) • Full HD',
                           pill: '01',
                         },
                         {
                           id: 'server2' as const,
-                          name: '🛡️ Server 1 (Backup)',
-                          badge: 'EMERGENCY BACKUP',
-                          description: 'Standard Mirror • Instant Fallback Stream',
+                          name: '🌍 AnimeWorld (Multi-Audio)',
+                          badge: '',
+                          description: 'High Speed CDN • Multi-Audio (JP, EN, HI, TE, TA) • Multi-Bitrate',
                           pill: '02',
+                        },
+                        {
+                          id: 'server3' as const,
+                          name: '🛡️ Server 1 (Backup)',
+                          badge: '',
+                          description: 'Standard Mirror • Instant Fallback Stream',
+                          pill: '03',
                         },
                       ]
                     : [
                         {
                           id: 'server1' as const,
                           name: '⚡ Server 1 (Fast HLS)',
-                          badge: 'PRIMARY',
+                          badge: '',
                           description: 'Ultra Low Latency Adaptive HLS Stream',
                           pill: '01',
                         },
                         {
                           id: 'server2' as const,
-                          name: '🛡️ Server 2 (Backup Mirror)',
-                          badge: 'BACKUP',
+                          name: '🌍 Server 2 (AnimeWorld / Mirror)',
+                          badge: '',
                           description: 'High-Capacity Redundant Mirror',
                           pill: '02',
+                        },
+                        {
+                          id: 'server3' as const,
+                          name: '🛡️ Server 3 (Backup)',
+                          badge: '',
+                          description: 'Fallback Stream Mirror',
+                          pill: '03',
                         },
                       ];
 
@@ -314,15 +328,17 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                               <span className="font-bold text-sm text-white truncate">
                                 {srv.name}
                               </span>
-                              <span
-                                className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
-                                  isSelected
-                                    ? 'bg-[#8B5CF6]/25 text-purple-200 border border-[#8B5CF6]/50'
-                                    : 'bg-white/5 text-zinc-400 border border-white/10'
-                                }`}
-                              >
-                                {srv.badge}
-                              </span>
+                              {srv.badge ? (
+                                <span
+                                  className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
+                                    isSelected
+                                      ? 'bg-[#8B5CF6]/25 text-purple-200 border border-[#8B5CF6]/50'
+                                      : 'bg-white/5 text-zinc-400 border border-white/10'
+                                  }`}
+                                >
+                                  {srv.badge}
+                                </span>
+                              ) : null}
                               {isSelected && (
                                 <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white/10 text-white/80 border border-white/15">
                                   ACTIVE

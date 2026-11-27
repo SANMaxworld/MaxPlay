@@ -68,6 +68,7 @@ class InbuiltStreamScraper(
         FILEMOON,
         STREAMTAPE,
         ANIMESALT,
+        ANIMETWORLD,
         GENERIC
     }
 
@@ -84,6 +85,8 @@ class InbuiltStreamScraper(
 
         // In-memory AnimeSalt playback URL cache (20 min TTL)
         private val animesaltPlaybackCache = ConcurrentHashMap<String, Pair<String, Long>>()
+        // In-memory AnimeWorld playback URL cache (25 min TTL)
+        private val animeworldPlaybackCache = ConcurrentHashMap<String, Pair<String, Long>>()
         private val animesaltSeriesSeasonCache = ConcurrentHashMap<String, Map<Int, Pair<Int, Int>>>()
 
         private fun getAnimeSaltSeriesSeasonMapInKotlin(seriesSlug: String): Map<Int, Pair<Int, Int>>? {
@@ -226,10 +229,12 @@ class InbuiltStreamScraper(
             bysePlaybackCache.clear()
             voePlaybackCache.clear()
             animesaltPlaybackCache.clear()
+            animeworldPlaybackCache.clear()
         }
 
         fun clearAllPlaybackCachesForNetworkSwitch() {
             animesaltPlaybackCache.clear()
+            animeworldPlaybackCache.clear()
             byseAttestCache.clear()
             bysePlaybackCache.clear()
             voePlaybackCache.clear()
@@ -533,6 +538,11 @@ class InbuiltStreamScraper(
                 return ProviderType.ANIMESALT
             }
 
+            // Layer 1A-2: Explicit AnimeWorld & Zephyrix domain match
+            if (host.contains("watchanimeworld") || host.contains("play.zephyrix.org") || host.contains("zephyrix.org") || host.contains("zn-grid")) {
+                return ProviderType.ANIMETWORLD
+            }
+
             // Layer 1B: Explicit Streamtape domain match (must run before generic extension checks)
             if (STREAMTAPE_DOMAIN_KEYWORDS.any { host.contains(it) }) {
                 return ProviderType.STREAMTAPE
@@ -586,6 +596,10 @@ class InbuiltStreamScraper(
                 return ProviderType.ANIMESALT
             }
 
+            if (lowerHtml.contains("watchanimeworld") || lowerHtml.contains("play.zephyrix.org") || lowerHtml.contains("zephyrix.org")) {
+                return ProviderType.ANIMETWORLD
+            }
+
             if (hasVoeSignature && !hasFilemoonSignature) return ProviderType.VOE
             if (hasFilemoonSignature && !hasVoeSignature) return ProviderType.FILEMOON
         }
@@ -608,6 +622,7 @@ class InbuiltStreamScraper(
 
             when (provider) {
                 ProviderType.ANIMESALT -> trimmed
+                ProviderType.ANIMETWORLD -> trimmed
                 ProviderType.FILEMOON -> {
                     val newPath = path.replace(Regex("^/d/"), "/e/")
                     "${uri.scheme ?: "https"}://${uri.host}$newPath"
@@ -686,6 +701,7 @@ class InbuiltStreamScraper(
         val initialProvider = detectProviderType(trimmed)
         return when (initialProvider) {
             ProviderType.ANIMESALT -> scrapeAnimeSaltPipeline(trimmed, customHeaders)
+            ProviderType.ANIMETWORLD -> scrapeAnimeWorldPipeline(trimmed, customHeaders)
             ProviderType.STREAMTAPE -> StreamtapeExtractor(activity, mainWebView).extractStreamSync(trimmed)
             ProviderType.VOE -> scrapeVoePipeline(trimmed, customHeaders)
             ProviderType.FILEMOON -> scrapeFilemoonPipeline(trimmed, customHeaders)
@@ -986,6 +1002,121 @@ class InbuiltStreamScraper(
             put("ok", false)
             put("provider", ProviderType.ANIMESALT.name)
             put("error", if (lastErrorDetail.isNotBlank()) lastErrorDetail else "Headless AnimeSalt stream extraction failed or timed out")
+        }
+    }
+
+    /**
+     * =========================================================================
+     * PIPELINE 0B: DEDICATED ANIMETWORLD ENGINE PIPELINE (Zephyrix Multi-Audio & HD)
+     * =========================================================================
+     */
+    private fun scrapeAnimeWorldPipeline(sourceUrl: String, customHeaders: Map<String, String>): JSONObject {
+        val normalizedUrl = sourceUrl.trim()
+        val lowerUrl = normalizedUrl.lowercase()
+
+        // 0. Direct master.txt / m3u8 check (if URL is already the master stream)
+        if (lowerUrl.contains("master.txt") || lowerUrl.contains(".m3u8") || lowerUrl.contains("/cdn/hls/")) {
+            val ref = "https://play.zephyrix.org/"
+            CorsFreeWebViewClient.registerStreamReferer(normalizedUrl, ref)
+            return buildSuccessResponse(normalizedUrl, ref, "animeworld_direct_master", ProviderType.ANIMETWORLD)
+        }
+
+        // Check Playback Cache (25 min TTL)
+        val cached = animeworldPlaybackCache[normalizedUrl]
+        if (cached != null && System.currentTimeMillis() < cached.second) {
+            try {
+                return JSONObject(cached.first)
+            } catch (_: Exception) {}
+        }
+
+        var embedUrlToSniff = normalizedUrl
+        var videoId = ""
+        var lastErrorDetail = ""
+
+        // If it's already a zephyrix URL (e.g. https://play.zephyrix.org/video/<videoId> or /embed/)
+        val directVidMatch = Pattern.compile("(?:video|embed|player)/([a-f0-9]+)", Pattern.CASE_INSENSITIVE).matcher(normalizedUrl)
+        if (directVidMatch.find()) {
+            videoId = directVidMatch.group(1)
+        } else {
+            // Fetch watch page to find play.zephyrix.org iframe
+            try {
+                val watchReq = Request.Builder()
+                    .url(normalizedUrl)
+                    .header("User-Agent", DEFAULT_USER_AGENT)
+                    .build()
+                okHttpClient.newCall(watchReq).execute().use { resp ->
+                    val html = resp.body?.string() ?: ""
+                    val zRegex = Pattern.compile("https?://(?:play\\.)?zephyrix\\.org/(?:video|embed)/[a-f0-9]+", Pattern.CASE_INSENSITIVE)
+                    val zMatch = zRegex.matcher(html)
+                    if (zMatch.find()) {
+                        embedUrlToSniff = zMatch.group().replace("&amp;", "&")
+                        val vidM = Pattern.compile("(?:video|embed)/([a-f0-9]+)", Pattern.CASE_INSENSITIVE).matcher(embedUrlToSniff)
+                        if (vidM.find()) videoId = vidM.group(1)
+                    }
+                }
+            } catch (e: Exception) {
+                lastErrorDetail = "AnimeWorld watch page fetch error: ${e.message ?: "Failed"}"
+            }
+        }
+
+        // Fast POST /player/index.php?data=<videoId>&do=getVideo
+        if (videoId.isNotBlank()) {
+            for (attempt in 0..2) {
+                try {
+                    val formReq = Request.Builder()
+                        .url("https://play.zephyrix.org/player/index.php?data=$videoId&do=getVideo")
+                        .post(okhttp3.RequestBody.create(null, ByteArray(0)))
+                        .header("Referer", "https://play.zephyrix.org/video/$videoId")
+                        .header("Origin", "https://play.zephyrix.org")
+                        .header("X-Requested-With", "XMLHttpRequest")
+                        .header("User-Agent", DEFAULT_USER_AGENT)
+                        .build()
+                    okHttpClient.newCall(formReq).execute().use { formResp ->
+                        val formBody = formResp.body?.string() ?: ""
+                        if (formResp.isSuccessful && formBody.isNotBlank()) {
+                            val json = JSONObject(formBody)
+                            val masterUrl = json.optString("videoSource", json.optString("securedLink", ""))
+                            if (masterUrl.isNotBlank()) {
+                                val ref = "https://play.zephyrix.org/"
+                                CorsFreeWebViewClient.registerStreamReferer(masterUrl, ref)
+                                val res = buildSuccessResponse(masterUrl, ref, "animeworld_zephyrix_fast_post", ProviderType.ANIMETWORLD)
+                                animeworldPlaybackCache[normalizedUrl] = Pair(res.toString(), System.currentTimeMillis() + 25 * 60 * 1000L)
+                                return res
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    lastErrorDetail = "Zephyrix API error: ${e.message ?: "Timeout"}"
+                }
+                if (attempt < 2) {
+                    try { Thread.sleep(300L * (attempt + 1)) } catch (_: Exception) {}
+                }
+            }
+        }
+
+        // Fallback to Headless Sniffer
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val resultRef = java.util.concurrent.atomic.AtomicReference<JSONObject?>(null)
+
+        sniffStreamWithHeadlessWebView(embedUrlToSniff, 18000L) { res ->
+            resultRef.set(res)
+            latch.countDown()
+        }
+
+        try {
+            latch.await(20, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {}
+
+        val finalRes = resultRef.get()
+        if (finalRes != null && finalRes.optBoolean("ok")) {
+            animeworldPlaybackCache[normalizedUrl] = Pair(finalRes.toString(), System.currentTimeMillis() + 25 * 60 * 1000L)
+            return finalRes
+        }
+
+        return JSONObject().apply {
+            put("ok", false)
+            put("provider", ProviderType.ANIMETWORLD.name)
+            put("error", if (lastErrorDetail.isNotBlank()) lastErrorDetail else "Headless AnimeWorld stream extraction failed or timed out")
         }
     }
 
@@ -1913,9 +2044,13 @@ class InbuiltStreamScraper(
         method: String,
         provider: ProviderType
     ): JSONObject {
+        val isAnimeWorld = provider == ProviderType.ANIMETWORLD || m3u8Url.contains("zephyrix.org") || m3u8Url.contains("zn-grid")
+        val isAnimeSalt = provider == ProviderType.ANIMESALT || m3u8Url.contains("ravok.buzz") || m3u8Url.contains("as-cdn")
         val effectiveReferer = if (m3u8Url.contains("ravok.buzz") || m3u8Url.contains("as-cdn")) {
             "https://ravok.buzz/"
-        } else if (provider == ProviderType.ANIMESALT || refererPageUrl.contains("animesalt")) {
+        } else if (isAnimeWorld || refererPageUrl.contains("zephyrix") || refererPageUrl.contains("watchanimeworld")) {
+            "https://play.zephyrix.org/"
+        } else if (isAnimeSalt || refererPageUrl.contains("animesalt")) {
             "https://animesalt.cx/"
         } else {
             refererPageUrl
@@ -1931,29 +2066,34 @@ class InbuiltStreamScraper(
         if (effectiveReferer.contains("ravok.buzz")) {
             CorsFreeWebViewClient.registerStreamReferer("https://ravok.buzz/", "https://ravok.buzz/")
             CorsFreeWebViewClient.registerStreamReferer("https://as-cdn", "https://ravok.buzz/")
+        } else if (isAnimeWorld) {
+            CorsFreeWebViewClient.registerStreamReferer("https://play.zephyrix.org/", "https://play.zephyrix.org/")
         }
         // Prefetch master .m3u8 immediately on background thread so hls.js gets 0ms master playlist + hot CDN TLS!
         CorsFreeWebViewClient.prefetchMasterPlaylistAsync(m3u8Url, effectiveReferer)
 
-        val isAnimeSalt = provider == ProviderType.ANIMESALT || m3u8Url.contains("ravok.buzz") || m3u8Url.contains("as-cdn")
-        val defaultQualities = if (isAnimeSalt) org.json.JSONArray().apply {
+        val defaultQualities = if (isAnimeWorld) org.json.JSONArray().apply {
+            put("720p"); put("480p"); put("360p"); put("240p")
+        } else if (isAnimeSalt) org.json.JSONArray().apply {
             put("1080p"); put("720p"); put("480p"); put("360p"); put("240p")
         } else org.json.JSONArray().apply {
             put("1080p"); put("720p"); put("480p")
         }
-        val defaultAudios = org.json.JSONArray()
+        val defaultAudios = if (isAnimeWorld) org.json.JSONArray().apply {
+            put("Japanese"); put("English"); put("Hindi"); put("Telugu"); put("Tamil")
+        } else org.json.JSONArray()
 
         val qLinks = JSONObject().apply {
-            put("1080p", m3u8Url)
+            if (!isAnimeWorld) put("1080p", m3u8Url)
             put("720p", m3u8Url)
             put("480p", m3u8Url)
-            if (isAnimeSalt) {
+            if (isAnimeSalt || isAnimeWorld) {
                 put("360p", m3u8Url)
                 put("240p", m3u8Url)
             }
         }
 
-        val durSec = if (isAnimeSalt) 9295L else 5400L
+        val durSec = if (isAnimeSalt || isAnimeWorld) 9295L else 5400L
         val bandwidths = listOf(
             Triple("1080p", "1080p Full HD", 4096000L),
             Triple("720p", "720p HD", 2048000L),
@@ -1964,7 +2104,8 @@ class InbuiltStreamScraper(
         val dlQualities = org.json.JSONArray().apply {
             for (item in bandwidths) {
                 val qId = item.first
-                if (!isAnimeSalt && (qId == "360p" || qId == "240p")) continue
+                if (isAnimeWorld && qId == "1080p") continue
+                if (!isAnimeSalt && !isAnimeWorld && (qId == "360p" || qId == "240p")) continue
                 val bw = item.third
                 val sizeMb = Math.round(bw.toDouble() * durSec / (8.0 * 1024.0 * 1024.0)).toInt()
                 put(JSONObject().apply {
@@ -2707,9 +2848,24 @@ class InbuiltStreamScraper(
                                 return WebResourceResponse("text/plain", "UTF-8", null)
                             }
 
+                            // 0A. AnimeWorld / Zephyrix Master Manifest Interception
+                            if ((lower.contains("master.txt") || lower.contains("/cdn/hls/") || lower.contains("/m3/")) &&
+                                (lower.contains("zephyrix") || lower.contains("zn-grid") || lower.contains("watchanimeworld"))
+                            ) {
+                                val reqReferer = "https://play.zephyrix.org/"
+                                mainHandler.removeCallbacks(timeoutRunnable)
+                                mainHandler.post {
+                                    CorsFreeWebViewClient.registerStreamReferer(reqUrl, reqReferer)
+                                    finishWithM3u8(reqUrl, reqReferer, "animeworld_zephyrix_interceptor")
+                                }
+                                return WebResourceResponse("text/plain", "UTF-8", null)
+                            }
+
                             // 1. Direct .m3u8 network request interception across main & child iframes
                             if (lower.contains(".m3u8") && !lower.contains("jwpltx") && !lower.contains("ping.gif")) {
-                                val reqReferer = if (lower.contains("ravok.buzz") || lower.contains("as-cdn")) {
+                                val reqReferer = if (lower.contains("zephyrix") || lower.contains("zn-grid") || lower.contains("watchanimeworld")) {
+                                    "https://play.zephyrix.org/"
+                                } else if (lower.contains("ravok.buzz") || lower.contains("as-cdn")) {
                                     "https://ravok.buzz/"
                                 } else if (lower.contains("animesalt")) {
                                     "https://animesalt.cx/"
