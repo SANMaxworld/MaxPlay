@@ -6329,20 +6329,7 @@
       // Detect if content uses Smart HLS (inspect root + embedded seasons/episodes too)
       const firstSeriesEp = (Array.isArray(item.seasonsData) && item.seasonsData[0]?.episodes?.[0]) || (Array.isArray(item.episodesList) && item.episodesList[0]) || null;
       const hasSmartUrl = (u) => typeof u === 'string' && /voe\.|filemoon|byse|f16px|n1mwq|streamtape|streamta\.pe|strtape|strcloud|strtpe|stape\.|tapecontent|\/proxy\/m3u8|master\.m3u8/i.test(u);
-      const isItemSmartHls = !!(
-        item.isSmartHls ||
-        item.secondaryVideoUrl ||
-        item.secondaryServerUrl ||
-        (item.secondaryQualityLinks && Object.keys(item.secondaryQualityLinks).length > 0) ||
-        (item.secondaryServerQualityLinks && Object.keys(item.secondaryServerQualityLinks).length > 0) ||
-        item.tertiaryVideoUrl ||
-        item.tertiaryServerUrl ||
-        (item.tertiaryQualityLinks && Object.keys(item.tertiaryQualityLinks).length > 0) ||
-        (item.tertiaryServerQualityLinks && Object.keys(item.tertiaryServerQualityLinks).length > 0) ||
-        hasSmartUrl(item.videoUrl) ||
-        hasSmartUrl(item.videoSources?.Default?.['1080p']) ||
-        (firstSeriesEp && (firstSeriesEp.secondaryVideoUrl || firstSeriesEp.secondaryServerUrl || firstSeriesEp.tertiaryVideoUrl || firstSeriesEp.tertiaryServerUrl || hasSmartUrl(firstSeriesEp.videoUrl)))
-      );
+      const isItemSmartHls = Boolean(item.isSmartHls === true);
       window.toggleSmartHlsMode(isItemSmartHls);
       window.toggleAnimeSaltMode(Boolean(item.isAnimeSalt || (firstSeriesEp && firstSeriesEp.isAnimeSalt)));
       if (item.isAnimeSalt && item.type === 'movie') {
@@ -6725,11 +6712,6 @@
         statusLabel.style.color = window.isAnimeSaltMode ? '#C084FC' : 'var(--text-tertiary)';
       }
 
-      // If AnimeSalt is turned on, also set Smart HLS mode true so HLS streaming is guaranteed
-      if (window.isAnimeSaltMode && !window.isSmartHlsMode) {
-        window.toggleSmartHlsMode(true);
-      }
-
       window.applyHlsModeVisibility();
 
       if (window.currentUploadMode !== 'movie') {
@@ -6950,11 +6932,6 @@
       if (statusLabel) {
         statusLabel.innerText = window.isAnimeWorldMode ? '🌍 AnimeWorld HLS Engine Active' : 'Standard Server Mode';
         statusLabel.style.color = window.isAnimeWorldMode ? '#38BDF8' : 'var(--text-tertiary)';
-      }
-
-      // If AnimeWorld is active, ensure Smart HLS is active
-      if (window.isAnimeWorldMode && !window.isSmartHlsMode) {
-        window.toggleSmartHlsMode(true);
       }
 
       window.applyHlsModeVisibility();
@@ -12505,7 +12482,7 @@
           visibility: isUnlistedPublish ? 'unlisted' : 'public',
           verifiedDuration: movieVerifiedDurStr || undefined,
           duration: movieNumericDur > 0 ? movieNumericDur : undefined,
-          isSmartHls: !!window.isSmartHlsMode || !!window.isAnimeSaltMode,
+          isSmartHls: !!window.isSmartHlsMode,
           isAnimeSalt: !!window.isAnimeSaltMode,
           rating,
           year,
@@ -12545,7 +12522,7 @@
             if (animeSaltMovieUrl) {
               rawDoc.videoUrl = animeSaltMovieUrl;
               rawDoc.isAnimeSalt = true;
-              rawDoc.isSmartHls = true;
+              rawDoc.isSmartHls = !!window.isSmartHlsMode;
               if (window.extractedMovieQualityLinks && Object.keys(window.extractedMovieQualityLinks).length > 0) {
                 const qMapPermanent = {};
                 Object.keys(window.extractedMovieQualityLinks).forEach(q => {
@@ -12592,7 +12569,7 @@
               rawDoc.animeWorldAudioTracks = verifiedWorldLangs;
               if (!rawDoc.videoUrl) {
                 rawDoc.videoUrl = animeWorldMovieUrl;
-                rawDoc.isSmartHls = true;
+                rawDoc.isSmartHls = !!window.isSmartHlsMode;
                 rawDoc.qualityLinks = rawDoc.animeWorldQualityLinks;
                 rawDoc.verifiedDownloadLanguages = verifiedWorldLangs;
                 rawDoc.downloadAudioTracks = verifiedWorldLangs;
