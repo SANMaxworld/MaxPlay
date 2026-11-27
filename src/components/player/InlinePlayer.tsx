@@ -207,6 +207,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
 
   const waitingWatchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
   const errCode4RetryCountRef = useRef<number>(0);
+  const lastUserSeekTimeRef = useRef<number | null>(null);
+  const lastUserSeekTimestampRef = useRef<number>(0);
 
   // Robust auto-play executor with unmuted -> muted fallback to bypass browser autoplay restrictions
   const executeAutoPlay = useCallback(() => {
@@ -2206,11 +2208,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     );
 
     if (isOutsideCurrentPart && onGlobalSeek) {
+      lastUserSeekTimeRef.current = globalTarget;
+      lastUserSeekTimestampRef.current = Date.now();
       onGlobalSeek(globalTarget);
       return;
     }
 
     const localTarget = Math.max(0, isGlobal ? globalTarget - timeOffset : globalTarget);
+
+    lastUserSeekTimeRef.current = localTarget;
+    lastUserSeekTimestampRef.current = Date.now();
+    setCurrentTime(localTarget);
 
     if (videoRef.current) {
       try {
@@ -2218,7 +2226,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       } catch (e) {
         console.warn('Seek error:', e);
       }
-      setCurrentTime(localTarget);
       targetSeekTimeRef.current = 0;
       isInitialSeekDoneRef.current = true;
     }
@@ -2507,13 +2514,21 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           handlePlayPause();
         }}
         onDoubleTapRewind={() => {
-          const currentGlobal = timeOffset + currentTime;
+          const now = Date.now();
+          const effectiveLocalTime = (lastUserSeekTimeRef.current !== null && (now - lastUserSeekTimestampRef.current < 1500))
+            ? lastUserSeekTimeRef.current
+            : (videoRef.current?.currentTime ?? currentTime);
+          const currentGlobal = timeOffset + effectiveLocalTime;
           const targetGlobal = Math.max(0, currentGlobal - 10);
           handleSeek(targetGlobal);
           handleControlInteraction();
         }}
         onDoubleTapForward={() => {
-          const currentGlobal = timeOffset + currentTime;
+          const now = Date.now();
+          const effectiveLocalTime = (lastUserSeekTimeRef.current !== null && (now - lastUserSeekTimestampRef.current < 1500))
+            ? lastUserSeekTimeRef.current
+            : (videoRef.current?.currentTime ?? currentTime);
+          const currentGlobal = timeOffset + effectiveLocalTime;
           const maxDur = (globalDuration !== undefined && globalDuration > 0) ? globalDuration : (duration || 999999);
           const targetGlobal = Math.min(maxDur, currentGlobal + 10);
           handleSeek(targetGlobal);
@@ -2592,6 +2607,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               onPause?.(t, d);
             }
           }}
+          onSeeked={() => {
+            lastUserSeekTimeRef.current = null;
+          }}
           onTimeUpdate={(e) => {
             const t = e.currentTarget.currentTime;
             const d = e.currentTarget.duration || duration || 0;
@@ -2603,6 +2621,15 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               waitingWatchdogTimerRef.current = null;
             }
             const now = Date.now();
+
+            // Prevent stale pre-seek frame from snapping currentTime back while seek buffer is catching up
+            if (lastUserSeekTimeRef.current !== null && (now - lastUserSeekTimestampRef.current < 1200)) {
+              if (Math.abs(t - lastUserSeekTimeRef.current) > 1.2) {
+                return;
+              } else {
+                lastUserSeekTimeRef.current = null;
+              }
+            }
             // Zero-Lag Stutter-Free Optimization:
             // When player controls are visible, update at 250ms for smooth seekbar motion.
             // When controls are hidden, throttle to 1000ms if skip markers exist, avoiding continuous React re-renders!
@@ -3194,13 +3221,21 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               handleControlInteraction();
             }}
             onRewind10={() => {
-              const currentGlobal = timeOffset + currentTime;
+              const now = Date.now();
+              const effectiveLocalTime = (lastUserSeekTimeRef.current !== null && (now - lastUserSeekTimestampRef.current < 1500))
+                ? lastUserSeekTimeRef.current
+                : (videoRef.current?.currentTime ?? currentTime);
+              const currentGlobal = timeOffset + effectiveLocalTime;
               handleSeek(Math.max(0, currentGlobal - 10));
               handleControlInteraction();
             }}
             onForward10={() => {
-              const currentGlobal = timeOffset + currentTime;
-              const maxDur = globalDuration !== undefined ? globalDuration : duration;
+              const now = Date.now();
+              const effectiveLocalTime = (lastUserSeekTimeRef.current !== null && (now - lastUserSeekTimestampRef.current < 1500))
+                ? lastUserSeekTimeRef.current
+                : (videoRef.current?.currentTime ?? currentTime);
+              const currentGlobal = timeOffset + effectiveLocalTime;
+              const maxDur = (globalDuration !== undefined && globalDuration > 0) ? globalDuration : (duration || 999999);
               handleSeek(Math.min(maxDur, currentGlobal + 10));
               handleControlInteraction();
             }}

@@ -32,6 +32,7 @@ interface SoloLevelingSelectorModalProps {
   triggerRef?: React.RefObject<HTMLElement | null>;
   type: 'language' | 'season' | 'quality' | 'server';
   selectedServer?: 'server1' | 'server2' | 'server3';
+  availableServers?: ('server1' | 'server2' | 'server3')[];
   onSelectServer?: (server: 'server1' | 'server2' | 'server3') => void;
   isAnime?: boolean;
   // Language props
@@ -56,6 +57,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
   triggerRef,
   type,
   selectedServer = 'server1',
+  availableServers,
   onSelectServer,
   isAnime = false,
   languages = [],
@@ -249,56 +251,39 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
             <div className="p-4 overflow-y-auto flex-1 space-y-2.5 scrollbar-thin scrollbar-thumb-white/10">
               {type === 'server' ? (
                 (() => {
-                  const serverOptions = isAnime
-                    ? [
-                        {
-                          id: 'server1' as const,
-                          name: '⚡ AnimeSalt (Multi-Audio HD)',
-                          badge: '',
-                          description: 'Single-Source Master • Multi-Audio (JP, EN, HI, TE, TA) • Full HD',
-                          pill: '01',
-                        },
-                        {
-                          id: 'server2' as const,
-                          name: '🌍 AnimeWorld (Multi-Audio)',
-                          badge: '',
-                          description: 'High Speed CDN • Multi-Audio (JP, EN, HI, TE, TA) • Multi-Bitrate',
-                          pill: '02',
-                        },
-                        {
-                          id: 'server3' as const,
-                          name: '🛡️ Server 1 (Backup)',
-                          badge: '',
-                          description: 'Standard Mirror • Instant Fallback Stream',
-                          pill: '03',
-                        },
-                      ]
-                    : [
-                        {
-                          id: 'server1' as const,
-                          name: '⚡ Server 1 (Fast HLS)',
-                          badge: '',
-                          description: 'Ultra Low Latency Adaptive HLS Stream',
-                          pill: '01',
-                        },
-                        {
-                          id: 'server2' as const,
-                          name: '🌍 Server 2 (AnimeWorld / Mirror)',
-                          badge: '',
-                          description: 'High-Capacity Redundant Mirror',
-                          pill: '02',
-                        },
-                        {
-                          id: 'server3' as const,
-                          name: '🛡️ Server 3 (Backup)',
-                          badge: '',
-                          description: 'Fallback Stream Mirror',
-                          pill: '03',
-                        },
-                      ];
+                  const allServerOptions = [
+                    {
+                      id: 'server1' as const,
+                      name: '⚡ Server 1 (Fast HLS)',
+                      badge: '',
+                      description: 'Ultra Low Latency Multi-Audio Stream',
+                      pill: '01',
+                    },
+                    {
+                      id: 'server2' as const,
+                      name: '⚡ Server 2 (High Speed)',
+                      badge: '',
+                      description: 'High-Capacity CDN Multi-Audio Stream',
+                      pill: '02',
+                    },
+                    {
+                      id: 'server3' as const,
+                      name: '🛡️ Server 3 (Backup)',
+                      badge: '',
+                      description: 'Standard Redundant Mirror Stream',
+                      pill: '03',
+                    },
+                  ];
+
+                  const serverOptions = (availableServers && availableServers.length > 0)
+                    ? allServerOptions.filter(srv => availableServers.includes(srv.id))
+                    : allServerOptions.filter(srv => srv.id === 'server1');
 
                   return serverOptions.map((srv) => {
                     const isSelected = selectedServer === srv.id;
+                    const isGold = srv.id === 'server2';
+                    const isRed = srv.id === 'server3';
+
                     return (
                       <div
                         key={srv.id}
@@ -308,7 +293,11 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                         }}
                         className={`group rounded-xl p-3.5 cursor-pointer transition-all duration-150 border flex items-center justify-between ${
                           isSelected
-                            ? 'bg-gradient-to-r from-[#8B5CF6]/20 via-[#6366F1]/15 to-transparent border-[#8B5CF6] shadow-[0_0_15px_rgba(139,92,246,0.2)]'
+                            ? isGold
+                              ? 'bg-gradient-to-r from-[#F59E0B]/20 via-[#D97706]/15 to-transparent border-[#F59E0B] shadow-[0_0_15px_rgba(245,158,11,0.25)]'
+                              : isRed
+                              ? 'bg-gradient-to-r from-[#EF4444]/20 via-[#DC2626]/15 to-transparent border-[#EF4444] shadow-[0_0_15px_rgba(239,68,68,0.2)]'
+                              : 'bg-gradient-to-r from-[#8B5CF6]/20 via-[#6366F1]/15 to-transparent border-[#8B5CF6] shadow-[0_0_15px_rgba(139,92,246,0.2)]'
                             : 'bg-[#181920] hover:bg-[#1e2029] border-white/10'
                         }`}
                       >
@@ -316,7 +305,11 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                           <div
                             className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono text-xs font-bold shrink-0 ${
                               isSelected
-                                ? 'bg-gradient-to-br from-[#A855F7] to-[#6366F1] text-white shadow'
+                                ? isGold
+                                  ? 'bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-black shadow'
+                                  : isRed
+                                  ? 'bg-gradient-to-br from-[#EF4444] to-[#B91C1C] text-white shadow'
+                                  : 'bg-gradient-to-br from-[#A855F7] to-[#6366F1] text-white shadow'
                                 : 'bg-white/5 text-zinc-400 border border-white/10'
                             }`}
                           >
@@ -332,7 +325,9 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                                 <span
                                   className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
                                     isSelected
-                                      ? 'bg-[#8B5CF6]/25 text-purple-200 border border-[#8B5CF6]/50'
+                                      ? isGold
+                                        ? 'bg-[#F59E0B]/25 text-amber-200 border border-[#F59E0B]/50'
+                                        : 'bg-[#8B5CF6]/25 text-purple-200 border border-[#8B5CF6]/50'
                                       : 'bg-white/5 text-zinc-400 border border-white/10'
                                   }`}
                                 >
@@ -340,7 +335,11 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                                 </span>
                               ) : null}
                               {isSelected && (
-                                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white/10 text-white/80 border border-white/15">
+                                <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${
+                                  isGold
+                                    ? 'bg-[#F59E0B]/20 text-amber-300 border-amber-500/40'
+                                    : 'bg-white/10 text-white/80 border-white/15'
+                                }`}>
                                   ACTIVE
                                 </span>
                               )}
@@ -353,7 +352,11 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                           <div
                             className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all ${
                               isSelected
-                                ? 'border-[#A855F7] bg-[#A855F7] text-white'
+                                ? isGold
+                                  ? 'border-[#F59E0B] bg-[#F59E0B] text-black'
+                                  : isRed
+                                  ? 'border-[#EF4444] bg-[#EF4444] text-white'
+                                  : 'border-[#A855F7] bg-[#A855F7] text-white'
                                 : 'border-zinc-500 bg-transparent'
                             }`}
                           >

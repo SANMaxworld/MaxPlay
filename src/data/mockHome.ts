@@ -88,22 +88,6 @@ export const MOCK_CATEGORIES = [
 
 export const TRENDING_ITEMS: ContentItem[] = [
   {
-    id: 'animesalt-demon-slayer-infinity-castle',
-    title: 'Demon Slayer: Kimetsu no Yaiba - The Infinity Castle (AnimeSalt Engine)',
-    type: 'anime',
-    description: 'The Demon Slayer Corps plunge into the Infinity Castle to defeat the progenitor of all demons, Muzan Kibutsuji! Features complete Multi-Audio (Japanese, English, Hindi, Telugu, Tamil) powered by the official AnimeSalt Engine.',
-    posterUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&auto=format&fit=crop&q=80',
-    backdropUrl: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
-    rating: 9.9,
-    year: 2025,
-    country: 'Japan',
-    genres: ['Action', 'Fantasy', 'Anime', 'Demons'],
-    language: 'Multi-Audio (JP, EN, HI, TE, TA)',
-    isAnimeSalt: true,
-    isSmartHls: true,
-    videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-  },
-  {
     id: 'demon-slayer-hashira',
     title: 'Demon Slayer: Kimetsu no Yaiba - Hashira Training Arc',
     type: 'anime',

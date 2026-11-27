@@ -5,7 +5,6 @@ import {
   subscribeToCategories,
   subscribeToScreensCategories,
   subscribeToHomeRows,
-  ANIMESALT_BRAND_NEW_CARD,
   isContentUnlisted
 } from '../services/contentService';
 import { ContentItem } from '../types';
@@ -44,11 +43,12 @@ interface GlobalContentState {
 }
 
 const initialContentCacheRaw = loadFromCache<ContentItem[]>('maxplay_content_cache', []).filter(
-  (c) => !isContentUnlisted(c)
+  (c) =>
+    !isContentUnlisted(c) &&
+    c.id !== 'animesalt-demon-slayer-infinity-castle' &&
+    !c.title?.includes('Infinity Castle (AnimeSalt Engine)')
 );
-const initialContentCache = initialContentCacheRaw.some(c => c.id === ANIMESALT_BRAND_NEW_CARD.id)
-  ? initialContentCacheRaw
-  : [ANIMESALT_BRAND_NEW_CARD, ...initialContentCacheRaw];
+const initialContentCache = initialContentCacheRaw;
 const initialBannersCache = loadFromCache<any[]>('maxplay_hero_banners_cache', []);
 const initialRowsCache = loadFromCache<Record<string, any[]>>('maxplay_home_rows_cache', {});
 const initialScreensCatsCache = loadFromCache<Record<string, any[]>>('maxplay_screens_categories_cache', {});

@@ -22,125 +22,8 @@ export const CONTENT_COLLECTION = 'content';
 export const MESSAGES_COLLECTION = 'messages';
 export const USERS_COLLECTION = 'users';
 
-// Brand New Official AnimeSalt Multi-Audio Content Card
-export const ANIMESALT_BRAND_NEW_CARD: ContentItem = {
-  id: 'animesalt-demon-slayer-infinity-castle',
-  title: 'Demon Slayer: Kimetsu no Yaiba - The Infinity Castle (AnimeSalt Engine)',
-  type: 'anime',
-  description: 'The Demon Slayer Corps plunge into the Infinity Castle to defeat the progenitor of all demons, Muzan Kibutsuji! Features complete Multi-Audio (Japanese, English, Hindi, Telugu, Tamil) powered by the official AnimeSalt Engine.',
-  posterUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&auto=format&fit=crop&q=80',
-  backdropUrl: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
-  rating: 9.9,
-  year: 2025,
-  country: 'Japan',
-  genres: ['Anime', 'Action', 'Dark Fantasy', 'Supernatural'],
-  mature: false,
-  duration: 9295,
-  seasons: 1,
-  episodes: 1,
-  uploader: { name: '⚡ AnimeSalt Engine', verified: true },
-  trending: true,
-  featured: true,
-  views: 980000,
-  isAnimeSalt: true,
-  isSmartHls: true,
-  videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-  secondaryServerUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-  qualityLinks: {
-    '1080p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-    '720p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-    '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-    '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-    '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-  },
-  downloadQualities: [
-    { id: '1080p', label: '1080p Full HD', sizeMb: 4539, bandwidth: 4096000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-    { id: '720p', label: '720p HD', sizeMb: 2269, bandwidth: 2048000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-    { id: '480p', label: '480p Standard', sizeMb: 831, bandwidth: 750000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-    { id: '360p', label: '360p Low', sizeMb: 306, bandwidth: 276000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-    { id: '240p', label: '240p Mobile', sizeMb: 166, bandwidth: 150000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' }
-  ],
-  availableLanguages: ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'],
-  languages: ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'],
-  audioTracks: ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'],
-  videoSources: {
-    'Japanese [ORIGINAL]': {
-      '1080p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '720p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-    },
-    'English [DUBBED]': {
-      '1080p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '720p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-    },
-    'Hindi [DUBBED]': {
-      '1080p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '720p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-    },
-    'Telugu [DUBBED]': {
-      '1080p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '720p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-    },
-    'Tamil [DUBBED]': {
-      '1080p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '720p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-      '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-    }
-  },
-  seasonsData: [
-    {
-      seasonNumber: 1,
-      seasonTitle: 'The Infinity Castle Movie',
-      episodes: [
-        {
-          id: 'ep-infinity-castle-1',
-          episodeNumber: 1,
-          title: 'The Demon Slayer Corps Assemble: Infinity Castle',
-          duration: 9295,
-          thumbnailUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=400&auto=format&fit=crop&q=80',
-          videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-          secondaryServerUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-          isAnimeSalt: true,
-          isSmartHls: true,
-          audioTracks: ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'],
-          qualityLinks: {
-            '1080p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-            '720p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-            '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-            '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-            '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-          },
-          downloadQualities: [
-            { id: '1080p', label: '1080p Full HD', sizeMb: 4539, bandwidth: 4096000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-            { id: '720p', label: '720p HD', sizeMb: 2269, bandwidth: 2048000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-            { id: '480p', label: '480p Standard', sizeMb: 831, bandwidth: 750000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-            { id: '360p', label: '360p Low', sizeMb: 306, bandwidth: 276000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
-            { id: '240p', label: '240p Mobile', sizeMb: 166, bandwidth: 150000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' }
-          ]
-        }
-      ]
-    }
-  ],
-  createdAt: new Date().toISOString()
-};
-
 // Fallback sample items
 export const SAMPLE_CONTENT_ITEMS: ContentItem[] = [
-  ANIMESALT_BRAND_NEW_CARD,
-
         {
           id: 'one-piece-egghead',
           title: 'One Piece: Egghead Arc',
@@ -425,7 +308,7 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
   const q = query(collection(db, CONTENT_COLLECTION));
   return onSnapshot(q, (snapshot) => {
     if (snapshot.empty) {
-      callback([ANIMESALT_BRAND_NEW_CARD]);
+      callback(SAMPLE_CONTENT_ITEMS);
       return;
     }
     const list: ContentItem[] = snapshot.docs.map(docSnap => {
@@ -499,10 +382,9 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
       } as ContentItem;
 
     });
-    const publicList = list.filter(c => !isContentUnlisted(c));
-    if (!publicList.some(c => c.id === ANIMESALT_BRAND_NEW_CARD.id)) {
-      publicList.unshift(ANIMESALT_BRAND_NEW_CARD);
-    }
+    const publicList = list.filter(
+      (c) => !isContentUnlisted(c) && c.id !== 'animesalt-demon-slayer-infinity-castle' && !c.title?.includes('Infinity Castle (AnimeSalt Engine)')
+    );
     callback(publicList);
   }, (err) => {
     console.warn('Firestore subscription warning:', err);
@@ -525,8 +407,8 @@ export const fetchExternalSeasons = async (contentId: string): Promise<SeasonDat
 
 // Fetch Content Detail by ID
 export const fetchContentById = async (id: string): Promise<ContentItem | null> => {
-  if (id === ANIMESALT_BRAND_NEW_CARD.id || id === 'animesalt-demon-slayer-entertainment') {
-    return ANIMESALT_BRAND_NEW_CARD;
+  if (id === 'animesalt-demon-slayer-infinity-castle') {
+    return null;
   }
   try {
     const docSnap = await getDoc(doc(db, CONTENT_COLLECTION, id));
@@ -987,12 +869,18 @@ export const subscribeToHeroBanners = (callback: (banners: any[]) => void) => {
   const ref = collection(db, HERO_BANNERS_COLLECTION);
   return onSnapshot(ref, (snapshot) => {
     if (snapshot.empty) {
-      callback([ANIMESALT_BRAND_NEW_CARD]);
+      callback([]);
       return;
     }
 
     const banners = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    const validBanners = banners.filter((b: any) => b && (b.title || b.imageUrl || b.backdropUrl || b.contentId));
+    const validBanners = banners.filter(
+      (b: any) =>
+        b &&
+        (b.title || b.imageUrl || b.backdropUrl || b.contentId) &&
+        b.id !== 'animesalt-demon-slayer-infinity-castle' &&
+        !b.title?.includes('Infinity Castle (AnimeSalt Engine)')
+    );
     
     callback(validBanners);
   }, (err) => {

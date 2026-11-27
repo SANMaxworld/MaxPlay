@@ -95,19 +95,6 @@ const formatResumeTime = (seconds: number) => {
 // 30 High-Quality Curated Recommendation Items (10 rows of 3 columns)
 const CURATED_RECOMMENDATIONS: Partial<ContentItem>[] = [
   {
-    id: 'animesalt-demon-slayer-infinity-castle',
-    title: 'Demon Slayer: Kimetsu no Yaiba - The Infinity Castle (AnimeSalt Engine)',
-    type: 'anime',
-    rating: 9.9,
-    year: 2025,
-    country: 'Japan',
-    genres: ['Anime', 'Action', 'Dark Fantasy', 'Demons'],
-    posterUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&auto=format&fit=crop&q=80',
-    backdropUrl: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
-    videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
-    uploader: { name: '⚡ AnimeSalt Engine', verified: true }
-  },
-  {
     id: 'demon-slayer-infinity-castle',
     title: 'A Place Where Only The Strong Stand',
     type: 'anime',
@@ -1791,23 +1778,29 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   let warmupS1Url = '';
   let warmupS2Url = '';
   let warmupS3Url = '';
+  let hasValidS1 = false;
+  let hasValidS2 = false;
+  let hasValidS3 = false;
 
   if (!offlineVideoUrl) {
     const cleanS1QualityLinks = extractValidQualityLinksMap(playerQualityLinks);
     const cleanS2QualityLinks = extractValidQualityLinksMap(secondaryServerQualityLinks);
     const cleanS3QualityLinks = extractValidQualityLinksMap(tertiaryServerQualityLinks);
-    const hasValidS1 =
+    hasValidS1 = Boolean(
       isValidStreamUrl(playerVideoUrl) ||
       Object.keys(cleanS1QualityLinks).length > 0 ||
-      hasAnyValidLinkInSources(playerVideoSources);
-    const hasValidS2 =
+      hasAnyValidLinkInSources(playerVideoSources)
+    );
+    hasValidS2 = Boolean(
       isValidStreamUrl(secondaryServerUrl) ||
       Object.keys(cleanS2QualityLinks).length > 0 ||
-      hasAnyValidLinkInSources(secondaryVideoSources);
-    const hasValidS3 =
+      hasAnyValidLinkInSources(secondaryVideoSources)
+    );
+    hasValidS3 = Boolean(
       isValidStreamUrl(tertiaryServerUrl) ||
       Object.keys(cleanS3QualityLinks).length > 0 ||
-      hasAnyValidLinkInSources(tertiaryVideoSources);
+      hasAnyValidLinkInSources(tertiaryVideoSources)
+    );
 
     if (hasValidS1) {
       warmupS1Url = SmartStreamService.selectSourceUrlForQuality(
@@ -3452,13 +3445,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
           >
             <Server className="w-4 h-4 text-[#A78BFA] stroke-[2] shrink-0" />
             <span>
-              {isAnimeContent
-                ? selectedServer === 'server2'
-                  ? 'AnimeWorld'
-                  : selectedServer === 'server3'
-                  ? 'Server 1 (Backup)'
-                  : 'AnimeSalt'
-                : selectedServer === 'server2'
+              {selectedServer === 'server2'
                 ? 'Server 2'
                 : selectedServer === 'server3'
                 ? 'Server 3'
@@ -3663,16 +3650,27 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   }}
                 />
 
-                <SoloLevelingSelectorModal
-                  isOpen={isServerModalOpen}
-                  onClose={() => setIsServerModalOpen(false)}
-                  triggerRef={serverTriggerRef}
-                  type="server"
-                  isAnime={isAnimeContent}
-                  selectedServer={selectedServer}
-                  onSelectServer={handleSelectServer}
-                  contentTitle={content.title}
-                />
+                {(() => {
+                  const availableServers: ('server1' | 'server2' | 'server3')[] = [];
+                  if (hasValidS1) availableServers.push('server1');
+                  if (hasValidS2) availableServers.push('server2');
+                  if (hasValidS3) availableServers.push('server3');
+                  if (availableServers.length === 0) availableServers.push('server1');
+
+                  return (
+                    <SoloLevelingSelectorModal
+                      isOpen={isServerModalOpen}
+                      onClose={() => setIsServerModalOpen(false)}
+                      triggerRef={serverTriggerRef}
+                      type="server"
+                      isAnime={isAnimeContent}
+                      selectedServer={selectedServer}
+                      availableServers={availableServers}
+                      onSelectServer={handleSelectServer}
+                      contentTitle={content.title}
+                    />
+                  );
+                })()}
 
 
 
