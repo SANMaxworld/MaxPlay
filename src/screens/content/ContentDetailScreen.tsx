@@ -835,35 +835,6 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   const [reportCategory, setReportCategory] = useState<string>('spoiler');
   const [reportReasonDetails, setReportReasonDetails] = useState<string>('');
   const [isSubmittingReport, setIsSubmittingReport] = useState<boolean>(false);
-
-  // Automatic Server Fallback handler (auto-switch server1 -> server2 -> server3)
-  const handleAutomaticServerFallback = useCallback((failedServer: 'server1' | 'server2' | 'server3', reason: string) => {
-    console.warn(`[ContentDetailScreen] Stream failure on ${failedServer}: ${reason}. Attempting fallback...`);
-    if (failedServer === 'server1') {
-      const hasS2Stream = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
-      if (hasS2Stream) {
-        setToastMessage('Switching to AnimeWorld (Backup Server)...');
-        setTimeout(() => setToastMessage(null), 3500);
-        handleSelectServer('server2');
-        return;
-      }
-      const hasS3Stream = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
-      if (hasS3Stream) {
-        setToastMessage('Switching to Backup Server...');
-        setTimeout(() => setToastMessage(null), 3500);
-        handleSelectServer('server3');
-        return;
-      }
-    } else if (failedServer === 'server2') {
-      const hasS3Stream = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
-      if (hasS3Stream) {
-        setToastMessage('Switching to Backup Server...');
-        setTimeout(() => setToastMessage(null), 3500);
-        handleSelectServer('server3');
-        return;
-      }
-    }
-  }, [secondaryServerUrl, secondaryServerQualityLinks, tertiaryServerUrl, tertiaryServerQualityLinks, handleSelectServer]);
   
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -2483,6 +2454,35 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       }
     }
   }, [allCurrentParts, isMovie, selectedSeasonIndex, selectedEpisodeIndex, partOffsets, selectedPartIndex, partProgressMap]);
+
+  // Automatic Server Fallback handler (auto-switch server1 -> server2 -> server3)
+  const handleAutomaticServerFallback = useCallback((failedServer: 'server1' | 'server2' | 'server3', reason: string) => {
+    console.warn(`[ContentDetailScreen] Stream failure on ${failedServer}: ${reason}. Attempting fallback...`);
+    if (failedServer === 'server1') {
+      const hasS2Stream = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
+      if (hasS2Stream) {
+        setToastMessage('Switching to AnimeWorld (Backup Server)...');
+        setTimeout(() => setToastMessage(null), 3500);
+        handleSelectServer('server2');
+        return;
+      }
+      const hasS3Stream = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
+      if (hasS3Stream) {
+        setToastMessage('Switching to Backup Server...');
+        setTimeout(() => setToastMessage(null), 3500);
+        handleSelectServer('server3');
+        return;
+      }
+    } else if (failedServer === 'server2') {
+      const hasS3Stream = Boolean(tertiaryServerUrl || Object.keys(tertiaryServerQualityLinks).length > 0);
+      if (hasS3Stream) {
+        setToastMessage('Switching to Backup Server...');
+        setTimeout(() => setToastMessage(null), 3500);
+        handleSelectServer('server3');
+        return;
+      }
+    }
+  }, [secondaryServerUrl, secondaryServerQualityLinks, tertiaryServerUrl, tertiaryServerQualityLinks, handleSelectServer]);
 
 
   // Derive season options for Solo Leveling System selector
