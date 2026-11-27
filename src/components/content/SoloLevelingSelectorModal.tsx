@@ -7,6 +7,8 @@ import {
   Check, 
   X, 
   Zap, 
+  Globe,
+  Shield,
   Radio, 
   Crown,
   Play
@@ -254,22 +256,25 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                   const allServerOptions = [
                     {
                       id: 'server1' as const,
-                      name: '⚡ Server 1 (Fast HLS)',
-                      badge: '',
+                      name: 'Server 1 (Fast HLS)',
+                      icon: 'zap',
+                      badge: '⚡ HLS',
                       description: 'Ultra Low Latency Multi-Audio Stream',
                       pill: '01',
                     },
                     {
                       id: 'server2' as const,
-                      name: '⚡ Server 2 (High Speed)',
-                      badge: '',
+                      name: 'Server 2 (High Speed)',
+                      icon: 'globe',
+                      badge: '🌍 CDN',
                       description: 'High-Capacity CDN Multi-Audio Stream',
                       pill: '02',
                     },
                     {
                       id: 'server3' as const,
-                      name: '🛡️ Server 3 (Backup)',
-                      badge: '',
+                      name: 'Server 3 (Backup)',
+                      icon: 'shield',
+                      badge: '🛡️ Mirror',
                       description: 'Standard Redundant Mirror Stream',
                       pill: '03',
                     },
@@ -303,7 +308,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div
-                            className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono text-xs font-bold shrink-0 ${
+                            className={`w-9 h-9 rounded-lg flex items-center justify-center font-mono text-xs font-bold shrink-0 ${
                               isSelected
                                 ? isGold
                                   ? 'bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-black shadow'
@@ -313,13 +318,19 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                                 : 'bg-white/5 text-zinc-400 border border-white/10'
                             }`}
                           >
-                            {srv.pill}
+                            {srv.icon === 'globe' ? (
+                              <Globe className={`w-4 h-4 ${isSelected ? 'text-black' : 'text-amber-400'}`} />
+                            ) : srv.icon === 'shield' ? (
+                              <Shield className={`w-4 h-4 ${isSelected ? 'text-white' : 'text-red-400'}`} />
+                            ) : (
+                              <Zap className={`w-4 h-4 ${isSelected ? 'fill-current text-white' : 'text-purple-400'}`} />
+                            )}
                           </div>
 
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-sm text-white truncate">
-                                {srv.name}
+                              <span className="font-bold text-sm text-white truncate flex items-center gap-1.5">
+                                {srv.icon === 'globe' ? '🌍' : srv.icon === 'shield' ? '🛡️' : '⚡'} {srv.name}
                               </span>
                               {srv.badge ? (
                                 <span

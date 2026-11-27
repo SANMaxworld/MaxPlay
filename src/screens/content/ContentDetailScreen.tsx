@@ -32,6 +32,7 @@ import {
   Loader2,
   Server,
   Zap,
+  Shield,
   ShieldCheck
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -804,15 +805,58 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       ))
     );
 
+    const isAnimeSaltUpload = Boolean(
+      content.isAnimeSalt ||
+      (ep0 as any)?.isAnimeSalt ||
+      (Array.isArray(content.seasonsData) && content.seasonsData.some((s: any) => s.episodes?.some((e: any) => e?.isAnimeSalt)))
+    );
+    const isAnimeWorldUpload = Boolean(
+      content.isAnimeWorld ||
+      (ep0 as any)?.isAnimeWorld ||
+      content.animeWorldUrl ||
+      (ep0 as any)?.animeWorldUrl ||
+      (Array.isArray(content.seasonsData) && content.seasonsData.some((s: any) => s.episodes?.some((e: any) => e?.isAnimeWorld || e?.animeWorldUrl || e?.secondaryVideoUrl || e?.secondaryServerUrl))) ||
+      content.secondaryVideoUrl ||
+      (content as any).secondaryServerUrl
+    );
+
+    let canUseS1 = false;
+    let canUseS2 = false;
+
+    if (isAnimeContent) {
+      if (isAnimeSaltUpload) {
+        canUseS1 = hasS1;
+      } else if (!isAnimeWorldUpload) {
+        canUseS1 = hasS1;
+      } else {
+        canUseS1 = false;
+      }
+
+      if (isAnimeWorldUpload) {
+        canUseS2 = hasS2 || (!isAnimeSaltUpload && hasS1);
+      } else {
+        canUseS2 = false;
+      }
+    } else {
+      canUseS1 = hasS1;
+      canUseS2 = hasS2;
+    }
+
     try {
       const savedPref = (content?.id && localStorage.getItem(`maxplay_server_${content.id}`)) || localStorage.getItem('maxplay_preferred_server');
-      if (savedPref === 'server2' && hasS2) {
+      if (savedPref === 'server2' && canUseS2) {
         setSelectedServer('server2');
+      } else if (canUseS1) {
+        setSelectedServer('server1');
+      } else if (canUseS2) {
+        setSelectedServer('server2');
+      } else if (hasS3) {
+        setSelectedServer('server3');
       } else {
         setSelectedServer('server1');
       }
     } catch {
-      setSelectedServer('server1');
+      setSelectedServer(canUseS1 ? 'server1' : (canUseS2 ? 'server2' : 'server1'));
     }
   }, [content?.id, externalSeasons]);
 
@@ -1781,26 +1825,100 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
   let hasValidS1 = false;
   let hasValidS2 = false;
   let hasValidS3 = false;
+  const availableServers: ('server1' | 'server2' | 'server3')[] = [];
 
   if (!offlineVideoUrl) {
-    const cleanS1QualityLinks = extractValidQualityLinksMap(playerQualityLinks);
-    const cleanS2QualityLinks = extractValidQualityLinksMap(secondaryServerQualityLinks);
+    let cleanS1QualityLinks = extractValidQualityLinksMap(playerQualityLinks);
+    let cleanS2QualityLinks = extractValidQualityLinksMap(secondaryServerQualityLinks);
     const cleanS3QualityLinks = extractValidQualityLinksMap(tertiaryServerQualityLinks);
-    hasValidS1 = Boolean(
-      isValidStreamUrl(playerVideoUrl) ||
-      Object.keys(cleanS1QualityLinks).length > 0 ||
-      hasAnyValidLinkInSources(playerVideoSources)
+
+    const currentEpAny = currentEpisode as any;
+    const isAnimeSaltUpload = Boolean(
+      content.isAnimeSalt ||
+      currentEpAny?.isAnimeSalt ||
+      (Array.isArray(content.seasonsData) && content.seasonsData.some((s: any) => s.episodes?.some((e: any) => e?.isAnimeSalt)))
     );
-    hasValidS2 = Boolean(
-      isValidStreamUrl(secondaryServerUrl) ||
-      Object.keys(cleanS2QualityLinks).length > 0 ||
-      hasAnyValidLinkInSources(secondaryVideoSources)
+    const isAnimeWorldUpload = Boolean(
+      content.isAnimeWorld ||
+      currentEpAny?.isAnimeWorld ||
+      content.animeWorldUrl ||
+      currentEpAny?.animeWorldUrl ||
+      (Array.isArray(content.seasonsData) && content.seasonsData.some((s: any) => s.episodes?.some((e: any) => e?.isAnimeWorld || e?.animeWorldUrl || e?.secondaryVideoUrl || e?.secondaryServerUrl))) ||
+      content.secondaryVideoUrl ||
+      (content as any).secondaryServerUrl
     );
-    hasValidS3 = Boolean(
-      isValidStreamUrl(tertiaryServerUrl) ||
-      Object.keys(cleanS3QualityLinks).length > 0 ||
-      hasAnyValidLinkInSources(tertiaryVideoSources)
-    );
+
+    if (isAnimeContent) {
+      if (isAnimeSaltUpload) {
+        hasValidS1 = Boolean(
+          isValidStreamUrl(playerVideoUrl) ||
+          Object.keys(cleanS1QualityLinks).length > 0 ||
+          hasAnyValidLinkInSources(playerVideoSources)
+        );
+      } else if (!isAnimeWorldUpload) {
+        hasValidS1 = Boolean(
+          isValidStreamUrl(playerVideoUrl) ||
+          Object.keys(cleanS1QualityLinks).length > 0 ||
+          hasAnyValidLinkInSources(playerVideoSources)
+        );
+      } else {
+        hasValidS1 = false;
+      }
+
+      if (isAnimeWorldUpload) {
+        hasValidS2 = Boolean(
+          isValidStreamUrl(secondaryServerUrl) ||
+          Object.keys(cleanS2QualityLinks).length > 0 ||
+          hasAnyValidLinkInSources(secondaryVideoSources) ||
+          (!isAnimeSaltUpload && (isValidStreamUrl(playerVideoUrl) || Object.keys(cleanS1QualityLinks).length > 0))
+        );
+        if (!secondaryServerUrl && isValidStreamUrl(playerVideoUrl)) {
+          secondaryServerUrl = playerVideoUrl;
+        }
+        if (Object.keys(cleanS2QualityLinks).length === 0 && Object.keys(cleanS1QualityLinks).length > 0) {
+          secondaryServerQualityLinks = cleanS1QualityLinks;
+          cleanS2QualityLinks = cleanS1QualityLinks;
+        }
+      } else {
+        hasValidS2 = false;
+      }
+
+      hasValidS3 = Boolean(
+        isValidStreamUrl(tertiaryServerUrl) ||
+        Object.keys(cleanS3QualityLinks).length > 0 ||
+        hasAnyValidLinkInSources(tertiaryVideoSources)
+      );
+    } else {
+      hasValidS1 = Boolean(
+        isValidStreamUrl(playerVideoUrl) ||
+        Object.keys(cleanS1QualityLinks).length > 0 ||
+        hasAnyValidLinkInSources(playerVideoSources)
+      );
+      hasValidS2 = Boolean(
+        isValidStreamUrl(secondaryServerUrl) ||
+        Object.keys(cleanS2QualityLinks).length > 0 ||
+        hasAnyValidLinkInSources(secondaryVideoSources)
+      );
+      hasValidS3 = Boolean(
+        isValidStreamUrl(tertiaryServerUrl) ||
+        Object.keys(cleanS3QualityLinks).length > 0 ||
+        hasAnyValidLinkInSources(tertiaryVideoSources)
+      );
+    }
+
+    if (hasValidS1) availableServers.push('server1');
+    if (hasValidS2) availableServers.push('server2');
+    if (hasValidS3) availableServers.push('server3');
+
+    if (availableServers.length === 0) {
+      if (hasValidS2) availableServers.push('server2');
+      else availableServers.push('server1');
+    }
+
+    const effectiveServer = availableServers.includes(selectedServer)
+      ? selectedServer
+      : availableServers[0];
+    activeEffectiveServer = effectiveServer;
 
     if (hasValidS1) {
       warmupS1Url = SmartStreamService.selectSourceUrlForQuality(
@@ -1824,8 +1942,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       ).chosenUrl || (isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '');
     }
 
-    if (selectedServer === 'server2' && hasValidS2) {
-      activeEffectiveServer = 'server2';
+    if (effectiveServer === 'server2' && hasValidS2) {
       if (Object.keys(cleanS2QualityLinks).length > 0) {
         const smartS2 = SmartStreamService.selectSourceUrlForQuality(
           isValidStreamUrl(secondaryServerUrl) ? secondaryServerUrl : '',
@@ -1839,8 +1956,21 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
       } else if (isValidStreamUrl(secondaryServerUrl)) {
         playerVideoUrl = secondaryServerUrl;
       }
+    } else if (effectiveServer === 'server3' && hasValidS3) {
+      if (Object.keys(cleanS3QualityLinks).length > 0) {
+        const smartS3 = SmartStreamService.selectSourceUrlForQuality(
+          isValidStreamUrl(tertiaryServerUrl) ? tertiaryServerUrl : '',
+          cleanS3QualityLinks,
+          activeQuality
+        );
+        playerQualityLinks = smartS3.cleanQualityLinks;
+        if (smartS3.chosenUrl) {
+          playerVideoUrl = smartS3.chosenUrl;
+        }
+      } else if (isValidStreamUrl(tertiaryServerUrl)) {
+        playerVideoUrl = tertiaryServerUrl;
+      }
     } else if (hasValidS1) {
-      activeEffectiveServer = 'server1';
       if (Object.keys(cleanS1QualityLinks).length > 0) {
         const smartS1 = SmartStreamService.selectSourceUrlForQuality(
           isValidStreamUrl(playerVideoUrl) ? playerVideoUrl : '',
@@ -1856,10 +1986,16 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
         playerVideoUrl = '';
       }
     } else if (hasValidS2) {
-      activeEffectiveServer = 'server2';
       playerVideoUrl = secondaryServerUrl;
     }
   }
+
+  // Keep selectedServer synced with current available server list
+  useEffect(() => {
+    if (availableServers.length > 0 && !availableServers.includes(selectedServer)) {
+      setSelectedServer(availableServers[0]);
+    }
+  }, [availableServers.join(','), selectedServer]);
 
   // Zero-Delay Background Stream Warmup for Primary Server (Server 1)
   useEffect(() => {
@@ -2454,7 +2590,7 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
     if (failedServer === 'server1') {
       const hasS2Stream = Boolean(secondaryServerUrl || Object.keys(secondaryServerQualityLinks).length > 0);
       if (hasS2Stream) {
-        setToastMessage('Switching to AnimeWorld (Backup Server)...');
+        setToastMessage('Switching to Server 2 (High Speed)...');
         setTimeout(() => setToastMessage(null), 3500);
         handleSelectServer('server2');
         return;
@@ -3443,13 +3579,19 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
             className="shrink-0 flex items-center justify-center gap-2 h-[38px] px-4 rounded-full bg-[#1e2029] hover:bg-[#262936] text-[#e4e6eb] text-[13px] font-medium transition-colors cursor-pointer active:scale-95"
             title="Switch Streaming Server"
           >
-            <Server className="w-4 h-4 text-[#A78BFA] stroke-[2] shrink-0" />
+            {activeEffectiveServer === 'server2' ? (
+              <Globe className="w-4 h-4 text-amber-400 stroke-[2] shrink-0" />
+            ) : activeEffectiveServer === 'server3' ? (
+              <Shield className="w-4 h-4 text-red-400 stroke-[2] shrink-0" />
+            ) : (
+              <Zap className="w-4 h-4 text-[#A78BFA] fill-[#A78BFA]/30 stroke-[2] shrink-0" />
+            )}
             <span>
-              {selectedServer === 'server2'
-                ? 'Server 2'
-                : selectedServer === 'server3'
-                ? 'Server 3'
-                : 'Server 1'}
+              {activeEffectiveServer === 'server2'
+                ? '🌍 Server 2'
+                : activeEffectiveServer === 'server3'
+                ? '🛡️ Server 3'
+                : '⚡ Server 1'}
             </span>
           </button>
         </div>
@@ -3650,27 +3792,17 @@ export const ContentDetailScreen: React.FC<ContentDetailScreenProps> = ({
                   }}
                 />
 
-                {(() => {
-                  const availableServers: ('server1' | 'server2' | 'server3')[] = [];
-                  if (hasValidS1) availableServers.push('server1');
-                  if (hasValidS2) availableServers.push('server2');
-                  if (hasValidS3) availableServers.push('server3');
-                  if (availableServers.length === 0) availableServers.push('server1');
-
-                  return (
-                    <SoloLevelingSelectorModal
-                      isOpen={isServerModalOpen}
-                      onClose={() => setIsServerModalOpen(false)}
-                      triggerRef={serverTriggerRef}
-                      type="server"
-                      isAnime={isAnimeContent}
-                      selectedServer={selectedServer}
-                      availableServers={availableServers}
-                      onSelectServer={handleSelectServer}
-                      contentTitle={content.title}
-                    />
-                  );
-                })()}
+                <SoloLevelingSelectorModal
+                  isOpen={isServerModalOpen}
+                  onClose={() => setIsServerModalOpen(false)}
+                  triggerRef={serverTriggerRef}
+                  type="server"
+                  isAnime={isAnimeContent}
+                  selectedServer={activeEffectiveServer}
+                  availableServers={availableServers}
+                  onSelectServer={handleSelectServer}
+                  contentTitle={content.title}
+                />
 
 
 
