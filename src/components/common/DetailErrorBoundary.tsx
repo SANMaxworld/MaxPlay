@@ -13,6 +13,10 @@ interface State {
 }
 
 export class DetailErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
+    super(props);
+  }
+
   public state: State = {
     hasError: false,
     error: null,

@@ -16,7 +16,7 @@ import {
   Crown,
   HelpCircle,
 } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useDragControls } from 'motion/react';
 import { ContentItem } from '../../types';
 import { downloadManager } from '../../services/DownloadManager';
 import { SmartStreamService } from '../../services/smartStreamService';
@@ -67,6 +67,48 @@ interface EpisodeResolvedPlan {
   isCrossServerAuto: boolean;
 }
 
+function parseModalDurationSec(val: any): number {
+  if (typeof val === 'number' && Number.isFinite(val) && val > 0) return Math.round(val);
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (!s) return 0;
+    if (s.includes(':')) {
+      const parts = s.split(':').map(Number);
+      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        return Math.round(parts[0] * 60 + parts[1]);
+      }
+      if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+        return Math.round(parts[0] * 3600 + parts[1] * 60 + parts[2]);
+      }
+    }
+    const num = parseFloat(s);
+    if (!isNaN(num) && num > 0) return Math.round(num);
+  }
+  return 0;
+}
+
+function mergeVerifiedAndProbedQualities(verifiedArr: any[] | undefined, probedArr: any[] | undefined): any[] {
+  const result: any[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(verifiedArr)) {
+    for (const item of verifiedArr) {
+      const qId = String(item?.id || '').trim();
+      if (!qId) continue;
+      seen.add(qId.toLowerCase());
+      result.push(item);
+    }
+  }
+  if (Array.isArray(probedArr)) {
+    for (const item of probedArr) {
+      const qId = String(item?.id || '').trim();
+      if (!qId || seen.has(qId.toLowerCase())) continue;
+      seen.add(qId.toLowerCase());
+      result.push(item);
+    }
+  }
+  return result.sort((a, b) => (parseInt(String(b?.id || '0'), 10) || 0) - (parseInt(String(a?.id || '0'), 10) || 0));
+}
+
 export const DownloadSelectionModal: React.FC<DownloadSelectionModalProps> = (props) => {
   return (
     <AnimatePresence>
@@ -88,6 +130,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   onClose,
   onSuccessToast,
 }) => {
+  const dragControls = useDragControls();
   const [showHelpConfirmTooltip, setShowHelpConfirmTooltip] = useState(false);
 
   // Content type evaluation - Precise Movie vs Series / Anime
@@ -103,7 +146,8 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       .toString()
       .toLowerCase();
 
-    if (cType === 'movie' || cType === 'film' || cType === 'feature') {
+    const uMode = String((content as any).uploadMode || '').toLowerCase();
+    if (cType === 'movie' || cType === 'film' || cType === 'feature' || uMode === 'movie') {
       return true;
     }
 
@@ -116,6 +160,16 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
     if (hasEpisodesInSeasons || hasEpisodesList) {
       return false;
+    }
+
+    const hasSingleVideoSource = Boolean(
+      content.videoUrl ||
+        content.qualityLinks ||
+        (Array.isArray(content.videoLinks) && content.videoLinks.length > 0) ||
+        (Array.isArray((content as any).movieParts) && (content as any).movieParts.length > 0)
+    );
+    if (hasSingleVideoSource && (typeof content.episodes !== 'number' || content.episodes <= 1)) {
+      return true;
     }
 
     if (cType === 'series' || cType === 'tv' || cType === 'anime' || cType === 'show') {
@@ -229,6 +283,8 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   const [server2Meta, setServer2Meta] = useState<ExtractedServerMeta | null>(null);
   const [server3Meta, setServer3Meta] = useState<ExtractedServerMeta | null>(null);
   const [isProbing, setIsProbing] = useState<boolean>(false);
+  const [probeError, setProbeError] = useState<string | null>(null);
+  const [probeRetryTick, setProbeRetryTick] = useState<number>(0);
 
   const isQualityKey = (val: string): boolean => {
     if (!val || typeof val !== 'string') return false;
@@ -551,39 +607,78 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
   useEffect(() => {
     let isCancelled = false;
     const activeEp = isSeries ? currentEpisodes[focusedEpisodeIdx] : null;
-    const requestedDur = Number(activeEp?.duration || content.duration || 0);
+    const parsedVerifiedDur = parseModalDurationSec(
+      isSeries ? (activeEp as any)?.verifiedDuration : (content as any)?.verifiedDuration
+    );
+    const rawDurNum = Number((isSeries ? activeEp?.duration : content.duration) || 0);
+    const requestedDur =
+      parsedVerifiedDur ||
+      (rawDurNum > 0 && rawDurNum !== 1400 ? rawDurNum : Math.round(activeStreamDuration || 0)) ||
+      rawDurNum ||
+      0;
 
     setServer1Meta(null);
     setServer2Meta(null);
     setServer3Meta(null);
+    setProbeError(null);
 
     const contentPart0 =
-      Array.isArray((content as any)?.videoLinks) && (content as any).videoLinks.length > 0
+      Array.isArray((content as any)?.videoLinks) &&
+      (content as any).videoLinks.length > 0 &&
+      typeof (content as any).videoLinks[0] === 'object'
         ? (content as any).videoLinks[0]
         : null;
+    const moviePart0 =
+      Array.isArray((content as any)?.movieParts) &&
+      (content as any).movieParts.length > 0 &&
+      typeof (content as any).movieParts[0] === 'object'
+        ? (content as any).movieParts[0]
+        : null;
     const epPart0 =
-      Array.isArray(activeEp?.videoLinks) && activeEp.videoLinks.length > 0
+      Array.isArray(activeEp?.videoLinks) &&
+      activeEp.videoLinks.length > 0 &&
+      typeof activeEp.videoLinks[0] === 'object'
         ? activeEp.videoLinks[0]
         : null;
 
     const existingS1Dl = isSeries
-      ? (activeEp as any)?.downloadQualities || epPart0?.downloadQualities
-      : (content as any)?.downloadQualities || contentPart0?.downloadQualities;
+      ? (activeEp as any)?.downloadQualities || (activeEp as any)?.verifiedDownloadQualities || epPart0?.downloadQualities
+      : (content as any)?.downloadQualities ||
+        (content as any)?.verifiedDownloadQualities ||
+        contentPart0?.downloadQualities ||
+        moviePart0?.downloadQualities;
     const existingS2Dl = isSeries
       ? (activeEp as any)?.secondaryDownloadQualities || epPart0?.secondaryDownloadQualities
-      : (content as any)?.secondaryDownloadQualities || contentPart0?.secondaryDownloadQualities;
+      : (content as any)?.secondaryDownloadQualities ||
+        contentPart0?.secondaryDownloadQualities ||
+        moviePart0?.secondaryDownloadQualities;
     const existingS3Dl = isSeries
       ? (activeEp as any)?.tertiaryDownloadQualities || epPart0?.tertiaryDownloadQualities
-      : (content as any)?.tertiaryDownloadQualities || contentPart0?.tertiaryDownloadQualities;
+      : (content as any)?.tertiaryDownloadQualities ||
+        contentPart0?.tertiaryDownloadQualities ||
+        moviePart0?.tertiaryDownloadQualities;
     const existingS1Audios = isSeries
-      ? (activeEp as any)?.audioTracks || epPart0?.audioTracks
-      : (content as any)?.audioTracks || contentPart0?.audioTracks;
+      ? (activeEp as any)?.verifiedDownloadLanguages ||
+        (activeEp as any)?.downloadAudioTracks ||
+        (activeEp as any)?.audioTracks ||
+        epPart0?.verifiedDownloadLanguages ||
+        epPart0?.audioTracks
+      : (content as any)?.verifiedDownloadLanguages ||
+        (content as any)?.downloadAudioTracks ||
+        (content as any)?.audioTracks ||
+        contentPart0?.verifiedDownloadLanguages ||
+        contentPart0?.audioTracks ||
+        moviePart0?.verifiedDownloadLanguages;
     const existingS2Audios = isSeries
       ? (activeEp as any)?.secondaryAudioTracks || epPart0?.secondaryAudioTracks
-      : (content as any)?.secondaryAudioTracks || contentPart0?.secondaryAudioTracks;
+      : (content as any)?.secondaryAudioTracks ||
+        contentPart0?.secondaryAudioTracks ||
+        moviePart0?.secondaryAudioTracks;
     const existingS3Audios = isSeries
       ? (activeEp as any)?.tertiaryAudioTracks || epPart0?.tertiaryAudioTracks
-      : (content as any)?.tertiaryAudioTracks || contentPart0?.tertiaryAudioTracks;
+      : (content as any)?.tertiaryAudioTracks ||
+        contentPart0?.tertiaryAudioTracks ||
+        moviePart0?.tertiaryAudioTracks;
 
     const hasVerifiedS1 = Array.isArray(existingS1Dl) && existingS1Dl.length > 0;
     const hasVerifiedS2 = Array.isArray(existingS2Dl) && existingS2Dl.length > 0;
@@ -614,9 +709,21 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       });
     }
 
-    const needS1Probe = Boolean(primaryUrl && (!hasVerifiedS1 || !Array.isArray(existingS1Audios) || existingS1Audios.length === 0));
-    const needS2Probe = Boolean(secondaryUrl && (!hasVerifiedS2 || !Array.isArray(existingS2Audios) || existingS2Audios.length === 0));
-    const needS3Probe = Boolean(tertiaryUrl && !hasVerifiedS3);
+    const needS1Probe = Boolean(
+      primaryUrl &&
+        (!hasVerifiedS1 ||
+          existingS1Dl.length <= 1 ||
+          !Array.isArray(existingS1Audios) ||
+          existingS1Audios.length === 0)
+    );
+    const needS2Probe = Boolean(
+      secondaryUrl &&
+        (!hasVerifiedS2 ||
+          existingS2Dl.length <= 1 ||
+          !Array.isArray(existingS2Audios) ||
+          existingS2Audios.length === 0)
+    );
+    const needS3Probe = Boolean(tertiaryUrl && (!hasVerifiedS3 || existingS3Dl.length <= 1));
 
     if (!needS1Probe && !needS2Probe && !needS3Probe) {
       setIsProbing(false);
@@ -633,56 +740,74 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         setIsProbing(true);
       }
       try {
-        await Promise.all([
+        const [s1, s2, s3] = await Promise.all([
           needS1Probe
-            ? probeSingleServerUrl(primaryUrl, requestedDur).then((s1) => {
-                if (!isCancelled && s1) {
+            ? probeSingleServerUrl(primaryUrl, requestedDur).then((res) => {
+                if (!isCancelled && res) {
                   setServer1Meta((prev) => ({
-                    downloadQualities:
-                      prev?.downloadQualities && prev.downloadQualities.length > 0
-                        ? prev.downloadQualities
-                        : s1.downloadQualities,
+                    downloadQualities: mergeVerifiedAndProbedQualities(
+                      prev?.downloadQualities,
+                      res.downloadQualities
+                    ),
                     audioTracks:
-                      s1.audioTracks && s1.audioTracks.length > 0 ? s1.audioTracks : prev?.audioTracks,
-                    duration: s1.duration || prev?.duration || requestedDur,
+                      Array.isArray(prev?.audioTracks) && prev!.audioTracks!.length > 0
+                        ? prev!.audioTracks
+                        : res.audioTracks,
+                    duration: res.duration || prev?.duration || requestedDur,
                     isLiveProbed: true,
                   }));
                 }
+                return res;
               })
-            : Promise.resolve(),
+            : Promise.resolve(null),
           needS2Probe
-            ? probeSingleServerUrl(secondaryUrl, requestedDur).then((s2) => {
-                if (!isCancelled && s2) {
+            ? probeSingleServerUrl(secondaryUrl, requestedDur).then((res) => {
+                if (!isCancelled && res) {
                   setServer2Meta((prev) => ({
-                    downloadQualities:
-                      prev?.downloadQualities && prev.downloadQualities.length > 0
-                        ? prev.downloadQualities
-                        : s2.downloadQualities,
+                    downloadQualities: mergeVerifiedAndProbedQualities(
+                      prev?.downloadQualities,
+                      res.downloadQualities
+                    ),
                     audioTracks:
-                      s2.audioTracks && s2.audioTracks.length > 0 ? s2.audioTracks : prev?.audioTracks,
-                    duration: s2.duration || prev?.duration || requestedDur,
+                      Array.isArray(prev?.audioTracks) && prev!.audioTracks!.length > 0
+                        ? prev!.audioTracks
+                        : res.audioTracks,
+                    duration: res.duration || prev?.duration || requestedDur,
                     isLiveProbed: true,
                   }));
                 }
+                return res;
               })
-            : Promise.resolve(),
+            : Promise.resolve(null),
           needS3Probe
-            ? probeSingleServerUrl(tertiaryUrl, requestedDur).then((s3) => {
-                if (!isCancelled && s3) {
+            ? probeSingleServerUrl(tertiaryUrl, requestedDur).then((res) => {
+                if (!isCancelled && res) {
                   setServer3Meta((prev) => ({
-                    downloadQualities:
-                      prev?.downloadQualities && prev.downloadQualities.length > 0
-                        ? prev.downloadQualities
-                        : s3.downloadQualities,
+                    downloadQualities: mergeVerifiedAndProbedQualities(
+                      prev?.downloadQualities,
+                      res.downloadQualities
+                    ),
                     audioTracks:
-                      s3.audioTracks && s3.audioTracks.length > 0 ? s3.audioTracks : prev?.audioTracks,
-                    duration: s3.duration || prev?.duration || requestedDur,
+                      Array.isArray(prev?.audioTracks) && prev!.audioTracks!.length > 0
+                        ? prev!.audioTracks
+                        : res.audioTracks,
+                    duration: res.duration || prev?.duration || requestedDur,
                     isLiveProbed: true,
                   }));
                 }
+                return res;
               })
-            : Promise.resolve(),
+            : Promise.resolve(null),
         ]);
+        if (!isCancelled) {
+          const activeNeededUnverified =
+            (modalServer === 'server1' && !hasVerifiedS1 && needS1Probe && !s1) ||
+            (modalServer === 'server2' && !hasVerifiedS2 && needS2Probe && !s2) ||
+            (modalServer === 'server3' && !hasVerifiedS3 && needS3Probe && !s3);
+          if (activeNeededUnverified) {
+            setProbeError('Could not fetch live stream sizes/qualities (upstream server timed out or returned fallback). Using estimated sizes.');
+          }
+        }
       } finally {
         if (!isCancelled) setIsProbing(false);
       }
@@ -692,7 +817,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       isCancelled = true;
       clearTimeout(deferTimer);
     };
-  }, [content, isSeries, focusedEpisodeIdx, currentEpisodes, primaryUrl, secondaryUrl, tertiaryUrl, modalServer]);
+  }, [content, isSeries, focusedEpisodeIdx, currentEpisodes, primaryUrl, secondaryUrl, tertiaryUrl, modalServer, probeRetryTick]);
 
   // 2. Unified Available Languages Filter (Applies smoothly to BOTH Server 1 and Server 2 without forcing server jumps!)
   const availableLanguages = useMemo(() => {
@@ -704,11 +829,14 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       const parts = rawLang.split(/[,/|•+]+/).map((s) => s.trim()).filter(Boolean);
       for (const part of parts) {
         if (isQualityKey(part)) continue;
-        const cleaned = ClientHlsDownloader.normalizeLanguageLabel(part, part) || part.trim();
+        const stripped = part.replace(/\[.*?\]|\(.*?\)/g, '').trim();
+        if (!stripped) continue;
+        const cleaned = ClientHlsDownloader.normalizeLanguageLabel(stripped, stripped) || stripped;
         if (
           !cleaned ||
           cleaned === 'Default' ||
           cleaned === 'Default Audio' ||
+          cleaned === 'Original Audio' ||
           cleaned.toLowerCase() === 'unknown' ||
           isQualityKey(cleaned)
         ) {
@@ -727,10 +855,15 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     if (Array.isArray(server2Meta?.audioTracks)) {
       server2Meta!.audioTracks!.forEach(addLang);
     }
+    if (Array.isArray(server3Meta?.audioTracks)) {
+      server3Meta!.audioTracks!.forEach(addLang);
+    }
 
-    // Collect across episodes in the active season (both Server 1 & Server 2 metadata)
+    // Collect across episodes in the active season (Admin verified download languages prioritized!)
     if (isSeries) {
       for (const ep of currentEpisodes) {
+        if (Array.isArray((ep as any)?.verifiedDownloadLanguages)) (ep as any).verifiedDownloadLanguages.forEach(addLang);
+        if (Array.isArray((ep as any)?.downloadAudioTracks)) (ep as any).downloadAudioTracks.forEach(addLang);
         if (Array.isArray((ep as any)?.audioTracks)) (ep as any).audioTracks.forEach(addLang);
         if (Array.isArray((ep as any)?.secondaryAudioTracks)) (ep as any).secondaryAudioTracks.forEach(addLang);
         if (Array.isArray((ep as any)?.languages)) (ep as any).languages.forEach(addLang);
@@ -742,6 +875,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     }
 
     // Collect from content-level metadata
+    if (Array.isArray((content as any).verifiedDownloadLanguages)) {
+      (content as any).verifiedDownloadLanguages.forEach(addLang);
+    }
+    if (Array.isArray((content as any).downloadAudioTracks)) {
+      (content as any).downloadAudioTracks.forEach(addLang);
+    }
     if (Array.isArray((content as any).audioTracks)) {
       (content as any).audioTracks.forEach(addLang);
     }
@@ -765,7 +904,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       list.push('Hindi');
     }
     return list;
-  }, [content, isSeries, currentEpisodes, server1Meta, server2Meta]);
+  }, [content, isSeries, currentEpisodes, server1Meta, server2Meta, server3Meta]);
 
   const [selectedLanguage, setSelectedLanguage] = useState<string>(availableLanguages[0] || 'Hindi');
 
@@ -857,10 +996,13 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         : content.qualityLinks || contentPart0?.qualityLinks || moviePart0?.qualityLinks;
 
       savedDlArr = isS3
-        ? (content as any)?.tertiaryDownloadQualities || contentPart0?.tertiaryDownloadQualities
+        ? (content as any)?.tertiaryDownloadQualities || contentPart0?.tertiaryDownloadQualities || moviePart0?.tertiaryDownloadQualities
         : isS2
-        ? (content as any)?.secondaryDownloadQualities || contentPart0?.secondaryDownloadQualities
-        : (content as any)?.downloadQualities || contentPart0?.downloadQualities;
+        ? (content as any)?.secondaryDownloadQualities || contentPart0?.secondaryDownloadQualities || moviePart0?.secondaryDownloadQualities
+        : (content as any)?.downloadQualities ||
+          (content as any)?.verifiedDownloadQualities ||
+          contentPart0?.downloadQualities ||
+          moviePart0?.downloadQualities;
 
       const urls = extractUrlsFromItem(null, true);
       singleFallbackUrl = isS3 ? urls.tertiaryUrl : isS2 ? urls.secondaryUrl : urls.primaryUrl;
@@ -898,14 +1040,22 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
     }
 
     // 2. Merge Admin-verified downloadQualities (real MB size saved from Admin Verify button)
+    const distinctBoxUrls = new Set(Object.values(cleanedLinks)).size;
+    const isMultiDistinctManualBoxes = hasExplicitBoxes && distinctBoxUrls > 1;
+    const isPermFallback = Boolean(singleFallbackUrl && !SmartStreamService.isTemporaryHlsUrl(singleFallbackUrl));
+
     if (Array.isArray(savedDlArr)) {
       for (const q of savedDlArr) {
         const qId = String(q?.id || '').trim();
         if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
         const existing = map.get(qId);
-        if (hasExplicitBoxes && !existing) continue;
+        // Only filter out stale downloadQualities entries when Admin explicitly configured MULTIPLE different per-quality URLs in distinct boxes
+        if (isMultiDistinctManualBoxes && !existing && q?.url && !Object.values(cleanedLinks).includes(q.url)) continue;
         const realMb = Number(q?.sizeMb) > 0 ? Math.round(Number(q.sizeMb)) : existing?.sizeMb || 0;
-        const cleanUrl = SmartStreamService.sanitizeStreamUrl(existing?.url || q?.url || singleFallbackUrl || '');
+        const rawCandidateUrl = SmartStreamService.sanitizeStreamUrl(existing?.url || q?.url || singleFallbackUrl || '');
+        const cleanUrl = isPermFallback && SmartStreamService.isTemporaryHlsUrl(rawCandidateUrl)
+          ? singleFallbackUrl
+          : (rawCandidateUrl || singleFallbackUrl);
         if (!cleanUrl) continue;
         map.set(qId, {
           id: qId,
@@ -927,8 +1077,6 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         const qId = String(q?.id || '').trim();
         if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
         const existing = map.get(qId);
-        // Always allow 1080p from live probe if not already present, or if map is empty
-        if (!existing && map.size > 0 && !qId.toLowerCase().includes('1080')) continue;
         const realMb =
           existing?.sizeMb && existing.sizeMb > 0
             ? existing.sizeMb
@@ -958,23 +1106,32 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       }
     }
 
-    // 4. If single URL exists without explicit boxes or verified array yet, check SmartStreamService cache or provide single entry
-    if (map.size === 0 && singleFallbackUrl) {
+    // 4. Merge any cached stream meta (even if Admin saved only 1 quality like 1080p, discover 720p/480p/360p from cached manifest!)
+    if (singleFallbackUrl) {
       const cachedMeta = SmartStreamService.getCachedStreamMeta(singleFallbackUrl);
       if (cachedMeta && Array.isArray(cachedMeta.downloadQualities) && cachedMeta.downloadQualities.length > 0) {
         for (const q of cachedMeta.downloadQualities) {
           const qId = String(q?.id || '').trim();
           if (!isQualityKey(qId) || qId.toLowerCase() === 'auto') continue;
+          const existing = map.get(qId);
+          const realMb =
+            existing?.sizeMb && existing.sizeMb > 0
+              ? existing.sizeMb
+              : Number(q?.sizeMb) > 0
+              ? Math.round(Number(q.sizeMb))
+              : 0;
+          const cleanUrl = existing?.url || SmartStreamService.sanitizeStreamUrl(q?.url || singleFallbackUrl);
+          if (!cleanUrl) continue;
           map.set(qId, {
             id: qId,
-            url: SmartStreamService.sanitizeStreamUrl(q?.url || singleFallbackUrl),
-            sizeMb: Number(q?.sizeMb) > 0 ? Math.round(Number(q.sizeMb)) : 0,
-            bandwidth: Number(q?.bandwidth || 0),
-            label: `${qId} Stream`,
-            badge: isS3 ? 'Streamtape Direct' : 'HLS Stream',
+            url: cleanUrl,
+            sizeMb: realMb,
+            bandwidth: Number(existing?.bandwidth || q?.bandwidth || 0),
+            label: existing?.label || `${qId} Stream`,
+            badge: realMb > 0 ? (existing?.badge || 'Verified • Live Size') : isS3 ? 'Streamtape Direct' : 'HLS Stream',
           });
         }
-      } else if (isS3) {
+      } else if (map.size === 0 && isS3) {
         const inferredQ = singleFallbackUrl.includes('1080')
           ? '1080p'
           : singleFallbackUrl.includes('480')
@@ -991,20 +1148,23 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
       }
     }
 
-    // 5. If content specifies 1080p quality, ensure 1080p is in download qualities map
-    const rawQuals = (content as any)?.qualities || (content as any)?.quality || '';
+    // 5. Ensure ALL verified/listed qualities on the episode or content appear (not only 1080p!)
+    const rawQuals = (ep ? (ep as any)?.qualities : null) || (content as any)?.qualities || (content as any)?.quality || '';
     const qualsStr = Array.isArray(rawQuals) ? rawQuals.join(' ') : String(rawQuals);
-    if (/1080/i.test(qualsStr) && !map.has('1080p')) {
-      const bestUrl = singleFallbackUrl || (map.size > 0 ? Array.from(map.values())[0].url : '');
-      if (bestUrl) {
-        map.set('1080p', {
-          id: '1080p',
-          url: bestUrl,
-          sizeMb: 0,
-          bandwidth: 0,
-          label: '1080p Full HD',
-          badge: 'Full HD',
-        });
+    const bestUrlForFallback = singleFallbackUrl || (map.size > 0 ? Array.from(map.values())[0].url : '');
+    if (bestUrlForFallback && qualsStr) {
+      for (const qToken of ['1440p', '1080p', '720p', '480p', '360p', '240p']) {
+        const numPart = qToken.replace('p', '');
+        if (new RegExp(numPart, 'i').test(qualsStr) && !map.has(qToken)) {
+          map.set(qToken, {
+            id: qToken,
+            url: bestUrlForFallback,
+            sizeMb: 0,
+            bandwidth: 0,
+            label: `${qToken} ${qToken === '1080p' ? 'Full HD' : qToken === '720p' ? 'HD' : qToken === '480p' ? 'Standard' : 'Data Saver'}`,
+            badge: 'Verified Stream',
+          });
+        }
       }
     }
 
@@ -1456,7 +1616,12 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
             thirdPair && thirdPair.url !== primaryPair.url && thirdPair.url !== backupPair?.url
               ? thirdPair.url
               : undefined,
-          sizeMb: 0,
+          sizeMb: (() => {
+            const epDur = Number(ep?.duration || content.duration || 1440);
+            const qLower = targetQ.toLowerCase();
+            const estBps = qLower.includes('1080') ? 2600000 : qLower.includes('720') ? 1350000 : qLower.includes('480') ? 650000 : qLower.includes('360') ? 280000 : 150000;
+            return Math.max(15, Math.round((estBps * epDur) / (8 * 1024 * 1024)));
+          })(),
           status: isAutoSwitched ? 'cross_server_exact' : 'exact',
           isFallbackQuality: false,
           isCrossServerAuto: isAutoSwitched,
@@ -1843,6 +2008,8 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         animate={{ y: 0, transition: { type: 'tween', ease: [0.22, 1, 0.36, 1], duration: 0.22 } }}
         exit={{ y: '100%', transition: { type: 'tween', ease: [0.4, 0, 1, 1], duration: 0.16 } }}
         drag="y"
+        dragControls={dragControls}
+        dragListener={false}
         dragConstraints={{ top: 0, bottom: 0 }}
         dragElastic={{ top: 0, bottom: 0.45 }}
         onDragEnd={(_e, info) => {
@@ -1855,22 +2022,32 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
         style={{ willChange: 'transform', transform: 'translate3d(0,0,0)' }}
         className="relative z-10 flex flex-col w-full h-full bg-[#101116] border-t border-white/10 rounded-t-2xl shadow-[0_-12px_40px_rgba(0,0,0,0.9)] overflow-hidden select-none text-left"
       >
-        {/* Swipe-Down Pill Indicator */}
-        <div className="w-full flex justify-center pt-2 pb-0.5 cursor-grab active:cursor-grabbing">
-          <div className="w-10 h-1 rounded-full bg-white/20" />
-        </div>
-        {/* TOP HEADER: "Download" on left, "X" on right */}
-        <div className="flex items-center justify-between px-4 py-2.5 shrink-0">
-          <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
-            {showSummaryReview ? 'Confirm Download' : 'Download'}
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
-          >
-            <X className="h-5 w-5" />
-          </button>
+        {/* Top Handle & Header Drag Zone: ONLY pulling this handle closes the modal; body scroll is 100% free! */}
+        <div
+          onPointerDown={(e) => {
+            if (!(e.target as HTMLElement).closest('button')) {
+              dragControls.start(e);
+            }
+          }}
+          className="shrink-0 touch-none cursor-grab active:cursor-grabbing"
+        >
+          {/* Swipe-Down Pill Indicator */}
+          <div className="w-full flex justify-center pt-2.5 pb-1">
+            <div className="w-12 h-1.5 rounded-full bg-white/30" />
+          </div>
+          {/* TOP HEADER: "Download" on left, "X" on right */}
+          <div className="flex items-center justify-between px-4 py-2 shrink-0">
+            <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
+              {showSummaryReview ? 'Confirm Download' : 'Download'}
+            </h3>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         {/* HLS Mode Requirement Banner if content has no HLS stream */}
@@ -1888,7 +2065,7 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
 
         {/* SUMMARY REVIEW SCREEN (Shown if fallback warnings exist or user confirms queue) */}
         {showSummaryReview ? (
-          <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3.5 scrollbar-thin">
+          <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3.5 scrollbar-thin" style={{ overscrollBehavior: 'contain', touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}>
             <div className="p-3.5 rounded-xl bg-[#1a1b22] border border-white/10">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-purple-300 uppercase tracking-wide">
@@ -2130,6 +2307,23 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
               {/* Subtle Divider */}
               <div className="border-t border-white/10 my-3" />
 
+              {probeError && (
+                <div className="mb-2.5 flex items-center justify-between gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-[11px] text-amber-200">
+                  <span className="flex-1 leading-snug">{probeError}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (primaryUrl) SmartStreamService.clearClientCache(primaryUrl);
+                      setProbeError(null);
+                      setProbeRetryTick((t) => t + 1);
+                    }}
+                    className="shrink-0 px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 font-semibold cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
               {/* Quality Pills Row (e.g. 480P, 720P, 1080P) */}
               <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar scrollbar-none">
                 {(isSeries
@@ -2164,22 +2358,27 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
             </div>
 
             {/* SCROLLABLE EPISODE / MOVIE ITEM LIST */}
-            <div className="flex-1 overflow-y-auto px-4 py-1 divide-y divide-white/[0.04] scrollbar-thin">
+            <div
+              className="flex-1 overflow-y-auto px-4 py-1 divide-y divide-white/[0.04] scrollbar-thin"
+              style={{ overscrollBehavior: 'contain', touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
+            >
               {isSeries ? (
                 episodeResolutionPlans.map((plan) => {
                   const isSelected = selectedEpIndices.has(plan.epIndex);
                   const epObj = currentEpisodes[plan.epIndex];
                   const epRawDur =
+                    parseModalDurationSec((epObj as any)?.verifiedDuration) ||
                     epObj?.duration ||
                     (Array.isArray(epObj?.videoLinks) && epObj.videoLinks[0]?.duration) ||
                     (epObj as any)?.runtime;
                   const durationStr = formatEpDuration(epRawDur, plan.epIndex);
-                  const sizeStr =
-                    plan.sizeMb > 0
-                      ? plan.sizeMb >= 1000
-                        ? `${(plan.sizeMb / 1024).toFixed(2)}GB`
-                        : `${plan.sizeMb.toFixed(1)}MB`
-                      : '168.3MB';
+                  const fallbackEpDur = Number(epRawDur || content.duration || 1440);
+                  const fallbackQ = (plan.resolvedQuality || activeQualityId || '720p').toLowerCase();
+                  const fallbackBps = fallbackQ.includes('1080') ? 3600000 : fallbackQ.includes('720') ? 1800000 : fallbackQ.includes('480') ? 750000 : fallbackQ.includes('360') ? 320000 : 160000;
+                  const effectiveMb = plan.sizeMb > 0 ? plan.sizeMb : Math.max(15, Math.round((fallbackBps * fallbackEpDur) / (8 * 1024 * 1024)));
+                  const sizeStr = effectiveMb >= 1000
+                    ? `${(effectiveMb / 1024).toFixed(2)}GB`
+                    : `${effectiveMb.toFixed(1)}MB`;
 
                   return (
                     <button
@@ -2240,16 +2439,20 @@ const DownloadSelectionModalInner: React.FC<DownloadSelectionModalProps> = ({
                     ]
                 ).map((q) => {
                   const isSelected = activeQualityId.toLowerCase() === q.id.toLowerCase();
-                  const sizeStr =
-                    q.movieSizeMb > 0
-                      ? q.movieSizeMb >= 1000
-                        ? `${(q.movieSizeMb / 1024).toFixed(2)}GB`
-                        : `${q.movieSizeMb.toFixed(1)}MB`
-                      : '920.5MB';
                   const movieRawDur =
-                    content.duration ||
+                    parseModalDurationSec((content as any)?.verifiedDuration) ||
+                    (Number(content.duration) > 0 && Number(content.duration) !== 1400 ? Number(content.duration) : 0) ||
+                    (activeStreamDuration > 10 ? Math.round(activeStreamDuration) : 0) ||
+                    Number(content.duration || 0) ||
                     (Array.isArray((content as any)?.videoLinks) && (content as any).videoLinks[0]?.duration) ||
                     (content as any)?.runtime;
+                  const estDurSec = Number(movieRawDur) > 10 ? Number(movieRawDur) : 5400;
+                  const mqLower = q.id.toLowerCase();
+                  const mEstBps = mqLower.includes('1080') ? 3600000 : mqLower.includes('720') ? 1800000 : mqLower.includes('480') ? 750000 : mqLower.includes('360') ? 320000 : 160000;
+                  const effMovieMb = q.movieSizeMb > 0 ? q.movieSizeMb : Math.max(40, Math.round((mEstBps * estDurSec) / (8 * 1024 * 1024)));
+                  const sizeStr = effMovieMb >= 1000
+                    ? `${(effMovieMb / 1024).toFixed(2)}GB`
+                    : `${effMovieMb.toFixed(1)}MB`;
                   const durationStr = formatEpDuration(movieRawDur);
 
                   return (

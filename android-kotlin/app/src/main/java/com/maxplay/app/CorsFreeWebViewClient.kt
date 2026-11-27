@@ -51,6 +51,70 @@ class CorsFreeWebViewClient(
         return true
     }
 
+    override fun onPageFinished(view: WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        if (view == null || url == null || url == "about:blank") return
+        if (isAdminApp && url.contains(VIRTUAL_ASSET_HOST, ignoreCase = true)) {
+            view.postDelayed({
+                try {
+                    view.evaluateJavascript(
+                        """
+                        (function() {
+                            if (typeof window.syncAdminAuthVisibility === 'function') {
+                                window.syncAdminAuthVisibility();
+                            }
+                            if (!document.body || document.body.children.length === 0) {
+                                return 'EMPTY_DOM';
+                            }
+                            return 'OK';
+                        })();
+                        """.trimIndent()
+                    ) { status ->
+                        if (status != null && status.contains("EMPTY_DOM")) {
+                            try {
+                                view.clearCache(false)
+                                view.reload()
+                            } catch (_: Exception) {}
+                        }
+                    }
+                } catch (_: Exception) {}
+            }, 1500L)
+        }
+    }
+
+    override fun onReceivedError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        error: android.webkit.WebResourceError?
+    ) {
+        super.onReceivedError(view, request, error)
+        if (request?.isForMainFrame == true && view != null) {
+            val reqUrl = request.url?.toString() ?: ""
+            if (isAdminApp && !reqUrl.contains(VIRTUAL_ASSET_HOST, ignoreCase = true)) {
+                try {
+                    val hasLocalAdmin = context.assets.list("webapp")?.contains("admin.html") == true
+                    if (hasLocalAdmin) {
+                        view.post { view.loadUrl(MainActivity.LOCAL_ADMIN_BUNDLE_URL) }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    override fun onReceivedHttpError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        errorResponse: WebResourceResponse?
+    ) {
+        super.onReceivedHttpError(view, request, errorResponse)
+        if (request?.isForMainFrame == true && view != null) {
+            val reqUrl = request.url?.toString() ?: ""
+            if (isAdminApp && !reqUrl.contains(VIRTUAL_ASSET_HOST, ignoreCase = true)) {
+                view.post { view.loadUrl(MainActivity.LOCAL_ADMIN_BUNDLE_URL) }
+            }
+        }
+    }
+
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val uri = request?.url ?: return false
         val scheme = (uri.scheme ?: "").lowercase()
@@ -502,8 +566,15 @@ class CorsFreeWebViewClient(
                     if (root.isNotEmpty()) {
                         hostRefererMap[root] = "https://ravok.buzz/"
                     }
-                } else if (host.contains("animesalt.cx")) {
-                    hostRefererMap[host] = "https://animesalt.cx/"
+                } else if (host.contains("megaplay.buzz") || host.contains("nexabloom") || host.contains("distantdaydreams") || host.contains("emeralddrift")) {
+                    hostRefererMap[host] = "https://megaplay.buzz/"
+                    hostRefererMap["megaplay.buzz"] = "https://megaplay.buzz/"
+                    if (root.isNotEmpty()) {
+                        hostRefererMap[root] = "https://megaplay.buzz/"
+                    }
+                } else if (host.contains("animesalt")) {
+                    val s = android.net.Uri.parse(streamUrl).scheme ?: "https"
+                    hostRefererMap[host] = "$s://$host/"
                 }
                 if (userAgent.isNotBlank()) {
                     hostUserAgentMap[host] = userAgent
@@ -532,12 +603,15 @@ class CorsFreeWebViewClient(
             if (root.isNotEmpty()) {
                 hostRefererMap[root]?.let { return it }
             }
-            // ── AnimeSalt & Ravok CDN Mapping ──
+            // ── AnimeSalt, Ravok & Megaplay CDN Mapping ──
             if (cleanHost.contains("ravok.buzz") || cleanHost.contains("as-cdn")) {
                 return "https://ravok.buzz/"
             }
-            if (cleanHost.contains("animesalt.cx")) {
-                return "https://animesalt.cx/"
+            if (cleanHost.contains("megaplay.buzz") || cleanHost.contains("nexabloom") || cleanHost.contains("distantdaydreams") || cleanHost.contains("emeralddrift")) {
+                return "https://megaplay.buzz/"
+            }
+            if (cleanHost.contains("animesalt")) {
+                return "$fallbackScheme://$cleanHost/"
             }
             if (cleanHost.contains("streamtape") || cleanHost.contains("strtape") ||
                 cleanHost.contains("shavetape") || cleanHost.contains("streamta.pe") ||
@@ -822,12 +896,17 @@ class CorsFreeWebViewClient(
             return try {
                 val inputStream = context.assets.open("webapp/$cleanPath")
                 val mime = getAssetMimeType(cleanPath)
+                val headers = buildCorsHeaders(mime).toMutableMap()
+                if (lowerCleanPath.endsWith(".html") || lowerCleanPath.endsWith(".htm")) {
+                    headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                    headers["Pragma"] = "no-cache"
+                }
                 WebResourceResponse(
                     mime,
                     "UTF-8",
                     200,
                     "OK",
-                    buildCorsHeaders(mime),
+                    headers,
                     inputStream
                 )
             } catch (_: Exception) {

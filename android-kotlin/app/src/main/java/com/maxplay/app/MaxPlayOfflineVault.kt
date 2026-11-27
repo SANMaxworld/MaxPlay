@@ -165,7 +165,9 @@ object MaxPlayOfflineVault {
             }
 
             val resolvedUa = CorsFreeWebViewClient.resolveUserAgentForHost(segHost)
-            val resolvedRef = if (refererUrl.isNotBlank()) {
+            val resolvedRef = if (segHost.contains("as-cdn") || segHost.contains("ravok.buzz")) {
+                "https://ravok.buzz/"
+            } else if (refererUrl.isNotBlank()) {
                 refererUrl
             } else {
                 CorsFreeWebViewClient.resolveRefererForHost(segHost)
@@ -186,13 +188,23 @@ object MaxPlayOfflineVault {
             }
 
             var response = downloadHttpClient.newCall(buildSegReq(useOrigin = true, useRef = true)).execute()
-            if (response.code == 401 || response.code == 403) {
+            if (response.code !in 200..299) {
                 response.close()
                 response = downloadHttpClient.newCall(buildSegReq(useOrigin = false, useRef = true)).execute()
             }
-            if (response.code == 401 || response.code == 403) {
+            if (response.code !in 200..299) {
                 response.close()
                 response = downloadHttpClient.newCall(buildSegReq(useOrigin = false, useRef = false)).execute()
+            }
+            if (response.code !in 200..299 && (segHost.contains("as-cdn") || segHost.contains("ravok"))) {
+                response.close()
+                val ravokReq = Request.Builder()
+                    .url(segmentUrl)
+                    .header("User-Agent", resolvedUa)
+                    .header("Referer", "https://ravok.buzz/")
+                    .header("Accept", "*/*")
+                    .build()
+                response = downloadHttpClient.newCall(ravokReq).execute()
             }
 
             response.use { resp ->
@@ -2234,13 +2246,13 @@ object MaxPlayOfflineVault {
     private val p2pLanHttpClient: okhttp3.OkHttpClient by lazy {
         okhttp3.OkHttpClient.Builder()
             .dispatcher(okhttp3.Dispatcher().apply {
-                maxRequests = 64
-                maxRequestsPerHost = 32
+                maxRequests = 128
+                maxRequestsPerHost = 128
             })
-            .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
             .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-            .connectionPool(okhttp3.ConnectionPool(64, 5, java.util.concurrent.TimeUnit.MINUTES))
+            .connectionPool(okhttp3.ConnectionPool(128, 5, java.util.concurrent.TimeUnit.MINUTES))
             .retryOnConnectionFailure(true)
             .build()
     }
@@ -2453,7 +2465,7 @@ object MaxPlayOfflineVault {
             try {
                 s.soTimeout = 45000
                 s.tcpNoDelay = true
-                s.sendBufferSize = 4 * 1024 * 1024
+                s.sendBufferSize = 8 * 1024 * 1024
                 val reader = java.io.BufferedReader(java.io.InputStreamReader(s.getInputStream()))
                 val requestLine = reader.readLine() ?: return
                 val parts = requestLine.split(" ")
@@ -3076,7 +3088,7 @@ object MaxPlayOfflineVault {
                     java.io.RandomAccessFile(directMp4Tmp, "rw").use { raf ->
                         raf.setLength(totalExpectedBytes)
                     }
-                    val channelCount = if (totalExpectedBytes >= 16L * 1024L * 1024L) 4 else 1
+                    val channelCount = if (totalExpectedBytes >= 16L * 1024L * 1024L) 8 else 2
                     val sliceSize = (totalExpectedBytes + channelCount - 1L) / channelCount
                     val rawLatch = java.util.concurrent.CountDownLatch(channelCount)
                     val rawErr = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
@@ -3097,7 +3109,7 @@ object MaxPlayOfflineVault {
                                     val body = resp.body ?: throw Exception("Empty rawstream")
                                     java.io.RandomAccessFile(directMp4Tmp, "rw").use { raf ->
                                         raf.seek(sliceStart)
-                                        val buf = ByteArray(1024 * 1024)
+                                        val buf = ByteArray(2 * 1024 * 1024)
                                         body.byteStream().use { input ->
                                             var r: Int
                                             while (input.read(buf).also { r = it } != -1) {
@@ -3177,8 +3189,8 @@ object MaxPlayOfflineVault {
             val batchJobs = java.util.concurrent.ConcurrentLinkedQueue<P2pBatchJob>()
             val batchSize = when {
                 totalSegs == 1 -> 1
-                isDirectMp4 -> 8
-                else -> 64
+                isDirectMp4 -> 16
+                else -> 128
             }
 
             var sIdx = 0
@@ -3194,12 +3206,12 @@ object MaxPlayOfflineVault {
                 aIdx = eIdx + 1
             }
 
-            val workerCount = minOf(12, batchJobs.size.coerceAtLeast(1))
+            val workerCount = minOf(16, batchJobs.size.coerceAtLeast(1))
             val latch = java.util.concurrent.CountDownLatch(workerCount)
 
             for (w in 0 until workerCount) {
                 InbuiltStreamScraper.backgroundExecutor.execute {
-                    val ioBuf = ByteArray(2 * 1024 * 1024)
+                    val ioBuf = ByteArray(4 * 1024 * 1024)
                     try {
                         while (firstError.get() == null) {
                             val batch = batchJobs.poll() ?: break

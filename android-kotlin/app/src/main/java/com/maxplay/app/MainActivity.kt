@@ -48,6 +48,10 @@ class MainActivity : AppCompatActivity() {
     private var popunderDialog: android.app.Dialog? = null
     private var popunderWebView: WebView? = null
     private var pipReceiverRegistered: Boolean = false
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+    private val networkSwitchHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    @Volatile
+    private var lastNetworkInfo: Pair<String, String>? = null
 
     private val pipActionReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
@@ -130,23 +134,33 @@ class MainActivity : AppCompatActivity() {
         // so first-install video playback starts in 1-2 seconds!
         StreamtapeExtractor.globalCachedMainUa = webView.settings.userAgentString
         InbuiltStreamScraper.prewarmNetworkingAndCrypto(applicationContext)
+        registerNetworkSwitchObserver()
+
+        // Clear stale WebView HTTP cache once whenever a freshly installed/rebuilt APK launches
+        try {
+            val prefs = getSharedPreferences("maxplay_native_prefs", MODE_PRIVATE)
+            val pkgInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            val currentInstallTs = pkgInfo.lastUpdateTime
+            val lastBootTs = prefs.getLong("last_apk_update_ts", 0L)
+            if (currentInstallTs > 0L && currentInstallTs != lastBootTs) {
+                webView.clearCache(true)
+                prefs.edit().putLong("last_apk_update_ts", currentInstallTs).apply()
+            }
+        } catch (_: Exception) {}
 
         val isAdminApp = packageName.endsWith(".admin", ignoreCase = true)
 
         // Load bundled webapp assets over HTTPS virtual origin if present in APK, otherwise load live MaxPlay URL
         val targetAssetFile = if (isAdminApp) "admin.html" else "index.html"
-        val hasLocalBundle = try {
-            assets.list("webapp")?.contains(targetAssetFile) == true
-        } catch (_: Exception) {
-            false
-        }
+        val hasLocalBundle = hasLocalWebAsset(targetAssetFile)
 
         if (isAdminApp) {
-            if (hasLocalBundle) {
-                webView.loadUrl(LOCAL_ADMIN_BUNDLE_URL)
-            } else {
-                webView.loadUrl(LIVE_ADMIN_URL)
-            }
+            webView.loadUrl(LOCAL_ADMIN_BUNDLE_URL)
         } else {
             if (hasLocalBundle) {
                 webView.loadUrl(LOCAL_BUNDLE_URL)
@@ -296,6 +310,7 @@ class MainActivity : AppCompatActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             databaseEnabled = true
+            javaScriptCanOpenWindowsAutomatically = true
             mediaPlaybackRequiresUserGesture = false
             allowFileAccess = false
             allowContentAccess = true
@@ -1994,14 +2009,14 @@ class MainActivity : AppCompatActivity() {
             val wantsEq = enabled && bandsDb.any { kotlin.math.abs(it) > 0.05 }
             val wantsBass = enabled && bassLevel > 0
             val extraGainMb = when {
-                volumeBoostPct >= 300 -> 3000
-                volumeBoostPct >= 250 -> 2400
-                volumeBoostPct >= 200 -> 1800
-                volumeBoostPct >= 175 -> 1400
-                volumeBoostPct >= 150 -> 1000
-                volumeBoostPct >= 125 -> 600
-                volumeBoostPct > 100 -> ((volumeBoostPct - 100) * 15)
-                enabled && immersiveLevel > 0 -> (immersiveLevel.coerceIn(0, 100) * 6)
+                volumeBoostPct >= 300 -> 10000 // +10 dB (Massive clean loudness on hardware speakers)
+                volumeBoostPct >= 250 -> 8000  // +8 dB
+                volumeBoostPct >= 200 -> 6000  // +6 dB (True 200% doubling of acoustic loudness)
+                volumeBoostPct >= 175 -> 4800  // +4.8 dB
+                volumeBoostPct >= 150 -> 3600  // +3.6 dB
+                volumeBoostPct >= 125 -> 2000  // +2.0 dB
+                volumeBoostPct > 100 -> ((volumeBoostPct - 100) * 60)
+                enabled && immersiveLevel > 0 -> (immersiveLevel.coerceIn(0, 100) * 15)
                 else -> 0
             }
             val wantsLoudness = extraGainMb > 0
@@ -2432,12 +2447,10 @@ class MainActivity : AppCompatActivity() {
 
                 val isAdminApp = packageName.endsWith(".admin", ignoreCase = true)
                 val targetAssetFile = if (isAdminApp) "admin.html" else "index.html"
-                val hasLocalBundle = try {
-                    assets.list("webapp")?.contains(targetAssetFile) == true
-                } catch (_: Exception) { false }
+                val hasLocalBundle = hasLocalWebAsset(targetAssetFile)
 
                 if (isAdminApp) {
-                    webView.loadUrl(if (hasLocalBundle) LOCAL_ADMIN_BUNDLE_URL else LIVE_ADMIN_URL)
+                    webView.loadUrl(LOCAL_ADMIN_BUNDLE_URL)
                 } else {
                     webView.loadUrl(if (hasLocalBundle) LOCAL_BUNDLE_URL else LIVE_APP_URL)
                 }
@@ -2445,8 +2458,98 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun hasLocalWebAsset(targetAssetFile: String): Boolean {
+        return try {
+            assets.open("webapp/$targetAssetFile").use { true }
+        } catch (_: Exception) {
+            try {
+                assets.list("webapp")?.contains(targetAssetFile) == true
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    private fun classifyNetworkSignature(
+        cm: android.net.ConnectivityManager,
+        network: android.net.Network?
+    ): Pair<String, String>? {
+        val activeNet = network ?: cm.activeNetwork ?: return null
+        val caps = try { cm.getNetworkCapabilities(activeNet) } catch (_: Throwable) { null } ?: return null
+        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) return null
+        val transport = when {
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+            else -> "OTHER"
+        }
+        val handle = try { activeNet.networkHandle } catch (_: Throwable) { 0L }
+        return Pair(transport, "${transport}:${handle}")
+    }
+
+    private fun registerNetworkSwitchObserver() {
+        try {
+            val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                ?: return
+            lastNetworkInfo = classifyNetworkSignature(cm, null)
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                private fun scheduleEvaluation(changedNetwork: android.net.Network?) {
+                    networkSwitchHandler.removeCallbacksAndMessages(null)
+                    networkSwitchHandler.postDelayed({
+                        try {
+                            val current = classifyNetworkSignature(cm, null)
+                                ?: classifyNetworkSignature(cm, changedNetwork)
+                                ?: return@postDelayed
+                            val prev = lastNetworkInfo
+                            if (prev == null) {
+                                lastNetworkInfo = current
+                                return@postDelayed
+                            }
+                            if (prev.second != current.second) {
+                                lastNetworkInfo = current
+                                InbuiltStreamScraper.clearAllPlaybackCachesForNetworkSwitch()
+                                val fromSafe = prev.first
+                                val toSafe = current.first
+                                val js = "try{window.dispatchEvent(new CustomEvent('MAXPLAY_NETWORK_SWITCH',{detail:{from:'$fromSafe',to:'$toSafe',ts:Date.now()}}));}catch(e){}"
+                                runOnUiThread {
+                                    try {
+                                        if (::webView.isInitialized) {
+                                            webView.evaluateJavascript(js, null)
+                                        }
+                                    } catch (_: Throwable) {}
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }, 750L)
+                }
+
+                override fun onAvailable(network: android.net.Network) {
+                    scheduleEvaluation(network)
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: android.net.Network,
+                    networkCapabilities: android.net.NetworkCapabilities
+                ) {
+                    scheduleEvaluation(network)
+                }
+            }
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (_: Throwable) {}
+    }
+
     override fun onDestroy() {
         try {
+            networkSwitchHandler.removeCallbacksAndMessages(null)
+            networkCallback?.let { cb ->
+                try {
+                    val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                    cm?.unregisterNetworkCallback(cb)
+                } catch (_: Throwable) {}
+                networkCallback = null
+            }
             cancelMusicNotificationState()
             try { nativeEqualizer?.release() } catch (_: Exception) {}
             try { nativeBassBoost?.release() } catch (_: Exception) {}

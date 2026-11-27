@@ -66,13 +66,6 @@ export const ContentCard: React.FC<ContentCardProps> = React.memo(({
           </button>
         )}
 
-        {/* AnimeSalt Engine Badge (top left) */}
-        {Boolean((item as any).isAnimeSalt) && !onEdit && (
-          <div className="absolute top-1.5 left-1.5 rounded bg-purple-950/85 border border-purple-500/50 px-1.5 py-0.5 text-[9px] font-extrabold text-purple-200 backdrop-blur-[2px] pointer-events-none flex items-center gap-1 shadow-md">
-            <span>⚡ AnimeSalt</span>
-          </div>
-        )}
-
         {/* Language Badge (top right) */}
         {langBadge && (
           <div className="absolute top-1.5 right-1.5 rounded bg-black/75 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-[2px] pointer-events-none">

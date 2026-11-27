@@ -1,3 +1,5 @@
+export type TabType = 'home' | 'downloads' | 'music' | 'anime' | 'me';
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -66,6 +68,8 @@ export interface ContentItem {
   createdAt?: string;
   videoUrl?: string;
   secondaryVideoUrl?: string;
+  secondaryServerUrl?: string;
+  isAnimeSalt?: boolean;
   tertiaryVideoUrl?: string;
   tertiaryServerUrl?: string;
   isSmartHls?: boolean;
@@ -107,6 +111,8 @@ export interface Episode {
   thumbnailUrl: string;
   videoUrl: string;
   secondaryVideoUrl?: string;
+  secondaryServerUrl?: string;
+  isAnimeSalt?: boolean;
   tertiaryVideoUrl?: string;
   tertiaryServerUrl?: string;
   isSmartHls?: boolean;

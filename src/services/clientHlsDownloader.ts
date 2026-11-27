@@ -607,7 +607,10 @@ export class ClientHlsDownloader {
     matchedAudioLabel: string;
   }> {
     const rawMasterUrl = unwrapProxyUrl(masterUrl);
-    const effectiveReferer = refererUrl || extractRefererFromProxyUrl(masterUrl) || SmartStreamService.resolveEmbedReferer(rawMasterUrl);
+    const effectiveReferer =
+      rawMasterUrl.includes('ravok.buzz') || rawMasterUrl.includes('as-cdn')
+        ? 'https://ravok.buzz/'
+        : refererUrl || extractRefererFromProxyUrl(masterUrl) || SmartStreamService.resolveEmbedReferer(rawMasterUrl);
     let text = '';
 
     if (NativeBridgeService.isRunningInKotlinApp()) {
@@ -778,7 +781,10 @@ export class ClientHlsDownloader {
     refererUrl: string = ''
   ): Promise<{ segments: string[]; totalDurationSec: number }> {
     const rawMediaUrl = unwrapProxyUrl(mediaPlaylistUrl);
-    const effectiveReferer = refererUrl || extractRefererFromProxyUrl(mediaPlaylistUrl) || SmartStreamService.resolveEmbedReferer(rawMediaUrl);
+    const effectiveReferer =
+      rawMediaUrl.includes('ravok.buzz') || rawMediaUrl.includes('as-cdn')
+        ? 'https://ravok.buzz/'
+        : refererUrl || extractRefererFromProxyUrl(mediaPlaylistUrl) || SmartStreamService.resolveEmbedReferer(rawMediaUrl);
     let text = '';
 
     if (NativeBridgeService.isRunningInKotlinApp()) {
@@ -1192,11 +1198,12 @@ export class ClientHlsDownloader {
             if (signal.aborted) throw new Error('Download aborted');
             try {
               if (useNativeDisk) {
+                const segReferer = (job.url.includes('as-cdn') || job.url.includes('ravok')) ? 'https://ravok.buzz/' : effectiveReferer;
                 const diskRes = await NativeBridgeService.downloadSegmentToDiskNative(
                   storageKey,
                   job.segIndex,
                   unwrapProxyUrl(job.url),
-                  effectiveReferer,
+                  segReferer,
                   job.isAudio
                 );
                 if (diskRes.ok && (diskRes.bytes || 0) > 0) {

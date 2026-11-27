@@ -159,6 +159,7 @@ interface InlinePlayerProps {
   onDiscoveredAudioTracks?: (tracks: string[]) => void;
   onDiscoveredQualities?: (qualities: string[]) => void;
   onRequestCrossServerLanguageSwitch?: (lang: string) => void;
+  userInitiatedPlayTrigger?: number;
 }
 
 export const InlinePlayer: React.FC<InlinePlayerProps> = ({
@@ -191,6 +192,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   onDiscoveredAudioTracks,
   onDiscoveredQualities,
   onRequestCrossServerLanguageSwitch,
+  userInitiatedPlayTrigger,
 }) => {
   const { user } = useAuth();
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -198,6 +200,68 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const prevStreamKeyRef = useRef<string | undefined>(streamKey);
   const prevServerRef = useRef<'server1' | 'server2' | 'server3'>(selectedServer);
+  const userPausedRef = useRef<boolean>(false);
+  const hasTriggeredInitialAutoPlayRef = useRef<boolean>(false);
+
+  const waitingWatchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const errCode4RetryCountRef = useRef<number>(0);
+
+  // Robust auto-play executor with unmuted -> muted fallback to bypass browser autoplay restrictions
+  const executeAutoPlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || userPausedRef.current) return;
+    setHasStarted(true);
+    setIsPlaying(true);
+    const p = video.play();
+    if (p !== undefined) {
+      p.catch((err) => {
+        if (err?.name === 'NotAllowedError') {
+          console.warn('[InlinePlayer] Autoplay restricted by browser; playing muted with tap-to-unmute listener...');
+          video.muted = true;
+          video.play().then(() => {
+            setIsPlaying(true);
+            setHasStarted(true);
+            const restoreAudio = () => {
+              if (videoRef.current) {
+                videoRef.current.muted = false;
+              }
+              window.removeEventListener('pointerdown', restoreAudio);
+              window.removeEventListener('keydown', restoreAudio);
+            };
+            window.addEventListener('pointerdown', restoreAudio, { once: true });
+            window.addEventListener('keydown', restoreAudio, { once: true });
+          }).catch(() => {});
+        } else if (err?.name !== 'AbortError') {
+          console.warn('[InlinePlayer] Autoplay error:', err);
+        }
+      });
+    }
+  }, []);
+
+  // Auto-play immediately whenever user explicitly taps an episode card, changes season, or switches server
+  useEffect(() => {
+    if (!userInitiatedPlayTrigger) return;
+    userPausedRef.current = false;
+    wasPlayingBeforeSwitchRef.current = true;
+    hasTriggeredInitialAutoPlayRef.current = false;
+    errCode4RetryCountRef.current = 0;
+    setHasStarted(true);
+    setIsPlaying(true);
+    executeAutoPlay();
+  }, [userInitiatedPlayTrigger, executeAutoPlay]);
+
+  useEffect(() => {
+    if (selectedServer !== prevServerRef.current) {
+      prevServerRef.current = selectedServer;
+      userPausedRef.current = false;
+      wasPlayingBeforeSwitchRef.current = true;
+      hasTriggeredInitialAutoPlayRef.current = false;
+      errCode4RetryCountRef.current = 0;
+      setHasStarted(true);
+      setIsPlaying(true);
+      executeAutoPlay();
+    }
+  }, [selectedServer, executeAutoPlay]);
   
   // Gesture and volume states (synced with real Android hardware inside APK)
   const [brightness, setBrightness] = useState<number>(() => {
@@ -216,9 +280,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const [capsuleProgress, setCapsuleProgress] = useState<number>(66.66);
   const prevSpeedRef = useRef<number>(1);
 
-  // Basic states
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasStarted, setHasStarted] = useState(false);
+  // Basic states: When autoPlay is enabled, default hasStarted and isPlaying to true so no blocking play banner ever renders!
+  const [isPlaying, setIsPlaying] = useState<boolean>(() => Boolean(autoPlay));
+  const [hasStarted, setHasStarted] = useState<boolean>(() => Boolean(autoPlay));
   const [isLoading, setIsLoading] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [isLocked, setIsLocked] = useState(false);
@@ -227,6 +291,30 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [videoStretchMode, setVideoStretchMode] = useState<'contain' | 'fill' | 'cover'>('contain');
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [manualRetrySeq, setManualRetrySeq] = useState<number>(0);
+  const manualRetryingRef = useRef<boolean>(false);
+
+  const formatPlaybackErrorReason = useCallback((rawErr: any): string => {
+    const msg = String(rawErr?.message || rawErr || '').trim();
+    const lower = msg.toLowerCase();
+    if (!msg) return 'Stream temporarily unavailable. Tap Retry to reload.';
+    if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('aborted')) {
+      return `Connection timed out while loading stream (${msg}). Tap Retry.`;
+    }
+    if (lower.includes('429')) {
+      return 'Server is busy (HTTP 429 rate limit). Please wait a moment and tap Retry.';
+    }
+    if (lower.includes('403') || lower.includes('401') || lower.includes('expired')) {
+      return `Stream session expired or rejected (${msg}). Tap Retry to refresh a fresh link.`;
+    }
+    if (lower.includes('404')) {
+      return 'Stream link not found (HTTP 404). Try switching server or tap Retry.';
+    }
+    if (lower.includes('network') || lower.includes('failed to fetch') || lower.includes('load failed')) {
+      return `Network error (${msg}). Check your internet connection and tap Retry.`;
+    }
+    return msg;
+  }, []);
 
   // Advanced features states
   const [playbackRate, setPlaybackRate] = useState<number>(1);
@@ -241,6 +329,20 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
   const [actualQuality, setActualQuality] = useState<string>('');
   const isHlsStreamRef = useRef<boolean>(false);
   const streamRetryAttemptedRef = useRef<boolean>(false);
+  const [networkRefreshSeq, setNetworkRefreshSeq] = useState<number>(0);
+  const isNetworkSwitchRefreshRef = useRef<boolean>(false);
+  const lastNetworkRecoveryTsRef = useRef<number>(0);
+  const onProgressRef = useRef(onProgress);
+  onProgressRef.current = onProgress;
+  const latestPlaybackStateRef = useRef({
+    activeVideoUrl: '',
+    resolvedStreamUrl: '',
+    isIframe: false,
+    isSmartHls: false,
+    isPlaying: false,
+    currentTime: 0,
+    duration: 0,
+  });
   
   // Menu drawers state
   const [activeMenu, setActiveMenu] = useState<'language' | 'quality' | 'speed' | null>(null);
@@ -314,8 +416,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     if (!normalizedSkipMarkers) return null;
     const currentGlobal = timeOffset + currentTime;
     const { intro, outro, credits } = normalizedSkipMarkers;
-    
-    console.log('[SkipDebug] Current Global Time:', currentGlobal, 'Markers:', normalizedSkipMarkers);
 
     if (intro && currentGlobal >= intro.start && currentGlobal < intro.end) {
       return { type: 'intro', label: 'Skip Intro', end: intro.end };
@@ -449,6 +549,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       video.volume = NativeBridgeService.isRunningInKotlinApp()
         ? 1
         : Math.min(1, Math.max(0.05, volume / 100));
+    }
+
+    // Real hardware volume boost beyond 100% (up to 200%) via native LoudnessEnhancer
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      NativeBridgeService.applyNativeAudioEffects({
+        enabled: volume > 100,
+        bands: [0, 0, 0, 0, 0],
+        bassLevel: 0,
+        immersiveLevel: 0,
+        volumeBoostPct: volume
+      });
     }
   }, [volume]);
 
@@ -797,7 +908,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       if (videoRef.current && videoRef.current.currentTime > 0.5) {
         savedSwitchTimeRef.current = videoRef.current.currentTime;
       }
-      if ((videoRef.current && !videoRef.current.paused) || isPlaying) {
+      if (!userPausedRef.current && ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted || wasPlayingBeforeSwitchRef.current)) {
         wasPlayingBeforeSwitchRef.current = true;
       }
       if (!hasInPlaceHlsLevels) {
@@ -1114,7 +1225,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       if (bestTime > 0.5) {
         savedSwitchTimeRef.current = bestTime;
       }
-      if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
+      if (!userPausedRef.current && ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted || wasPlayingBeforeSwitchRef.current)) {
         wasPlayingBeforeSwitchRef.current = true;
       }
       setHasRenderedFirstFrame(false);
@@ -1144,7 +1255,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       if (bestTime > 0.5) {
         savedSwitchTimeRef.current = bestTime;
       }
-      if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
+      if (!userPausedRef.current && ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted || wasPlayingBeforeSwitchRef.current)) {
         wasPlayingBeforeSwitchRef.current = true;
       }
     }
@@ -1163,11 +1274,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
       return;
     }
 
+    const isManualRetry = manualRetryingRef.current;
+    manualRetryingRef.current = false;
     let isMounted = true;
     setIsResolvingStream(true);
     setIsLoading(true);
 
-    SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: false })
+    if (isManualRetry) {
+      SmartStreamService.clearClientCache(activeVideoUrl);
+    }
+
+    SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: isManualRetry })
       .then(async (res) => {
         if (!isMounted) return;
         const isExtractable = SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls);
@@ -1187,10 +1304,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           setEmbedFallbackUrl(finalRes.streamUrl);
           setResolvedStreamUrl('');
         } else if (finalRes.isEmbed && isExtractable) {
-          // Keep user on their selected server and show Retry prompt instead of auto-switching servers
+          // Keep user on their selected server and show clear reason + working Retry prompt instead of auto-switching servers
           setEmbedFallbackUrl('');
           setIsLoading(false);
-          setPlaybackError('Stream is temporarily busy on this server. Tap Retry to reload.');
+          setPlaybackError('Extractor returned an embed fallback on this server (stream host may be temporarily busy or rate-limited). Tap Retry to re-extract.');
         } else {
           setResolvedStreamUrl(finalRes.streamUrl);
           setEmbedFallbackUrl('');
@@ -1206,22 +1323,151 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         }
         setIsResolvingStream(false);
         setIsLoading(false);
-        setPlaybackError(err.message || 'Failed to extract video stream. Please try again.');
+        setPlaybackError(formatPlaybackErrorReason(err));
       });
 
     return () => {
       isMounted = false;
     };
-  }, [activeVideoUrl, isIframe, isSmartHls]);
+  }, [activeVideoUrl, isIframe, isSmartHls, manualRetrySeq]);
+
+  // Keep latest playback refs fresh for async network-switch recovery
+  latestPlaybackStateRef.current = {
+    activeVideoUrl: activeVideoUrl || '',
+    resolvedStreamUrl: resolvedStreamUrl || '',
+    isIframe: Boolean(isIframe),
+    isSmartHls: Boolean(isSmartHls),
+    isPlaying: Boolean(isPlaying),
+    currentTime: Number(currentTime || 0),
+    duration: Number(duration || 0),
+  };
+
+  // Seamless Wi-Fi <-> Mobile Data IP Switch Recovery:
+  // Saves current timestamp silently, clears stale IP-bound CDN tokens, runs a fresh scrape, and resumes cleanly.
+  useEffect(() => {
+    const triggerSilentNetworkRecovery = async () => {
+      const now = Date.now();
+      if (now - lastNetworkRecoveryTsRef.current < 1200) return;
+
+      const state = latestPlaybackStateRef.current;
+      if (!state.activeVideoUrl || state.isIframe) return;
+      if (!state.resolvedStreamUrl && !videoRef.current?.src) return;
+
+      const uLower = (state.resolvedStreamUrl || state.activeVideoUrl).toLowerCase();
+      const isOfflineOrLocal =
+        uLower.startsWith('blob:') ||
+        uLower.startsWith('data:') ||
+        uLower.includes('maxplay.local') ||
+        uLower.includes('/device-video/') ||
+        uLower.includes('/vault-video/') ||
+        uLower.includes('local-vault://');
+      if (isOfflineOrLocal) return;
+
+      lastNetworkRecoveryTsRef.current = now;
+
+      const liveTime =
+        videoRef.current?.currentTime && isFinite(videoRef.current.currentTime)
+          ? videoRef.current.currentTime
+          : 0;
+      const resumeAt = Math.max(liveTime, state.currentTime || 0, savedSwitchTimeRef.current || 0);
+      const currentlyPlaying =
+        Boolean(videoRef.current && !videoRef.current.paused) ||
+        (state.isPlaying && !userPausedRef.current);
+
+      if (resumeAt > 0) {
+        try {
+          onProgressRef.current?.(resumeAt, false, state.duration || 0);
+        } catch {}
+      }
+
+      savedSwitchTimeRef.current = resumeAt;
+      targetSeekTimeRef.current = resumeAt;
+      isInitialSeekDoneRef.current = resumeAt <= 0;
+      isSwitchingSourceRef.current = resumeAt > 0.5;
+      isNetworkSwitchRefreshRef.current = true;
+      wasPlayingBeforeSwitchRef.current = !userPausedRef.current && currentlyPlaying;
+      streamRetryAttemptedRef.current = false;
+      networkStruggleCountRef.current = 0;
+      setPlaybackError(null);
+
+      const targetSource = state.activeVideoUrl;
+      SmartStreamService.clearAllStreamCache();
+      SmartStreamService.clearClientCache(targetSource);
+      NativeBridgeService.clearStreamCachesOnNetworkSwitch();
+
+      const isExtractable = SmartStreamService.isExtractableSource(targetSource, state.isSmartHls);
+      if (isExtractable) {
+        try {
+          const fresh = await SmartStreamService.resolveStream(targetSource, { forceRefresh: true });
+          if (latestPlaybackStateRef.current.activeVideoUrl !== targetSource) return;
+          if (fresh && fresh.streamUrl && !fresh.isEmbed) {
+            setEmbedFallbackUrl('');
+            setResolvedStreamUrl(fresh.streamUrl);
+            setNetworkRefreshSeq((seq) => seq + 1);
+            return;
+          }
+        } catch (err) {
+          console.warn('[InlinePlayer] Silent network-switch re-scrape fallback:', err);
+        }
+      }
+
+      if (latestPlaybackStateRef.current.activeVideoUrl === targetSource) {
+        setNetworkRefreshSeq((seq) => seq + 1);
+      }
+    };
+
+    const handleNativeSwitch = () => {
+      void triggerSilentNetworkRecovery();
+    };
+    const handleOnline = () => {
+      void triggerSilentNetworkRecovery();
+    };
+
+    const conn = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
+    let lastConnSig = conn ? `${conn.type || ''}:${conn.effectiveType || ''}:${conn.downlink || ''}` : '';
+    const handleConnChange = () => {
+      if (!conn) return;
+      const nextSig = `${conn.type || ''}:${conn.effectiveType || ''}:${conn.downlink || ''}`;
+      if (nextSig !== lastConnSig) {
+        lastConnSig = nextSig;
+        void triggerSilentNetworkRecovery();
+      }
+    };
+
+    window.addEventListener('MAXPLAY_NETWORK_SWITCH', handleNativeSwitch);
+    window.addEventListener('online', handleOnline);
+    if (conn && typeof conn.addEventListener === 'function') {
+      conn.addEventListener('change', handleConnChange);
+    }
+
+    return () => {
+      window.removeEventListener('MAXPLAY_NETWORK_SWITCH', handleNativeSwitch);
+      window.removeEventListener('online', handleOnline);
+      if (conn && typeof conn.removeEventListener === 'function') {
+        conn.removeEventListener('change', handleConnChange);
+      }
+    };
+  }, []);
 
   // Handle streamKey changes: When switching between Episode Parts or Episodes,
-  // do NOT retain previous part timestamp; start from initialTime!
+  // do NOT retain previous part timestamp; start from initialTime, and immediately auto-play the new episode!
   useEffect(() => {
     if (streamKey !== prevStreamKeyRef.current) {
       prevStreamKeyRef.current = streamKey;
       lastActiveUrlRef.current = '';
       savedSwitchTimeRef.current = 0;
-      wasPlayingBeforeSwitchRef.current = false;
+      // An episode or part change is an explicit navigation:
+      // Always reset user pause so the newly selected episode auto-plays without requiring an extra click on Play!
+      userPausedRef.current = false;
+      wasPlayingBeforeSwitchRef.current = true;
+      hasTriggeredInitialAutoPlayRef.current = false;
+      errCode4RetryCountRef.current = 0;
+      if (autoPlay) {
+        setHasStarted(true);
+        setIsPlaying(true);
+      }
+      isSwitchingSourceRef.current = false;
+      setPlaybackError(null);
       networkStruggleCountRef.current = 0;
       setCurrentTime(initialTime);
       targetSeekTimeRef.current = initialTime;
@@ -1251,10 +1497,11 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     const video = videoRef.current;
     if (!video || !resolvedStreamUrl) return;
 
-    // Check if this is a quality/language/server switch on the same streamKey
+    // Check if this is a quality/language/server switch (or network IP switch) on the same streamKey
     const isSameStreamSwitch =
       prevStreamKeyRef.current === streamKey &&
-      Boolean(lastActiveUrlRef.current && lastActiveUrlRef.current !== resolvedStreamUrl);
+      (isNetworkSwitchRefreshRef.current || Boolean(lastActiveUrlRef.current && lastActiveUrlRef.current !== resolvedStreamUrl));
+    isNetworkSwitchRefreshRef.current = false;
     lastActiveUrlRef.current = resolvedStreamUrl;
 
     let targetStartTime = initialTime;
@@ -1291,36 +1538,36 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         startPosition: targetStartTime > 0 ? targetStartTime : -1,
         enableWorker: true,
         lowLatencyMode: false,
-        startFragPrefetch: false,
-        backBufferLength: 30,
-        maxBufferLength: 16,
-        maxMaxBufferLength: 32,
-        maxBufferSize: 60 * 1000 * 1000,
-        maxBufferHole: 0.5,
+        startFragPrefetch: true,
+        backBufferLength: 60,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
+        maxBufferSize: 80 * 1024 * 1024,
+        maxBufferHole: 0.8,
         highBufferWatchdogPeriod: 2,
-        nudgeOffset: 0.1,
-        nudgeMaxRetry: 8,
-        abrEwmaDefaultEstimate: 2500000,
-        fragLoadingTimeOut: 90000,
-        fragLoadingMaxRetry: 8,
+        nudgeOffset: 0.15,
+        nudgeMaxRetry: 15,
+        abrEwmaDefaultEstimate: 4000000,
+        fragLoadingTimeOut: 60000,
+        fragLoadingMaxRetry: 10,
         fragLoadingRetryDelay: 400,
-        manifestLoadingTimeOut: 25000,
-        manifestLoadingMaxRetry: 5,
+        manifestLoadingTimeOut: 30000,
+        manifestLoadingMaxRetry: 8,
         manifestLoadingRetryDelay: 350,
-        levelLoadingTimeOut: 25000,
-        levelLoadingMaxRetry: 5,
+        levelLoadingTimeOut: 30000,
+        levelLoadingMaxRetry: 8,
         levelLoadingRetryDelay: 350,
         fragLoadPolicy: {
           default: {
             maxTimeToFirstByteMs: 20000,
             maxLoadTimeMs: 90000,
             timeoutRetry: {
-              maxNumRetry: 6,
+              maxNumRetry: 8,
               retryDelayMs: 400,
               maxRetryDelayMs: 4000,
             },
             errorRetry: {
-              maxNumRetry: 6,
+              maxNumRetry: 8,
               retryDelayMs: 500,
               maxRetryDelayMs: 5000,
             },
@@ -1407,12 +1654,10 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           savedSwitchTimeRef.current = 0;
         }, 450);
 
-        if (autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current) {
-          wasPlayingBeforeSwitchRef.current = false;
+        if (!userPausedRef.current && (wasPlayingBeforeSwitchRef.current || (!hasTriggeredInitialAutoPlayRef.current && autoPlay))) {
+          hasTriggeredInitialAutoPlayRef.current = true;
           setHasStarted(true);
-          video.play().catch((e) => {
-            if (e?.name !== 'AbortError') console.warn('Autoplay blocked:', e);
-          });
+          executeAutoPlay();
         }
       });
 
@@ -1537,20 +1782,48 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         if (video.readyState >= 2) {
           setHasRenderedFirstFrame(true);
           setIsLoading(false);
-          if (video.paused && (autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current)) {
-            wasPlayingBeforeSwitchRef.current = false;
+          if (video.paused && !userPausedRef.current && (wasPlayingBeforeSwitchRef.current || (!hasTriggeredInitialAutoPlayRef.current && autoPlay))) {
+            hasTriggeredInitialAutoPlayRef.current = true;
             setHasStarted(true);
-            video.play().catch(() => {});
+            executeAutoPlay();
           }
         }
       });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        // Non-fatal buffer stall / fragment timeout detection -> Smart Auto-Downgrade to weaker quality!
+        // Active PTS buffer hole and stall-recovery watchdog
         if (
           !data.fatal &&
           (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
-            data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT ||
+            data.details === Hls.ErrorDetails.BUFFER_SEEK_OVER_HOLE ||
+            data.details === Hls.ErrorDetails.BUFFER_NUDGE_ON_STALL)
+        ) {
+          const v = videoRef.current;
+          if (v && !userPausedRef.current) {
+            const cur = v.currentTime;
+            const buf = v.buffered;
+            let holeJumped = false;
+            for (let i = 0; i < buf.length; i++) {
+              const bStart = buf.start(i);
+              if (cur < bStart && bStart - cur < 1.8) {
+                console.log(`[InlinePlayer] Jumping PTS buffer gap: ${cur.toFixed(2)}s -> ${(bStart + 0.05).toFixed(2)}s`);
+                v.currentTime = bStart + 0.05;
+                v.play().catch(() => {});
+                holeJumped = true;
+                break;
+              }
+            }
+            if (!holeJumped) {
+              v.currentTime = cur + 0.15;
+              v.play().catch(() => {});
+            }
+          }
+        }
+
+        // Non-fatal fragment timeout detection -> Smart Auto-Downgrade to weaker quality!
+        if (
+          !data.fatal &&
+          (data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT ||
             data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR)
         ) {
           networkStruggleCountRef.current += 1;
@@ -1680,7 +1953,6 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           isSwitchingSourceRef.current = false;
           targetSeekTimeRef.current = 0;
           savedSwitchTimeRef.current = 0;
-          wasPlayingBeforeSwitchRef.current = false;
         }, 400);
       };
 
@@ -1691,16 +1963,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           stallTimer = null;
         }
         setIsLoading(false);
-        const shouldResume = autoPlay || hasStarted || isPlaying || wasPlayingBeforeSwitchRef.current;
+        const shouldResume = !userPausedRef.current && (wasPlayingBeforeSwitchRef.current || (!hasTriggeredInitialAutoPlayRef.current && autoPlay));
         performNativeSeek();
 
         if (shouldResume) {
+          hasTriggeredInitialAutoPlayRef.current = true;
           setHasStarted(true);
-          video.play().catch((e) => {
-            if (e?.name !== 'AbortError') {
-              console.warn('Native autoplay blocked:', e);
-            }
-          });
+          executeAutoPlay();
         }
       };
 
@@ -1760,7 +2029,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         hlsRef.current = null;
       }
     };
-  }, [resolvedStreamUrl, streamKey]); 
+  }, [resolvedStreamUrl, streamKey, networkRefreshSeq]); 
 
   // Fullscreen listener with cross-browser / mobile vendor support
   useEffect(() => {
@@ -1771,6 +2040,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         (document as any).mozFullScreenElement ||
         (document as any).msFullscreenElement
       );
+      (window as any).__isMaxPlayPlayerFullscreen = isFs;
       setIsFullscreen(isFs);
     };
 
@@ -1824,7 +2094,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
+    hasTriggeredInitialAutoPlayRef.current = true;
     if (video.paused) {
+      userPausedRef.current = false;
       setHasStarted(true);
       setIsPlaying(true);
       video.play().catch((err) => {
@@ -1832,10 +2104,64 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         setIsPlaying(false);
       });
     } else {
+      userPausedRef.current = true;
+      wasPlayingBeforeSwitchRef.current = false;
       video.pause();
       setIsPlaying(false);
     }
   }, []);
+
+  // Register global PiP play/pause callback invoked by Android Native PiP BroadcastReceiver
+  // and register MediaSession API action handlers for Web / Mobile PiP!
+  useEffect(() => {
+    (window as any).__maxplayPipTogglePlayPause = () => {
+      handlePlayPause();
+    };
+
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.setActionHandler('play', () => {
+          const video = videoRef.current;
+          if (!video || !video.paused) return;
+          userPausedRef.current = false;
+          hasTriggeredInitialAutoPlayRef.current = true;
+          setHasStarted(true);
+          setIsPlaying(true);
+          video.play().catch(() => setIsPlaying(false));
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+          const video = videoRef.current;
+          if (!video || video.paused) return;
+          userPausedRef.current = true;
+          wasPlayingBeforeSwitchRef.current = false;
+          video.pause();
+          setIsPlaying(false);
+        });
+      } catch {}
+    }
+
+    return () => {
+      delete (window as any).__maxplayPipTogglePlayPause;
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.setActionHandler('play', null);
+          navigator.mediaSession.setActionHandler('pause', null);
+        } catch {}
+      }
+    };
+  }, [handlePlayPause]);
+
+  // Sync playback state with MediaSession and Android PiP button icons
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+      } catch {}
+    }
+    if (NativeBridgeService.isRunningInKotlinApp()) {
+      NativeBridgeService.setVideoPlayingState(isPlaying);
+    }
+  }, [isPlaying]);
 
   // Component unmount cleanup
   useEffect(() => {
@@ -1850,6 +2176,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         videoRef.current.pause();
         videoRef.current.removeAttribute('src');
         videoRef.current.load();
+      }
+      if (NativeBridgeService.isRunningInKotlinApp()) {
+        try {
+          NativeBridgeService.applyNativeAudioEffects({
+            enabled: false,
+            bands: [0, 0, 0, 0, 0],
+            bassLevel: 0,
+            immersiveLevel: 0,
+            volumeBoostPct: 100
+          });
+        } catch {}
       }
     };
   }, []);
@@ -2001,7 +2338,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     if (videoRef.current && videoRef.current.currentTime > 0.5) {
       savedSwitchTimeRef.current = videoRef.current.currentTime;
     }
-    if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
+    if (!userPausedRef.current && ((videoRef.current && !videoRef.current.paused) || isPlaying)) {
       wasPlayingBeforeSwitchRef.current = true;
     }
 
@@ -2067,7 +2404,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
     if (videoRef.current && videoRef.current.currentTime > 0.5) {
       savedSwitchTimeRef.current = videoRef.current.currentTime;
     }
-    if ((videoRef.current && !videoRef.current.paused) || isPlaying || hasStarted) {
+    if (!userPausedRef.current && ((videoRef.current && !videoRef.current.paused) || isPlaying)) {
       wasPlayingBeforeSwitchRef.current = true;
     }
 
@@ -2192,6 +2529,8 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             referrerPolicy="no-referrer"
             ref={videoRef}
             playsInline
+            autoPlay={autoPlay}
+            preload="auto"
             className={`absolute inset-0 w-full h-full pointer-events-none will-change-transform ${
               isFullscreen && videoStretchMode === 'fill'
                 ? 'object-fill'
@@ -2199,7 +2538,13 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                 ? 'object-cover'
                 : 'object-contain'
             }`}
-            style={{ filter: brightness === 100 ? undefined : `brightness(${brightness}%)`, transform: 'translateZ(0)' }}
+            style={{
+              filter: brightness === 100 ? undefined : `brightness(${brightness}%)`,
+              transform: 'translateZ(0)',
+              willChange: 'transform',
+              WebkitBackfaceVisibility: 'hidden',
+              backfaceVisibility: 'hidden',
+            }}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -2214,6 +2559,9 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                 }
               });
             } catch {}
+            userPausedRef.current = false;
+            wasPlayingBeforeSwitchRef.current = false;
+            hasTriggeredInitialAutoPlayRef.current = true;
             setIsPlaying(true); 
             setHasStarted(true); 
             setIsLoading(false);
@@ -2246,9 +2594,19 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             if (t > 0.05 && !hasRenderedFirstFrame) {
               setHasRenderedFirstFrame(true);
             }
+            if (waitingWatchdogTimerRef.current) {
+              clearTimeout(waitingWatchdogTimerRef.current);
+              waitingWatchdogTimerRef.current = null;
+            }
             const now = Date.now();
-            // Zero-Lag Playback Optimization: Only trigger React state updates when controls are visible or skip markers exist
-            if ((showControls || normalizedSkipMarkers) && now - lastTimeStateUpdateRef.current >= 250) {
+            // Zero-Lag Stutter-Free Optimization:
+            // When player controls are visible, update at 250ms for smooth seekbar motion.
+            // When controls are hidden, throttle to 1000ms if skip markers exist, avoiding continuous React re-renders!
+            const shouldUpdateState = showControls
+              ? (now - lastTimeStateUpdateRef.current >= 250)
+              : (normalizedSkipMarkers ? (now - lastTimeStateUpdateRef.current >= 1000) : false);
+
+            if (shouldUpdateState) {
               lastTimeStateUpdateRef.current = now;
               setCurrentTime(t);
             }
@@ -2278,10 +2636,37 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             setDuration(d);
             onDuration?.(d);
           }}
-          onWaiting={() => setIsLoading(true)}
+          onWaiting={() => {
+            setIsLoading(true);
+            if (waitingWatchdogTimerRef.current) clearTimeout(waitingWatchdogTimerRef.current);
+            waitingWatchdogTimerRef.current = setTimeout(() => {
+              const v = videoRef.current;
+              if (!v || v.paused || userPausedRef.current) return;
+              const cur = v.currentTime;
+              const buf = v.buffered;
+              for (let i = 0; i < buf.length; i++) {
+                const bStart = buf.start(i);
+                if (cur < bStart && bStart - cur < 2.0) {
+                  console.warn(`[InlinePlayer] onWaiting stall watchdog: jumping hole to ${(bStart + 0.05).toFixed(2)}s`);
+                  v.currentTime = bStart + 0.05;
+                  v.play().catch(() => {});
+                  return;
+                }
+              }
+              v.currentTime = cur + 0.12;
+              v.play().catch(() => {});
+            }, 2000);
+          }}
           onPlaying={() => {
+            if (waitingWatchdogTimerRef.current) {
+              clearTimeout(waitingWatchdogTimerRef.current);
+              waitingWatchdogTimerRef.current = null;
+            }
+            errCode4RetryCountRef.current = 0;
             setIsLoading(false);
             setHasRenderedFirstFrame(true);
+            setIsPlaying(true);
+            setHasStarted(true);
           }}
           onEnded={() => {
             setIsPlaying(false);
@@ -2460,6 +2845,35 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
               return;
             }
 
+            // Silent Auto-Retry for transient network or token-rejection errors (code 4 MEDIA_ERR_SRC_NOT_SUPPORTED or code 2 MEDIA_ERR_NETWORK)
+            if (activeVideoUrl && (err?.code === 4 || err?.code === 2) && errCode4RetryCountRef.current < 2) {
+              errCode4RetryCountRef.current += 1;
+              const retryIndex = errCode4RetryCountRef.current;
+              console.warn(`[InlinePlayer] Transient stream error (code ${err.code}), running silent auto-retry #${retryIndex}...`);
+              setIsLoading(true);
+              setPlaybackError(null);
+              SmartStreamService.clearClientCache(activeVideoUrl);
+              SmartStreamService.resolveStream(activeVideoUrl, { forceRefresh: true })
+                .then((fresh) => {
+                  if (fresh && fresh.streamUrl && !fresh.isEmbed) {
+                    setEmbedFallbackUrl('');
+                    if (fresh.streamUrl === resolvedStreamUrl && videoRef.current) {
+                      videoRef.current.load();
+                    } else {
+                      setResolvedStreamUrl(fresh.streamUrl);
+                    }
+                    setTimeout(() => executeAutoPlay(), 200);
+                  } else if (fresh && fresh.isEmbed && fresh.streamUrl) {
+                    setEmbedFallbackUrl(fresh.streamUrl);
+                    setResolvedStreamUrl('');
+                  }
+                })
+                .catch((retryErr) => {
+                  console.warn('[InlinePlayer] Silent auto-retry error:', retryErr);
+                });
+              return;
+            }
+
             // If activeVideoUrl failed with error code 4 or 2, attempt automatic fallback to verified backup stream
             if (activeVideoUrl && (err?.code === 4 || err?.code === 2)) {
               console.warn('[InlinePlayer] Video load error code', err.code, 'on URL:', activeVideoUrl, 'Attempting fallback...');
@@ -2478,19 +2892,18 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
             }
 
             setIsLoading(false);
-            let msg = "Unknown Error";
+            let msg = "Network connection unstable. Unable to reach stream server. Tap Retry to reconnect.";
             if (err) {
               switch (err.code) {
-                case 1: msg = "Aborted"; break;
-                case 2: msg = "Network Error"; break;
-                case 3: msg = "Decode Error"; break;
-                case 4: msg = "Format Not Supported / URL Expired"; break;
-                default: msg = "Code " + err.code;
+                case 1: msg = "Playback aborted. Tap Retry to reload."; break;
+                case 2: msg = "Network connection interrupted. Tap Retry to reconnect."; break;
+                case 3: msg = "Video decode glitch. Tap Retry to resume."; break;
+                case 4: msg = "Network connection unstable. Unable to reach stream server. Tap Retry to reconnect."; break;
+                default: msg = "Stream server unreachable (" + (err.message || 'code ' + err.code) + "). Tap Retry.";
               }
-              if (err.message) msg += " (" + err.message + ")";
             }
             console.error("Video Error Details:", err ? err.code : "null", "URL:", activeVideoUrl);
-            setPlaybackError('Failed to load video: ' + msg);
+            setPlaybackError(msg);
           }}
         />
         )}
@@ -2505,12 +2918,17 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
           </div>
         )}
 
-        {!isIframe && !hasStarted && !isPlaying && activeVideoUrl && (
+        {!isIframe && !autoPlay && !hasStarted && !isPlaying && activeVideoUrl && (
           <div 
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               handlePlayPause();
               handleControlInteraction();
             }}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
             className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 bg-cover bg-center cursor-pointer transition-all duration-300 pointer-events-auto"
             style={{ backgroundImage: posterUrl ? `url(${posterUrl})` : undefined }}
           >
@@ -2545,11 +2963,39 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
         )}
 
         {!isIframe && (playbackError || !activeVideoUrl) && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 p-6 text-center text-white pointer-events-auto">
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/92 p-6 text-center text-white pointer-events-auto">
             <AlertTriangle className="w-10 h-10 text-amber-500 mb-3" />
-            <p className="font-semibold text-lg mb-2">{playbackError || 'No Video Stream Available'}</p>
+            <p className="font-bold text-base sm:text-lg mb-1.5 max-w-md">
+              {playbackError ? 'Stream Playback Issue' : 'No Video Stream Available'}
+            </p>
+            <p className="text-xs sm:text-sm text-zinc-300 mb-4 max-w-md leading-relaxed bg-white/5 border border-white/10 rounded-xl px-3.5 py-2">
+              {playbackError || 'No stream URL is configured for this server yet. Try switching server or check Admin Panel.'}
+            </p>
             <div className="flex flex-wrap items-center justify-center gap-3">
-              <button onClick={() => { setPlaybackError(null); handlePlayPause(); handleControlInteraction(); }} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition active:scale-95 cursor-pointer">Retry</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlaybackError(null);
+                  manualRetryingRef.current = true;
+                  userPausedRef.current = false;
+                  wasPlayingBeforeSwitchRef.current = true;
+                  if (activeVideoUrl) {
+                    SmartStreamService.clearClientCache(activeVideoUrl);
+                  }
+                  setIsLoading(true);
+                  if (activeVideoUrl && SmartStreamService.isExtractableSource(activeVideoUrl, isSmartHls)) {
+                    setIsResolvingStream(true);
+                    setManualRetrySeq((s) => s + 1);
+                  } else {
+                    setNetworkRefreshSeq((s) => s + 1);
+                    handlePlayPause();
+                  }
+                  handleControlInteraction();
+                }}
+                className="px-4 py-2 bg-[#8B5CF6] hover:bg-[#7C3AED] rounded-lg text-sm font-semibold transition active:scale-95 cursor-pointer shadow-lg shadow-purple-700/30"
+              >
+                Retry Stream
+              </button>
               {activeVideoUrl && (
                 <button
                   type="button"
@@ -2565,7 +3011,7 @@ export const InlinePlayer: React.FC<InlinePlayerProps> = ({
                 </button>
               )}
               {activeVideoUrl && (
-                <a href={activeVideoUrl} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-[#8B5CF6] hover:bg-[#7C3AED] rounded-lg text-sm font-medium transition active:scale-95 cursor-pointer text-center flex items-center">
+                <a href={activeVideoUrl} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition active:scale-95 cursor-pointer text-center flex items-center">
                   Open Externally
                 </a>
               )}

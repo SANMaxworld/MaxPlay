@@ -5,7 +5,8 @@ import {
   subscribeToCategories,
   subscribeToScreensCategories,
   subscribeToHomeRows,
-  ANIMESALT_BRAND_NEW_CARD
+  ANIMESALT_BRAND_NEW_CARD,
+  isContentUnlisted
 } from '../services/contentService';
 import { ContentItem } from '../types';
 
@@ -42,7 +43,9 @@ interface GlobalContentState {
   initialized: boolean;
 }
 
-const initialContentCacheRaw = loadFromCache<ContentItem[]>('maxplay_content_cache', []);
+const initialContentCacheRaw = loadFromCache<ContentItem[]>('maxplay_content_cache', []).filter(
+  (c) => !isContentUnlisted(c)
+);
 const initialContentCache = initialContentCacheRaw.some(c => c.id === ANIMESALT_BRAND_NEW_CARD.id)
   ? initialContentCacheRaw
   : [ANIMESALT_BRAND_NEW_CARD, ...initialContentCacheRaw];
@@ -133,9 +136,10 @@ function ensureGlobalSubscriptions() {
   subscribeToContent((items) => {
     contentReceived = true;
     if (items && Array.isArray(items)) {
-      globalState.contentList = items;
+      const visibleItems = items.filter((c) => !isContentUnlisted(c));
+      globalState.contentList = visibleItems;
       globalState.loading = false;
-      saveToCacheAsync('maxplay_content_cache', items);
+      saveToCacheAsync('maxplay_content_cache', visibleItems);
     }
     checkAllLoaded();
     notifySubscribers();
@@ -186,7 +190,15 @@ export function useContent() {
 
   const { heroBanner, trending, cinema, forYou } = useMemo(() => {
     const customHeroSlides: ContentItem[] = dbHeroBanners
-      .filter((b) => b && (b.title || b.imageUrl || b.backdropUrl || b.contentId))
+      .filter((b) => {
+        if (!b || isContentUnlisted(b)) return false;
+        if (!(b.title || b.imageUrl || b.backdropUrl || b.contentId)) return false;
+        // Hide banner if it explicitly links to a content item that has been Unlisted / hidden
+        if (b.contentId && contentList.length > 0 && !contentList.some((c) => c.id === b.contentId)) {
+          return false;
+        }
+        return true;
+      })
       .sort((a, b) => (a.order || 0) - (b.order || 0))
       .map((b, i) => {
         const targetByContentId = b.contentId ? contentList.find((c) => c.id === b.contentId) : null;

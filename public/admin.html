@@ -6,17 +6,46 @@
   <title>MaxPlay Admin Portal</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="apple-touch-icon" href="https://i.ibb.co/G4bcVYwY/Picsart-26-07-03-00-56-20-216-removebg-preview.png">
-  <!-- Google Fonts -->
+  <!-- Google Fonts (non-blocking so slow CDN never blanks initial paint) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"></noscript>
   
-  <!-- Font Awesome Icons (SVG Core + JS for 100% Reliable Loading without Webfont CORS blocks) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/js/all.min.js"></script>
-  <script src="https://unpkg.com/lucide@latest"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <!-- External Icon / HLS Scripts loaded async so WebView renders UI instantly offline or on slow mobile networks -->
+  <script async src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/js/all.min.js"></script>
+  <script async src="https://unpkg.com/lucide@latest" onload="try{window.lucide&&window.lucide.createIcons();}catch(e){}"></script>
+  <script async src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   
   <script>
+    window.__maxplayAdminBooted = true;
+    try {
+      if (window.MaxPlayNative || window.AndroidNative || location.hostname === 'appassets.androidplatform.net') {
+        localStorage.setItem('maxplay_admin_logged_in', 'true');
+      }
+    } catch (_) {}
+    window.syncAdminAuthVisibility = function() {
+      try {
+        var ls = document.getElementById('login-screen');
+        var app = document.getElementById('admin-app');
+        var isLogged = false;
+        try { isLogged = localStorage.getItem('maxplay_admin_logged_in') === 'true'; } catch(e){}
+        if (isLogged && app) {
+          if (ls) ls.style.display = 'none';
+          app.style.display = 'flex';
+        } else if (ls) {
+          ls.style.display = 'flex';
+          if (app) app.style.display = 'none';
+        } else if (app) {
+          app.style.display = 'flex';
+        }
+      } catch (err) {
+        try {
+          var fallbackLs = document.getElementById('login-screen');
+          if (fallbackLs) fallbackLs.style.display = 'flex';
+        } catch (e2) {}
+      }
+    };
     window.handleLogin = function(e) {
       if (e && e.preventDefault) e.preventDefault();
       var emailEl = document.getElementById('login-email');
@@ -41,19 +70,8 @@
       if (app) app.style.display = 'none';
       if (window.showToast) window.showToast('Logged out');
     };
-    document.addEventListener('DOMContentLoaded', function() {
-      var ls = document.getElementById('login-screen');
-      var app = document.getElementById('admin-app');
-      var isLogged = false;
-      try { isLogged = localStorage.getItem('maxplay_admin_logged_in') === 'true'; } catch(e){}
-      if (isLogged) {
-        if (ls) ls.style.display = 'none';
-        if (app) app.style.display = 'flex';
-      } else {
-        if (ls) ls.style.display = 'flex';
-        if (app) app.style.display = 'none';
-      }
-    });
+    document.addEventListener('DOMContentLoaded', window.syncAdminAuthVisibility);
+    setTimeout(window.syncAdminAuthVisibility, 350);
   </script>
   
   <style>
@@ -141,8 +159,7 @@
       position: fixed;
       inset: 0;
       z-index: 9999;
-      background: radial-gradient(circle at 50% 30%, rgba(25, 20, 48, 0.95) 0%, rgba(7, 8, 17, 0.98) 100%);
-      backdrop-filter: blur(28px);
+      background: #070811;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -179,6 +196,7 @@
       width: 100%;
       max-width: 100%;
       height: 100%;
+      min-height: 100vh;
       overflow: hidden;
       background: var(--bg-primary);
       position: relative;
@@ -1487,6 +1505,7 @@
                   <option value="anime">Anime</option>
                   <option value="tv">TV Series</option>
                   <option value="short_tv">Short TV</option>
+                  <option value="UNLISTED">🔒 Unlisted Only</option>
                 </select>
               </div>
 
@@ -1736,6 +1755,26 @@
                 </div>
               </div>
 
+              <!-- CONTENT VISIBILITY / UNLISTED OPTION -->
+              <div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.3); border-radius:10px; padding:14px 16px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:240px;">
+                  <i class="fa-solid fa-eye-slash" style="color:#FBBF24; font-size:18px;"></i>
+                  <div>
+                    <div style="font-size:13px; font-weight:800; color:#FDE68A; display:flex; align-items:center; gap:8px;">
+                      <span>Client App Visibility (Unlisted Mode)</span>
+                      <span id="up-unlisted-badge" style="font-size:10px; padding:2px 8px; border-radius:6px; font-weight:800; background:rgba(16,185,129,0.2); color:#34D399; border:1px solid rgba(16,185,129,0.4);">PUBLIC IN CLIENT APK</span>
+                    </div>
+                    <p style="font-size:11px; color:var(--text-tertiary); margin:3px 0 0 0; line-height:1.4;">
+                      Turn ON Unlisted to keep this card saved in Admin Panel while completely hiding it from Client App &amp; Client APK feeds and search.
+                    </p>
+                  </div>
+                </div>
+                <label class="switch" style="position:relative; display:inline-block; width:50px; height:26px; margin:0; cursor:pointer;">
+                  <input type="checkbox" id="up-unlisted" onchange="updateUnlistedToggleBadge()" style="opacity:0; width:0; height:0;">
+                  <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:#374151; transition:.3s; border-radius:26px;"></span>
+                </label>
+              </div>
+
               <button type="button" class="btn-primary" onclick="goToStep(2)" style="margin-top:10px;">
                 <span>Next: Splitted Links & Episode Configuration</span>
                 <i class="fa-solid fa-arrow-right"></i>
@@ -1791,6 +1830,25 @@
                     <input type="checkbox" id="animesalt-mode-toggle" onchange="toggleAnimeSaltMode(this.checked)" style="opacity:0; width:0; height:0;">
                     <span class="slider round" style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:#374151; transition:.3s; border-radius:26px;"></span>
                   </label>
+                </div>
+              </div>
+
+              <!-- ANIMESALT BASE DOMAIN & SECURITY CONFIG -->
+              <div id="animesalt-base-domain-box" style="background:rgba(139,92,246,0.1); border:1px solid rgba(168,85,247,0.35); border-radius:12px; padding:12px 18px; margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:240px;">
+                  <i class="fa-solid fa-shield-halved" style="color:#C084FC; font-size:18px;"></i>
+                  <div>
+                    <span style="font-size:13px; font-weight:800; color:#E9D5FF;">AnimeSalt Base Domain (Dynamic Domain Security)</span>
+                    <p style="font-size:11px; color:var(--text-tertiary); margin:2px 0 0 0; line-height:1.4;">
+                      If AnimeSalt changes domains (e.g. .cx &rarr; .cs), simply update this base domain. Relative paths (like <code>/episode/dan-da-dan-1x1/</code>) will automatically join with this base domain for instant verification & streaming!
+                    </p>
+                  </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <input type="text" id="animesalt-base-domain-input" class="input-control" value="https://animesalt.cx" placeholder="https://animesalt.cx" style="font-family:monospace; font-size:12px; height:34px; width:220px; border-color:rgba(168,85,247,0.4);">
+                  <button type="button" class="btn-primary" onclick="saveAnimeSaltBaseDomainUI()" style="height:34px; padding:0 12px; font-size:11px; font-weight:700; white-space:nowrap; display:inline-flex; align-items:center; gap:5px;">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Domain
+                  </button>
                 </div>
               </div>
 
@@ -2120,6 +2178,49 @@
                     </div>
                   </div>
 
+                </div>
+
+                <!-- FAST BULK EPISODE LINKS IMPORTER & SEASON VERIFIER -->
+                <div id="bulk-episode-importer-box" style="background:rgba(139,92,246,0.08); border:1px solid rgba(168,85,247,0.4); border-radius:14px; padding:18px; margin-bottom:20px; box-shadow:0 4px 20px rgba(0,0,0,0.25);">
+                  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                      <i class="fa-solid fa-bolt" style="color:var(--accent-purple); font-size:16px;"></i>
+                      <span style="font-weight:800; font-size:14px; color:#F3F4F6;">Fast Bulk Episode Links Importer & Verifier</span>
+                      <span id="bulk-importer-season-badge" style="font-size:11px; font-weight:800; background:rgba(168,85,247,0.25); color:#D8B4FE; border:1px solid rgba(168,85,247,0.6); padding:2px 10px; border-radius:12px;">Season 1</span>
+                    </div>
+                    <div style="font-size:11px; color:#9CA3AF;">
+                      Base Domain: <span id="bulk-importer-base-domain-badge" style="font-family:monospace; color:#38BDF8;">https://animesalt.cx</span>
+                    </div>
+                  </div>
+
+                  <p style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:10px;">
+                    Paste multiple episode stream links or paths separated by newlines. Line 1 = Episode 1, Line 2 = Episode 2, etc. If an episode box doesn't exist yet, it will be automatically created! Relative paths like <code>/episode/gravity-falls-1x1</code> will automatically attach the saved Base Domain.
+                  </p>
+
+                  <textarea id="bulk-season-links-input" class="input-control" rows="5" placeholder="/episode/gravity-falls-1x1&#10;/episode/gravity-falls-1x2&#10;/episode/gravity-falls-1x3&#10;or full URLs..." style="font-family:monospace; font-size:12px; width:100%; border-color:rgba(168,85,247,0.4); resize:vertical; margin-bottom:12px;"></textarea>
+
+                  <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                    <button type="button" class="btn-primary" onclick="applyBulkEpisodeLinksToSeason()" style="height:36px; padding:0 18px; font-size:12px; font-weight:800; display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, var(--accent-purple), var(--accent-cyan)); border:none;">
+                      <i class="fa-solid fa-list-check"></i> Apply Links to Episodes
+                    </button>
+                    <button type="button" id="btn-bulk-verify-all-eps" class="btn-primary" onclick="verifyAllEpisodesInSeasonBatch()" style="height:36px; padding:0 18px; font-size:12px; font-weight:800; display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, #059669, #10B981); border:none;">
+                      <i class="fa-solid fa-bolt"></i> Verify All Episodes
+                    </button>
+                    <button type="button" class="btn-secondary" onclick="clearBulkEpisodeInput()" style="height:36px; padding:0 12px; font-size:12px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
+                      <i class="fa-solid fa-trash-can"></i> Clear
+                    </button>
+                    <span id="bulk-verify-progress-text" style="font-size:12px; color:#34D399; font-weight:700; margin-left:auto; display:none;"></span>
+                  </div>
+
+                  <div id="bulk-verify-progress-container" style="display:none; margin-top:12px;">
+                    <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px; color:#D1D5DB;">
+                      <span id="bulk-verify-status-label">Verifying episodes...</span>
+                      <span id="bulk-verify-percent-label">0%</span>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.08); border-radius:6px; height:6px; overflow:hidden;">
+                      <div id="bulk-verify-progress-fill" style="width:0%; height:100%; background:linear-gradient(90deg, #A855F7, #10B981); transition:width 0.25s ease;"></div>
+                    </div>
+                  </div>
                 </div>
 
                 <div id="season-episodes-list" style="display:flex; flex-direction:column; gap:14px; margin-bottom:20px;">
@@ -4821,6 +4922,13 @@
     </div>
   </div>
 
+  <!-- Immediate pre-module visibility sync so UI renders right away without waiting for external module downloads -->
+  <script>
+    if (typeof window.syncAdminAuthVisibility === 'function') {
+      window.syncAdminAuthVisibility();
+    }
+  </script>
+
   <!-- JAVASCRIPT MODULE WITH FULL FIREBASE LOGIC -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
@@ -4857,8 +4965,6 @@
     try {
       db = initializeFirestore(app, {
         localCache: memoryLocalCache(),
-        experimentalForceLongPolling: true,
-        experimentalAutoDetectLongPolling: true,
         ignoreUndefinedProperties: true
       }, firebaseConfig.firestoreDatabaseId);
     } catch (e) {
@@ -5467,10 +5573,30 @@
 
     // CONTENT MANAGEMENT LOGIC WITH SAMPLE FALLBACK
     window.loadContentList = function() {
+      // 1. Immediately initialize with cached / local / default docs so UI renders immediately without delay!
+      if (!window.cachedContentDocs || window.cachedContentDocs.length === 0) {
+        try {
+          var saved = localStorage.getItem('maxplay_admin_cached_content');
+          if (saved) {
+            var parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              window.cachedContentDocs = parsed;
+            }
+          }
+        } catch (_) {}
+        if (!window.cachedContentDocs || window.cachedContentDocs.length === 0) {
+          window.cachedContentDocs = [...DEFAULT_SAMPLE_CONTENT];
+        }
+      }
+      renderContentTable();
+      loadDashboardStats();
+
       try {
         onSnapshot(collection(db, 'content'), (snap) => {
           if (snap.empty) {
-            window.cachedContentDocs = [...DEFAULT_SAMPLE_CONTENT];
+            if (!window.cachedContentDocs || window.cachedContentDocs.length === 0) {
+              window.cachedContentDocs = [...DEFAULT_SAMPLE_CONTENT];
+            }
             // Auto seed sample docs to Firestore so client app gets items too
             DEFAULT_SAMPLE_CONTENT.forEach(item => {
               setDoc(doc(db, 'content', item.id), item.data, { merge: true }).catch(err => {});
@@ -5478,6 +5604,9 @@
           } else {
             window.cachedContentDocs = [];
             snap.forEach(d => window.cachedContentDocs.push({ id: d.id, data: d.data() }));
+            try {
+              localStorage.setItem('maxplay_admin_cached_content', JSON.stringify(window.cachedContentDocs));
+            } catch (_) {}
           }
           renderContentTable();
           loadDashboardStats();
@@ -5535,7 +5664,10 @@
 
       var items = window.cachedContentDocs.filter(function(doc) {
         var item = doc.data;
-        var matchesType = typeFilter === 'ALL' || item.type === typeFilter;
+        var itemIsUnlisted = Boolean(item.isUnlisted || item.visibility === 'unlisted');
+        var matchesType = typeFilter === 'UNLISTED'
+          ? itemIsUnlisted
+          : (typeFilter === 'ALL' || item.type === typeFilter);
         var matchesSearch = !search || 
           (item.title && item.title.toLowerCase().includes(search)) ||
           (item.genres && JSON.stringify(item.genres).toLowerCase().includes(search));
@@ -5554,6 +5686,14 @@
       items.forEach(function(docItem) {
         var item = docItem.data;
         var id = docItem.id;
+        var isUnlisted = Boolean(item.isUnlisted || item.visibility === 'unlisted');
+        var unlistedTag = isUnlisted
+          ? `<span style="background:rgba(245,158,11,0.18); color:#FBBF24; border:1px solid rgba(245,158,11,0.45); font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; margin-left:6px; vertical-align:middle;"><i class="fa-solid fa-eye-slash"></i> UNLISTED</span>`
+          : '';
+        var toggleVisBtnText = isUnlisted ? '<i class="fa-solid fa-eye"></i> List' : '<i class="fa-solid fa-eye-slash"></i> Unlist';
+        var toggleVisBtnStyle = isUnlisted
+          ? 'height:32px; padding:0 10px; font-size:11px; color:#34D399; border-color:rgba(16,185,129,0.4);'
+          : 'height:32px; padding:0 10px; font-size:11px; color:#FBBF24; border-color:rgba(245,158,11,0.4);';
 
         // Render Home Row Tags
         var rowTags = '';
@@ -5568,11 +5708,11 @@
         }
 
         hTable += `
-          <tr>
+          <tr style="${isUnlisted ? 'opacity:0.82; background:rgba(245,158,11,0.03);' : ''}">
             <td style="display:flex; align-items:center; gap:12px;">
               <img src="${item.posterUrl}" onerror="this.src='https://via.placeholder.com/80x120'" style="width:40px; height:56px; border-radius:6px; object-fit:cover;">
               <div>
-                <div style="font-weight:700; font-size:13px;">${item.title || 'Untitled'}</div>
+                <div style="font-weight:700; font-size:13px;">${item.title || 'Untitled'}${unlistedTag}</div>
                 <div style="font-size:11px; color:var(--text-tertiary);">ID: ${id}</div>
               </div>
             </td>
@@ -5581,8 +5721,9 @@
             <td style="color:var(--text-secondary);">${item.year || '2025'}</td>
             <td>${rowTags}</td>
             <td>
-              <div style="display:flex; gap:8px;">
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
                 <button class="btn-secondary" style="height:32px; padding:0 10px;" onclick="editContent('${id}')"><i class="fa-solid fa-pen"></i> Edit</button>
+                <button class="btn-secondary" style="${toggleVisBtnStyle}" onclick="toggleContentUnlisted('${id}', ${!isUnlisted})" title="${isUnlisted ? 'Make Public in Client App' : 'Hide from Client App & APK'}">${toggleVisBtnText}</button>
                 <button class="btn-danger" style="height:32px; padding:0 10px;" onclick="deleteContent('${id}')"><i class="fa-solid fa-trash"></i></button>
               </div>
             </td>
@@ -5590,10 +5731,11 @@
         `;
 
         hGrid += `
-          <div style="background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:14px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 4px 16px rgba(0,0,0,0.25); transition:transform 0.2s ease, box-shadow 0.2s ease;">
+          <div style="background:var(--bg-secondary); border:1px solid ${isUnlisted ? 'rgba(245,158,11,0.45)' : 'var(--border-color)'}; border-radius:14px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 4px 16px rgba(0,0,0,0.25); transition:transform 0.2s ease, box-shadow 0.2s ease;">
             <div style="position:relative; width:100%; height:230px; background:#0f0f15; overflow:hidden;">
-              <img src="${item.posterUrl}" onerror="this.src='https://via.placeholder.com/200x300'" style="width:100%; height:100%; object-fit:cover;">
+              <img src="${item.posterUrl}" onerror="this.src='https://via.placeholder.com/200x300'" style="width:100%; height:100%; object-fit:cover; ${isUnlisted ? 'filter:brightness(0.7);' : ''}">
               <span style="position:absolute; top:10px; left:10px; background:rgba(139, 92, 246, 0.9); backdrop-filter:blur(4px); color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; padding:4px 8px; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.3);">${item.type || 'Movie'}</span>
+              ${isUnlisted ? `<span style="position:absolute; bottom:10px; left:10px; background:rgba(245,158,11,0.92); color:#111; font-size:10px; font-weight:900; padding:3px 8px; border-radius:6px;"><i class="fa-solid fa-eye-slash"></i> UNLISTED (HIDDEN)</span>` : ''}
               <span style="position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.75); backdrop-filter:blur(4px); color:var(--accent-amber); font-size:11px; font-weight:700; padding:4px 8px; border-radius:8px; border:1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-star"></i> ${item.rating || '9.5'}</span>
             </div>
             <div style="padding:14px 14px 10px 14px; flex:1; display:flex; flex-direction:column; gap:6px;">
@@ -5604,9 +5746,12 @@
               </div>
               <div style="margin-top:4px;">${rowTags}</div>
             </div>
-            <div style="padding:12px 14px; border-top:1px solid var(--border-color); background:rgba(0,0,0,0.15); display:flex; justify-content:space-between; align-items:center; gap:8px;">
-              <button class="btn-secondary" style="flex:1; height:34px; padding:0 12px; font-size:12px; font-weight:600; border-radius:8px; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;" onclick="editContent('${id}')">
+            <div style="padding:12px 14px; border-top:1px solid var(--border-color); background:rgba(0,0,0,0.15); display:flex; justify-content:space-between; align-items:center; gap:6px;">
+              <button class="btn-secondary" style="flex:1; height:34px; padding:0 10px; font-size:12px; font-weight:600; border-radius:8px; display:flex; align-items:center; justify-content:center; gap:5px; cursor:pointer;" onclick="editContent('${id}')">
                 <i class="fa-solid fa-pen" style="color:var(--accent-purple);"></i> Edit
+              </button>
+              <button class="btn-secondary" style="${toggleVisBtnStyle} height:34px; border-radius:8px; font-weight:700;" onclick="toggleContentUnlisted('${id}', ${!isUnlisted})" title="${isUnlisted ? 'Make Public' : 'Unlist (Hide in Client APK)'}">
+                ${toggleVisBtnText}
               </button>
               <button class="btn-danger" style="height:34px; width:36px; padding:0; font-size:12px; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer;" onclick="deleteContent('${id}')" title="Delete Content">
                 <i class="fa-solid fa-trash"></i>
@@ -5618,6 +5763,37 @@
 
       if (tbody) tbody.innerHTML = hTable;
       if (gridContainer) gridContainer.innerHTML = hGrid;
+    };
+
+    window.updateUnlistedToggleBadge = function() {
+      const cb = document.getElementById('up-unlisted');
+      const badge = document.getElementById('up-unlisted-badge');
+      if (!cb || !badge) return;
+      if (cb.checked) {
+        badge.innerText = 'UNLISTED (HIDDEN IN CLIENT APK)';
+        badge.style.background = 'rgba(245,158,11,0.2)';
+        badge.style.color = '#FBBF24';
+        badge.style.borderColor = 'rgba(245,158,11,0.45)';
+      } else {
+        badge.innerText = 'PUBLIC IN CLIENT APK';
+        badge.style.background = 'rgba(16,185,129,0.2)';
+        badge.style.color = '#34D399';
+        badge.style.borderColor = 'rgba(16,185,129,0.4)';
+      }
+    };
+
+    window.toggleContentUnlisted = async function(id, nextUnlisted) {
+      if (!id) return;
+      try {
+        await setDoc(doc(db, 'content', id), {
+          isUnlisted: Boolean(nextUnlisted),
+          visibility: nextUnlisted ? 'unlisted' : 'public'
+        }, { merge: true });
+        showToast(nextUnlisted ? 'Content Unlisted — hidden from Client App & APK!' : 'Content Listed — visible in Client App & APK!');
+      } catch (e) {
+        console.error('Toggle unlisted error:', e);
+        showToast('Failed to update visibility: ' + (e?.message || 'Firestore error'), 'error');
+      }
     };
 
     window.filterContentTable = function() {
@@ -5967,6 +6143,11 @@
       document.getElementById('up-poster').value = item.posterUrl || '';
       document.getElementById('up-search-hot-section').value = item.searchHotSection || '';
       document.getElementById('up-search-hot-position').value = item.searchHotPosition || 0;
+      const unlistedEl = document.getElementById('up-unlisted');
+      if (unlistedEl) {
+        unlistedEl.checked = Boolean(item.isUnlisted || item.visibility === 'unlisted');
+        if (typeof window.updateUnlistedToggleBadge === 'function') window.updateUnlistedToggleBadge();
+      }
       document.getElementById('up-backdrop').value = item.backdropUrl || '';
       const movieVerDurEl = document.getElementById('movie-verified-duration');
       if (movieVerDurEl) movieVerDurEl.value = item.verifiedDuration || '';
@@ -6048,6 +6229,7 @@
       window.extractedMovieQualityLinks = {};
       window.extractedMovieDownloadQualities = [];
       window.extractedMovieAudioTracks = [];
+      window.extractedMovieVerifiedDownloadLanguages = [];
       window.extractedMovieSecondaryM3u8Url = '';
       window.extractedMovieSecondaryQualities = [];
       window.extractedMovieSecondaryQualityLinks = {};
@@ -6153,6 +6335,7 @@
           window.extractedMovieDownloadQualities = item.downloadQualities;
           window.extractedMovieQualityLinks = s1Quals;
           window.extractedMovieAudioTracks = item.audioTracks || [];
+          window.extractedMovieVerifiedDownloadLanguages = item.verifiedDownloadLanguages || item.downloadAudioTracks || item.audioTracks || [];
           window.extractedMovieQualities = item.qualities || Object.keys(s1Quals);
           window.extractedMovieM3u8Url = item.videoUrl || '';
         }
@@ -6241,6 +6424,11 @@
       document.getElementById('up-seasons').value = '1';
       document.getElementById('up-genre').value = '';
       document.getElementById('up-desc').value = '';
+      const unlistedResetEl = document.getElementById('up-unlisted');
+      if (unlistedResetEl) {
+        unlistedResetEl.checked = false;
+        if (typeof window.updateUnlistedToggleBadge === 'function') window.updateUnlistedToggleBadge();
+      }
       const movieVerDurElReset = document.getElementById('movie-verified-duration');
       if (movieVerDurElReset) movieVerDurElReset.value = '';
       document.getElementById('btn-upload-delete').style.display = 'none';
@@ -6305,6 +6493,7 @@
       window.extractedMovieSecondaryDownloadQualities = null;
       window.extractedMovieTertiaryDownloadQualities = null;
       window.extractedMovieAudioTracks = null;
+      window.extractedMovieVerifiedDownloadLanguages = null;
       const movieResEl = document.getElementById('movie-hls-extract-result');
       if (movieResEl) { movieResEl.style.display = 'none'; movieResEl.innerHTML = ''; }
       const movieSecResEl = document.getElementById('movie-secondary-hls-extract-result');
@@ -6459,82 +6648,182 @@
       }
     };
 
+    window.getAnimeSaltBaseDomain = function() {
+      let saved = (localStorage.getItem('maxplay_animesalt_base_domain') || 'https://animesalt.cx').trim();
+      if (!saved) saved = 'https://animesalt.cx';
+      return saved.replace(/\/+$/, '');
+    };
+
+    window.saveAnimeSaltBaseDomainUI = function() {
+      const inp = document.getElementById('animesalt-base-domain-input');
+      let val = inp ? inp.value.trim() : '';
+      if (!val) val = 'https://animesalt.cx';
+      if (!val.startsWith('http://') && !val.startsWith('https://')) {
+        val = 'https://' + val;
+      }
+      val = val.replace(/\/+$/, '');
+      localStorage.setItem('maxplay_animesalt_base_domain', val);
+      if (inp) inp.value = val;
+      try {
+        fetch('/api/animesalt-domain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseDomain: val })
+        }).catch(() => {});
+      } catch {}
+      showToast('AnimeSalt Base Domain saved: ' + val);
+    };
+
+    window.resolveAnimeSaltUrl = function(rawPathOrUrl) {
+      if (!rawPathOrUrl || typeof rawPathOrUrl !== 'string') return '';
+      const trimmed = rawPathOrUrl.trim();
+      if (/^https?:\/\//i.test(trimmed)) {
+        return trimmed;
+      }
+      const base = window.getAnimeSaltBaseDomain();
+      const path = trimmed.startsWith('/') ? trimmed : '/' + trimmed;
+      return base + path;
+    };
+
     window.verifyAnimeSaltMovieMasterStream = async function() {
       const inp = document.getElementById('movie-animesalt-url');
       const statusEl = document.getElementById('movie-animesalt-status');
       const btn = document.getElementById('btn-verify-movie-animesalt');
-      const rawUrl = inp?.value.trim();
-      if (!rawUrl) {
-        showToast('Please enter an AnimeSalt / Ravok master stream URL first!');
+      const rawInput = inp?.value.trim();
+      if (!rawInput) {
+        showToast('Please enter an AnimeSalt / Ravok master stream URL or path first!');
         return;
       }
+      const rawUrl = window.resolveAnimeSaltUrl(rawInput);
+      const movieDurInputVal = document.getElementById('movie-verified-duration')?.value.trim() || '';
+      const movieDurSec = (typeof window.parseDurationStringToSeconds === 'function')
+        ? (window.parseDurationStringToSeconds(movieDurInputVal, true) || 0)
+        : 0;
 
-      btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+      }
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.innerHTML = '<span style="color:#A78BFA;"><i class="fa-solid fa-spinner fa-spin"></i> Reading AnimeSalt master playlist & discovering audio tracks...</span>';
+        statusEl.innerHTML = '<span style="color:#A78BFA;"><i class="fa-solid fa-spinner fa-spin"></i> Reading AnimeSalt master playlist, probing all qualities, real MB & multi-audio languages...</span>';
       }
 
       try {
-        let result = null;
-        const nativeBridge = window.MaxPlayNative || window.AndroidNative;
-        if (nativeBridge && nativeBridge.extractStreamNative) {
-          try {
-            const rawRes = nativeBridge.extractStreamNative(rawUrl, '{}');
-            const parsed = typeof rawRes === 'string' ? JSON.parse(rawRes) : rawRes;
-            if (parsed && parsed.ok) result = parsed;
-          } catch (e) {
-            console.warn('Native probe error:', e);
-          }
-        }
-        if (!result) {
-          const resp = await fetch('/api/extract-stream?url=' + encodeURIComponent(rawUrl), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: rawUrl, fast: false, forceRefresh: true })
-          });
-          if (resp.ok) result = await resp.json();
-        }
+        const result = await window.probeSingleQualityBoxSmart(rawUrl, '', movieDurSec);
 
         if (result && result.ok) {
-          const masterUrl = result.m3u8Url || rawUrl;
           const qualities = result.qualities && result.qualities.length > 0 ? result.qualities : ['1080p', '720p', '480p', '360p', '240p'];
-          const audioTracks = result.audioTracks && result.audioTracks.length > 0
-            ? result.audioTracks
-            : ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
+          const rawAudioTracks = Array.isArray(result.audioTracks)
+            ? result.audioTracks.map(a => String(a || '').trim()).filter(a => a && a.toLowerCase() !== 'default' && a.toLowerCase() !== 'default audio')
+            : [];
+          const audioTracks = rawAudioTracks.length > 0 ? rawAudioTracks : ['Original Audio'];
 
+          // Preserve permanent source URL for playback/re-scrape (never bake 3h expiring CDN tokens into saved docs)
+          const permanentUrl = (result && result.correctedUrl) ? result.correctedUrl : rawUrl;
+          if (result && result.correctedUrl && inp && inp.value.trim() !== result.correctedUrl) {
+            inp.value = result.correctedUrl;
+          }
           const qMap = {};
-          qualities.forEach(q => { qMap[q] = masterUrl; });
+          qualities.forEach(q => { qMap[q] = permanentUrl; });
 
+          const durSec = Number(result.duration) > 0 ? Number(result.duration) : (movieDurSec > 0 ? movieDurSec : 7200);
+          const bwMap = { '1440p': 6000000, '1080p': 3600000, '720p': 1800000, '480p': 750000, '360p': 320000, '240p': 160000 };
+          const incomingDqMap = new Map();
+          if (Array.isArray(result.downloadQualities)) {
+            result.downloadQualities.forEach(d => {
+              if (d && d.id) incomingDqMap.set(String(d.id).toLowerCase(), d);
+            });
+          }
+          const finalDq = qualities.map(q => {
+            const matched = incomingDqMap.get(String(q).toLowerCase());
+            const bw = (matched && Number(matched.bandwidth) > 0) ? Number(matched.bandwidth) : (bwMap[q] || 1500000);
+            const estMb = Math.max(15, Math.round((bw * durSec) / (8 * 1024 * 1024)));
+            const sizeMb = (matched && Number(matched.sizeMb) > 0) ? Math.round(Number(matched.sizeMb)) : estMb;
+            return {
+              id: q,
+              label: (matched && matched.label) ? matched.label : (q + (q === '1080p' ? ' Full HD' : q === '720p' ? ' HD' : q === '480p' ? ' Standard' : ' Data Saver')),
+              sizeMb,
+              bandwidth: bw,
+              url: permanentUrl
+            };
+          });
+
+          window.extractedMovieM3u8Url = result.m3u8Url || permanentUrl;
+          window.extractedMovieQualities = qualities;
           window.extractedMovieQualityLinks = qMap;
           window.extractedMovieAudioTracks = audioTracks;
-          window.extractedMovieDownloadQualities = result.downloadQualities || qualities.map(q => ({ id: q, label: q + ' HD', sizeMb: 950, url: masterUrl }));
-          if (result.duration) {
+          window.extractedMovieVerifiedDownloadLanguages = audioTracks;
+          window.extractedMovieDownloadQualities = finalDq;
+
+          if (result.duration && result.duration > 0) {
+            window.movieTotalDuration = result.duration;
+            const h = Math.floor(result.duration / 3600);
+            const m = Math.floor((result.duration % 3600) / 60);
+            const s = (result.duration % 60).toString().padStart(2, '0');
+            const formattedDur = h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s}` : `${m}:${s}`;
             const durInp = document.getElementById('movie-verified-duration');
-            if (durInp && !durInp.value) durInp.value = Math.floor(result.duration / 60) + ':' + (result.duration % 60).toString().padStart(2, '0');
+            if (durInp) durInp.value = formattedDur;
+            const durDisplay = document.getElementById('movie-total-duration-text');
+            if (durDisplay) {
+              durDisplay.innerHTML = `<span style="color:#10B981; font-weight:900;"><i class="fa-solid fa-circle-check"></i> ${formattedDur}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${result.duration}s)</span>`;
+            }
           }
 
-          statusEl.innerHTML = `
-            <div style="background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4); border-radius:8px; padding:10px 12px; margin-top:8px;">
-              <div style="color:#34D399; font-weight:800; font-size:12px; display:flex; align-items:center; gap:6px;">
-                <i class="fa-solid fa-circle-check"></i> AnimeSalt Master Playlist Verified Successfully!
+          const movieDlRows = finalDq.map((q, idx) => {
+            const sizeDisplay = q.sizeMb >= 1000 ? `${(q.sizeMb / 1024).toFixed(2)} GB` : `${q.sizeMb} MB`;
+            return `
+              <div style="display:grid; grid-template-columns: 85px 140px 1fr; gap:8px; align-items:center; background:rgba(0,0,0,0.3); padding:6px 10px; border-radius:8px; margin-bottom:5px; border:1px solid rgba(255,255,255,0.06);">
+                <span style="font-weight:800; color:#38BDF8; font-size:12px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <input type="number" class="input-control movie-dl-size-input" data-idx="${idx}" value="${q.sizeMb}" style="height:26px; width:72px; padding:2px 6px; font-size:11px; text-align:right;" oninput="updateMovieDownloadSize(${idx}, this.value)">
+                  <span style="font-size:11px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+                </div>
+                <input type="text" class="input-control" value="${permanentUrl}" readonly style="height:26px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${permanentUrl}">
               </div>
-              <div style="font-size:11px; color:#D1D5DB; margin-top:4px;">
-                <b>Qualities:</b> ${qualities.join(', ')}<br/>
-                <b>Audio Tracks (${audioTracks.length}):</b> ${audioTracks.join(', ')}
+            `;
+          }).join('');
+
+          if (statusEl) {
+            statusEl.innerHTML = `
+              <div style="background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4); border-radius:8px; padding:10px 12px; margin-top:8px;">
+                <div style="color:#34D399; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+                  <span><i class="fa-solid fa-circle-check"></i> Verified for Download Modal (Qualities, MB & Languages)</span>
+                  <span style="font-size:10px; background:rgba(16,185,129,0.2); color:#34D399; padding:2px 8px; border-radius:99px;">${result.engine || 'EXTRACTOR'}</span>
+                </div>
+                <div style="font-size:11px; color:#D1D5DB; margin-top:4px; line-height:1.5; margin-bottom:8px;">
+                  <b>Download Audio Languages (${audioTracks.length}):</b> ${audioTracks.join(', ')}<br/>
+                  <b>Source Link:</b> <span style="font-family:monospace; color:#A78BFA;">${permanentUrl}</span>
+                </div>
+                <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:8px;">
+                  ${movieDlRows}
+                </div>
               </div>
-            </div>
-          `;
-          showToast('AnimeSalt Master verified with ' + audioTracks.length + ' audio tracks & ' + qualities.length + ' qualities!');
+            `;
+          }
+          showToast('Verified! ' + finalDq.length + ' qualities & ' + audioTracks.length + ' download audio tracks ready.');
         } else {
-          statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Verification failed: ${(result && result.error) || 'Stream unreachable'}</span>`;
+          if (statusEl) {
+            const errMsg = (result && result.error) || 'Stream unreachable or extractor blocked';
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+              ? window.renderAdminVerifyErrorHtml('Movie Verification Failed', errMsg, 'verifyAnimeSaltMovieMasterStream()')
+              : `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Verification failed: ${errMsg}</span>`;
+          }
         }
       } catch (err) {
-        statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Error: ${err.message || 'Stream error'}</span>`;
+        if (statusEl) {
+          const errMsg = (err && err.message) || 'Stream extraction network error';
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+            ? window.renderAdminVerifyErrorHtml('Movie Verification Error', errMsg, 'verifyAnimeSaltMovieMasterStream()')
+            : `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Error: ${errMsg}</span>`;
+        }
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-bolt"></i> Verify AnimeSalt S1';
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-bolt"></i> Verify AnimeSalt S1';
+        }
       }
     };
 
@@ -6544,7 +6833,10 @@
       const statusEl = document.getElementById('movie-animesalt-status');
       if (statusEl) { statusEl.innerHTML = ''; statusEl.style.display = 'none'; }
       window.extractedMovieQualityLinks = {};
+      window.extractedMovieQualities = [];
+      window.extractedMovieDownloadQualities = [];
       window.extractedMovieAudioTracks = [];
+      window.extractedMovieVerifiedDownloadLanguages = [];
       showToast('AnimeSalt movie stream cleared');
     };
 
@@ -7093,54 +7385,79 @@
       let lastErrMsg = window.__lastNativeVerifyError || 'Could not extract HLS stream metadata';
       window.__lastNativeVerifyError = '';
       for (const endpoint of apiEndpoints) {
-        try {
-          const resp = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              url: cleanUrl,
-              forcedQuality: forcedQuality || '',
-              duration: requestedDurationSec || 0,
-              forceRefresh: true
-            })
-          });
-          const rawText = await resp.text();
-          if (!rawText || rawText.trim().startsWith('<')) {
-            if (!lastErrMsg || lastErrMsg === 'Could not extract HLS stream metadata') {
-              lastErrMsg = 'Extractor endpoint returned HTML instead of JSON';
+        for (let apiAttempt = 0; apiAttempt < 2; apiAttempt++) {
+          const abortCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timerId = setTimeout(() => {
+            try { if (abortCtrl) abortCtrl.abort(); } catch (_) {}
+          }, 32000);
+          try {
+            const resp = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: abortCtrl ? abortCtrl.signal : undefined,
+              body: JSON.stringify({
+                url: cleanUrl,
+                forcedQuality: forcedQuality || '',
+                duration: requestedDurationSec || 0,
+                forceRefresh: true
+              })
+            });
+            clearTimeout(timerId);
+            const rawText = await resp.text();
+            if (!resp.ok && (resp.status === 429 || resp.status >= 500) && apiAttempt === 0) {
+              lastErrMsg = `Upstream server busy (HTTP ${resp.status})`;
+              await new Promise(r => setTimeout(r, 800));
+              continue;
             }
-            continue;
-          }
-          const data = JSON.parse(rawText);
-          if (data && data.ok && (data.m3u8Url || data.directUrl || data.streamUrl)) {
-            const rawPrimary = data.m3u8Url || data.directUrl || data.streamUrl;
-            const effQ = forcedQuality || (Array.isArray(data.qualities) && data.qualities[0]) || '1080p';
-            return {
-              ok: true,
-              engine: 'SERVER_API',
-              provider: data.provider || '',
-              isDirectVideo: Boolean(data.isDirectVideo),
-              mimeType: data.mimeType || '',
-              cdnUrl: data.cdnUrl || '',
-              sourceUrl: cleanUrl,
-              m3u8Url: rawPrimary,
-              qualities: Array.isArray(data.qualities) && data.qualities.length > 0 ? data.qualities : [effQ],
-              qualityLinks: data.qualityLinks && Object.keys(data.qualityLinks).length > 0 ? data.qualityLinks : { [effQ]: cleanUrl },
-              downloadQualities: Array.isArray(data.downloadQualities) && data.downloadQualities.length > 0 ? data.downloadQualities.map(dq => ({
-                ...dq,
-                url: forcedQuality ? cleanUrl : (dq.url || cleanUrl)
-              })) : [{ id: effQ, label: `${effQ} HD`, sizeMb: Number(data.sizeMb || 950), url: cleanUrl }],
-              audioTracks: Array.isArray(data.audioTracks) ? data.audioTracks : [],
-              duration: Number(data.duration || 0),
-              remainingSeconds: Number(data.remainingSeconds || 10200)
-            };
-          }
-          if (data && data.error) {
-            lastErrMsg = data.error;
-          }
-        } catch (fetchErr) {
-          if (!lastErrMsg || lastErrMsg === 'Could not extract HLS stream metadata') {
-            lastErrMsg = fetchErr.message || 'Network error';
+            if (!rawText || rawText.trim().startsWith('<')) {
+              lastErrMsg = resp.ok
+                ? 'Extractor endpoint returned HTML instead of JSON'
+                : `Extractor HTTP ${resp.status}`;
+              break;
+            }
+            const data = JSON.parse(rawText);
+            if (data && data.ok && (data.m3u8Url || data.directUrl || data.streamUrl)) {
+              const rawPrimary = data.m3u8Url || data.directUrl || data.streamUrl;
+              const effQ = forcedQuality || (Array.isArray(data.qualities) && data.qualities[0]) || '1080p';
+              return {
+                ok: true,
+                engine: 'SERVER_API',
+                provider: data.provider || '',
+                isDirectVideo: Boolean(data.isDirectVideo),
+                mimeType: data.mimeType || '',
+                cdnUrl: data.cdnUrl || '',
+                sourceUrl: cleanUrl,
+                m3u8Url: rawPrimary,
+                qualities: Array.isArray(data.qualities) && data.qualities.length > 0 ? data.qualities : [effQ],
+                qualityLinks: data.qualityLinks && Object.keys(data.qualityLinks).length > 0 ? data.qualityLinks : { [effQ]: cleanUrl },
+                downloadQualities: Array.isArray(data.downloadQualities) && data.downloadQualities.length > 0 ? data.downloadQualities.map(dq => ({
+                  ...dq,
+                  url: forcedQuality ? cleanUrl : (dq.url || cleanUrl)
+                })) : [{ id: effQ, label: `${effQ} HD`, sizeMb: Number(data.sizeMb || 950), url: cleanUrl }],
+                audioTracks: Array.isArray(data.audioTracks) ? data.audioTracks : [],
+                duration: Number(data.duration || 0),
+                remainingSeconds: Number(data.remainingSeconds || 10200),
+                correctedUrl: data.correctedUrl || cleanUrl
+              };
+            }
+            if (data && data.error) {
+              lastErrMsg = data.error;
+              const lowerErr = String(data.error).toLowerCase();
+              if ((lowerErr.includes('timeout') || lowerErr.includes('429') || lowerErr.includes('busy') || lowerErr.includes('failed: 5')) && apiAttempt === 0) {
+                await new Promise(r => setTimeout(r, 900));
+                continue;
+              }
+            }
+            break;
+          } catch (fetchErr) {
+            clearTimeout(timerId);
+            lastErrMsg = (fetchErr && fetchErr.name === 'AbortError')
+              ? 'Extraction timed out after 32s (upstream host slow)'
+              : (fetchErr?.message || 'Network connection error');
+            if (apiAttempt === 0) {
+              await new Promise(r => setTimeout(r, 850));
+              continue;
+            }
           }
         }
       }
@@ -7163,6 +7480,7 @@
               const lines = m3u8Text.split('\n');
               const audios = [];
               const quals = [];
+              const bwByQuality = {};
               lines.forEach(l => {
                 if (l.includes('#EXT-X-MEDIA:') && l.includes('TYPE=AUDIO')) {
                   const m = l.match(/NAME="([^"]+)"|NAME=([^\s,]+)/i);
@@ -7173,12 +7491,35 @@
                   const r = l.match(/RESOLUTION=(\d+)x(\d+)/i);
                   if (r) {
                     const h = parseInt(r[2], 10);
-                    const q = h >= 1000 ? '1080p' : h >= 700 ? '720p' : h >= 450 ? '480p' : '360p';
+                    const q = h >= 1400 ? '1440p' : h >= 1000 ? '1080p' : h >= 700 ? '720p' : h >= 450 ? '480p' : h >= 300 ? '360p' : '240p';
                     if (!quals.includes(q)) quals.push(q);
+                    const bwMatch = l.match(/BANDWIDTH=(\d+)/i);
+                    const bw = bwMatch ? parseInt(bwMatch[1], 10) : 0;
+                    if (bw > 0 && (!bwByQuality[q] || bw > bwByQuality[q])) {
+                      bwByQuality[q] = bw;
+                    }
                   }
                 }
               });
-              const effQ = forcedQuality || (quals[0] || '1080p');
+              const defaultBwMap = { '1440p': 6000000, '1080p': 4096000, '720p': 2048000, '480p': 850000, '360p': 400000, '240p': 200000 };
+              const effDur = requestedDurationSec > 0 ? requestedDurationSec : 1440;
+              const sortedQuals = (quals.length > 0 ? quals : [forcedQuality || '1080p']).sort(
+                (a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0)
+              );
+              const targetQuals = forcedQuality ? [forcedQuality] : sortedQuals;
+              const qLinksObj = {};
+              targetQuals.forEach(q => { qLinksObj[q] = cleanUrl; });
+              const dlQuals = targetQuals.map(q => {
+                const bw = bwByQuality[q] || defaultBwMap[q] || 1500000;
+                const sizeMb = Math.max(12, Math.round((bw * effDur) / (8 * 1024 * 1024)));
+                return {
+                  id: q,
+                  label: `${q} ${q === '1080p' ? 'Full HD' : q === '720p' ? 'HD' : q === '480p' ? 'Standard' : 'Data Saver'}`,
+                  sizeMb,
+                  bandwidth: bw,
+                  url: cleanUrl
+                };
+              });
               return {
                 ok: true,
                 engine: 'CLIENT_PROBE',
@@ -7186,9 +7527,9 @@
                 isDirectVideo: false,
                 sourceUrl: cleanUrl,
                 m3u8Url: cleanUrl,
-                qualities: quals.length > 0 ? quals : [effQ],
-                qualityLinks: { [effQ]: cleanUrl },
-                downloadQualities: [{ id: effQ, label: `${effQ} HD`, sizeMb: 750, url: cleanUrl }],
+                qualities: targetQuals,
+                qualityLinks: qLinksObj,
+                downloadQualities: dlQuals,
                 audioTracks: audios,
                 duration: requestedDurationSec || 0,
                 remainingSeconds: 10200
@@ -7227,19 +7568,28 @@
 
     window.verifyServerQualityBoxesBatch = async function(boxEntries, fallbackSingleUrl, onProgress, requestedDurationSec) {
       const order = ['1080p', '720p', '480p', '360p'];
-      const tasks = [];
+      const enteredTasks = [];
       for (const q of order) {
         if (boxEntries && boxEntries[q] && window.sanitizeAdminStreamUrl(boxEntries[q])) {
-          tasks.push({ quality: q, url: window.sanitizeAdminStreamUrl(boxEntries[q]), forcedQuality: q });
+          enteredTasks.push({ quality: q, url: window.sanitizeAdminStreamUrl(boxEntries[q]), forcedQuality: q });
         }
       }
-      if (tasks.length === 0 && fallbackSingleUrl && window.sanitizeAdminStreamUrl(fallbackSingleUrl)) {
-        tasks.push({ quality: 'Master', url: window.sanitizeAdminStreamUrl(fallbackSingleUrl), forcedQuality: '' });
+      if (enteredTasks.length === 0 && fallbackSingleUrl && window.sanitizeAdminStreamUrl(fallbackSingleUrl)) {
+        enteredTasks.push({ quality: 'Master', url: window.sanitizeAdminStreamUrl(fallbackSingleUrl), forcedQuality: '' });
       }
-      if (tasks.length === 0) {
+      if (enteredTasks.length === 0) {
         return { ok: false, error: 'Please enter at least one stream link in the quality boxes first.' };
       }
 
+      // If admin pasted a single link (e.g. only 1080p box filled, or identical master URL in boxes),
+      // probe without forcedQuality so ALL manifest qualities (1080p, 720p, 480p, 360p, 240p) + real MBs are discovered!
+      const distinctUrlCount = new Set(enteredTasks.map(x => x.url)).size;
+      const isSingleSourceMaster = enteredTasks.length === 1 || distinctUrlCount === 1;
+      const tasks = isSingleSourceMaster
+        ? [{ quality: enteredTasks[0].quality, url: enteredTasks[0].url, forcedQuality: '', enteredBoxQualities: enteredTasks.map(x => x.quality) }]
+        : enteredTasks;
+
+      const defaultBwMap = { '1440p': 6000000, '1080p': 4096000, '720p': 2048000, '480p': 850000, '360p': 400000, '240p': 180000 };
       const mergedQualities = [];
       const mergedQualityLinks = {};
       const mergedDownloadMap = new Map();
@@ -7253,7 +7603,7 @@
       for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i];
         if (typeof onProgress === 'function') {
-          onProgress(i + 1, tasks.length, t.quality, t.url);
+          onProgress(i + 1, tasks.length, isSingleSourceMaster ? 'Master Stream (All Qualities)' : t.quality, t.url);
         }
         try {
           const res = await window.probeSingleQualityBoxSmart(t.url, t.forcedQuality, requestedDurationSec);
@@ -7275,26 +7625,57 @@
               if (!mergedQualities.includes(t.forcedQuality)) mergedQualities.push(t.forcedQuality);
               mergedQualityLinks[t.forcedQuality] = t.url;
               const dqMatch = (res.downloadQualities || []).find(d => d.id === t.forcedQuality) || (res.downloadQualities || [])[0];
-              if (dqMatch && dqMatch.sizeMb > 0) {
+              const effDur = bestDuration > 0 ? bestDuration : ((requestedDurationSec && requestedDurationSec > 0) ? requestedDurationSec : Number(res.duration || 0));
+              const bw = (dqMatch && dqMatch.bandwidth > 0) ? dqMatch.bandwidth : (defaultBwMap[t.forcedQuality] || 1500000);
+              const sizeMb = (dqMatch && dqMatch.sizeMb > 0)
+                ? Math.round(dqMatch.sizeMb)
+                : (effDur > 0 ? Math.max(10, Math.round((bw * effDur) / (8 * 1024 * 1024))) : 0);
+              if (sizeMb > 0) {
                 mergedDownloadMap.set(t.forcedQuality, {
                   id: t.forcedQuality,
                   label: `${t.forcedQuality} ${t.forcedQuality === '1080p' ? 'Full HD' : t.forcedQuality === '720p' ? 'HD' : t.forcedQuality === '480p' ? 'Standard' : 'Data Saver'}`,
-                  sizeMb: dqMatch.sizeMb,
+                  sizeMb,
                   url: t.url,
-                  bandwidth: dqMatch.bandwidth || 0,
+                  bandwidth: bw,
                   _probedDur: Number(res.duration || 0)
                 });
               }
             } else {
-              (res.qualities || []).forEach(q => {
+              // Single master stream: preserve entered quality box(es) cleanly while exposing ALL discovered qualities + real MBs
+              if (Array.isArray(t.enteredBoxQualities)) {
+                t.enteredBoxQualities.forEach(eq => {
+                  if (eq && eq !== 'Master') mergedQualityLinks[eq] = t.url;
+                });
+              }
+              const discQuals = Array.isArray(res.qualities) && res.qualities.length > 0
+                ? res.qualities
+                : (Array.isArray(res.downloadQualities) ? res.downloadQualities.map(d => d.id).filter(Boolean) : ['1080p']);
+              discQuals.forEach(q => {
                 if (q && !mergedQualities.includes(q)) mergedQualities.push(q);
               });
-              if (res.qualityLinks && typeof res.qualityLinks === 'object') {
-                Object.assign(mergedQualityLinks, res.qualityLinks);
-              }
+              const resDqById = new Map();
               (res.downloadQualities || []).forEach(dq => {
-                if (dq && dq.id && dq.sizeMb > 0 && !mergedDownloadMap.has(dq.id)) {
-                  mergedDownloadMap.set(dq.id, { ...dq, _probedDur: Number(res.duration || 0) });
+                if (dq && dq.id) resDqById.set(String(dq.id).toLowerCase(), dq);
+              });
+              const effDur = bestDuration > 0 ? bestDuration : ((requestedDurationSec && requestedDurationSec > 0) ? requestedDurationSec : Number(res.duration || 0));
+              const allQIds = Array.from(new Set([
+                ...discQuals,
+                ...(res.downloadQualities || []).map(d => d && d.id).filter(Boolean)
+              ]));
+              allQIds.forEach(qId => {
+                const matched = resDqById.get(String(qId).toLowerCase());
+                const bw = (matched && Number(matched.bandwidth) > 0) ? Number(matched.bandwidth) : (defaultBwMap[qId] || 1500000);
+                const computedMb = effDur > 0 ? Math.max(8, Math.round((bw * effDur) / (8 * 1024 * 1024))) : 0;
+                const sizeMb = (matched && Number(matched.sizeMb) > 0) ? Math.round(Number(matched.sizeMb)) : computedMb;
+                if (sizeMb > 0 && !mergedDownloadMap.has(qId)) {
+                  mergedDownloadMap.set(qId, {
+                    id: qId,
+                    label: (matched && matched.label) ? matched.label : `${qId} ${qId === '1080p' ? 'Full HD' : qId === '720p' ? 'HD' : qId === '480p' ? 'Standard' : 'Data Saver'}`,
+                    sizeMb,
+                    url: t.url,
+                    bandwidth: bw,
+                    _probedDur: Number(res.duration || 0)
+                  });
                 }
               });
             }
@@ -7581,6 +7962,7 @@
           window.extractedMovieDownloadQualities = data.downloadQualities || [];
           if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0) {
             window.extractedMovieAudioTracks = data.audioTracks;
+            window.extractedMovieVerifiedDownloadLanguages = data.audioTracks;
           }
 
           if (data.duration && data.duration > 0) {
@@ -7650,20 +8032,18 @@
           `;
           showToast(`Verified ${data.verifiedCount}/${data.totalBoxes} Server 1 quality box(es) with real MB!`, 'success');
         } else {
-          statusEl.innerHTML = `
-            <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:12px; margin-top:8px; color:#F87171; font-size:12px;">
-              <i class="fa-solid fa-circle-exclamation"></i> Verification Failed: ${data.error || 'Could not extract HLS stream'}
-            </div>
-          `;
-          showToast(data.error || 'Verification failed', 'error');
+          const reason = data.error || 'Could not extract HLS stream or server timed out';
+          statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+            ? window.renderAdminVerifyErrorHtml('Server 1 Verification Failed', reason, 'syncMovieSmartServerInputs(); testAndExtractMovieStream()')
+            : `<div style="color:#F87171;">Verification Failed: ${reason}</div>`;
+          showToast(reason, 'error');
         }
       } catch (err) {
-        statusEl.innerHTML = `
-          <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:12px; margin-top:8px; color:#F87171; font-size:12px;">
-            <i class="fa-solid fa-circle-exclamation"></i> Error: ${err.message}
-          </div>
-        `;
-        showToast('Verification error: ' + err.message, 'error');
+        const reason = err?.message || 'Unexpected verification error';
+        statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+          ? window.renderAdminVerifyErrorHtml('Server 1 Verification Error', reason, 'syncMovieSmartServerInputs(); testAndExtractMovieStream()')
+          : `<div style="color:#F87171;">Error: ${reason}</div>`;
+        showToast('Verification error: ' + reason, 'error');
       } finally {
         if (btn) {
           btn.disabled = false;
@@ -7740,9 +8120,10 @@
 
     window.testAndExtractEpisodeStream = async function(epIdx, btn) {
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
-      if (!activeSeason || !activeSeason.episodes[epIdx]) return;
-      const card = btn.closest('.episode-card');
-      if (!card) return;
+      if (!activeSeason || !activeSeason.episodes[epIdx]) return false;
+      const card = btn ? btn.closest('.episode-card') : document.querySelectorAll('#season-episodes-list .episode-card')[epIdx];
+      if (!card) return false;
+      const effBtn = btn || card.querySelector('.btn-ep-verify-s1') || { disabled: false, innerHTML: '' };
       const inp = card.querySelector('.ep-hls-stream-input');
       const statusEl = card.querySelector('.ep-hls-extract-status');
 
@@ -7758,7 +8139,7 @@
 
       if (Object.keys(s1BoxMap).length === 0 && !rawUrl) {
         showToast('Please enter at least one Server 1 episode URL first', 'warning');
-        return;
+        return false;
       }
 
       const s1EpCheck = window.validateAdminServerBoxLinks(s1BoxMap, rawUrl, 1);
@@ -7768,11 +8149,12 @@
           statusEl.innerHTML = `<div style="background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.45); border-radius:8px; padding:8px 10px; margin-top:6px; color:#FCA5A5; font-size:11px; font-weight:700;"><i class="fa-solid fa-ban"></i> ${s1EpCheck.error}</div>`;
         }
         showToast(s1EpCheck.error, 'error');
-        return;
+        return false;
       }
 
-      const origHtml = btn.innerHTML;
-      btn.disabled = true;
+      const origHtml = effBtn.innerHTML;
+      effBtn.disabled = true;
+      btn = effBtn;
 
       try {
         const ep = activeSeason.episodes[epIdx];
@@ -7800,6 +8182,8 @@
             ep.qualityLinks = Object.keys(data.qualityLinks || {}).length > 0 ? data.qualityLinks : s1BoxMap;
             if (Array.isArray(data.audioTracks) && data.audioTracks.length > 0) {
               ep.audioTracks = data.audioTracks;
+              ep.verifiedDownloadLanguages = data.audioTracks;
+              ep.downloadAudioTracks = data.audioTracks;
             }
             if (data.duration && data.duration > 0) {
               ep.duration = data.duration;
@@ -7866,14 +8250,30 @@
             `;
           }
           showToast(`Episode ${epIdx + 1}: Verified ${data.verifiedCount}/${data.totalBoxes} Server 1 link(s)!`, 'success');
+          if (ep) delete ep._lastVerifyError;
+          return true;
         } else {
+          const reason = data.error || 'Server 1 verification failed or timed out';
+          if (ep) ep._lastVerifyError = reason;
           if (statusEl) {
-            statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Verification failed'}</span>`;
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+              ? window.renderAdminVerifyErrorHtml(`Ep ${epIdx + 1} Server 1 Failed`, reason, `syncEpisodesFromDOM(); testAndExtractEpisodeStream(${epIdx}, this.closest('.episode-card')?.querySelector('.btn-ep-verify-s1'))`)
+              : `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${reason}</span>`;
           }
-          showToast(data.error || 'Extraction failed', 'error');
+          showToast(reason, 'error');
+          return false;
         }
       } catch (err) {
-        if (statusEl) statusEl.innerHTML = `<span style="color:#EF4444;">Error: ${err.message}</span>`;
+        const reason = err?.message || 'Unexpected error';
+        if (ep) ep._lastVerifyError = reason;
+        if (statusEl) {
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = typeof window.renderAdminVerifyErrorHtml === 'function'
+            ? window.renderAdminVerifyErrorHtml(`Ep ${epIdx + 1} Server 1 Error`, reason, `syncEpisodesFromDOM(); testAndExtractEpisodeStream(${epIdx}, this.closest('.episode-card')?.querySelector('.btn-ep-verify-s1'))`)
+            : `<span style="color:#EF4444;">Error: ${reason}</span>`;
+        }
+        return false;
       } finally {
         btn.disabled = false;
         btn.innerHTML = origHtml;
@@ -8055,9 +8455,10 @@
 
     window.testAndExtractEpisodeSecondaryStream = async function(epIdx, btn) {
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
-      if (!activeSeason || !activeSeason.episodes[epIdx]) return;
-      const card = btn.closest('.episode-card');
-      if (!card) return;
+      if (!activeSeason || !activeSeason.episodes[epIdx]) return false;
+      const card = btn ? btn.closest('.episode-card') : document.querySelectorAll('#season-episodes-list .episode-card')[epIdx];
+      if (!card) return false;
+      const effBtn = btn || card.querySelector('.btn-ep-verify-s2') || { disabled: false, innerHTML: '' };
       const inp = card.querySelector('.ep-secondary-hls-stream-input');
       const statusEl = card.querySelector('.ep-secondary-hls-extract-status');
 
@@ -8073,10 +8474,11 @@
 
       if (Object.keys(s2BoxMap).length === 0 && !rawUrl) {
         showToast('Please enter at least one Server 2 (Streamtape) episode URL first', 'warning');
-        return;
+        return false;
       }
 
       const s2EpCheck = window.validateAdminServerBoxLinks(s2BoxMap, rawUrl, 2);
+      btn = effBtn;
       if (!s2EpCheck.ok) {
         if (statusEl) {
           statusEl.style.display = 'block';
@@ -8196,14 +8598,17 @@
             `;
           }
           showToast(`Episode ${epIdx + 1}: Verified ${data.verifiedCount}/${data.totalBoxes} Server 2 link(s)!`, 'success');
+          return true;
         } else {
           if (statusEl) {
             statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Server 2 verification failed'}</span>`;
           }
           showToast(data.error || 'Server 2 extraction failed', 'error');
+          return false;
         }
       } catch (err) {
         if (statusEl) statusEl.innerHTML = `<span style="color:#EF4444;">Error: ${err.message}</span>`;
+        return false;
       } finally {
         btn.disabled = false;
         btn.innerHTML = origHtml;
@@ -8383,9 +8788,10 @@
 
     window.testAndExtractEpisodeTertiaryStream = async function(epIdx, btn) {
       const activeSeason = window.seasonsData[window.currentSeasonIdx];
-      if (!activeSeason || !activeSeason.episodes[epIdx]) return;
-      const card = btn.closest('.episode-card');
-      if (!card) return;
+      if (!activeSeason || !activeSeason.episodes[epIdx]) return false;
+      const card = btn ? btn.closest('.episode-card') : document.querySelectorAll('#season-episodes-list .episode-card')[epIdx];
+      if (!card) return false;
+      const effBtn = btn || card.querySelector('.btn-ep-verify-s3') || { disabled: false, innerHTML: '' };
       const inp = card.querySelector('.ep-tertiary-hls-stream-input');
       const statusEl = card.querySelector('.ep-tertiary-hls-extract-status');
 
@@ -8401,7 +8807,7 @@
 
       if (Object.keys(s3BoxMap).length === 0 && !rawUrl) {
         showToast('Please enter at least one Server 3 (Filemoon / Byse) episode URL first', 'warning');
-        return;
+        return false;
       }
 
       const s3EpCheck = window.validateAdminServerBoxLinks(s3BoxMap, rawUrl, 3);
@@ -8411,8 +8817,9 @@
           statusEl.innerHTML = `<div style="background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.45); border-radius:8px; padding:8px 10px; margin-top:6px; color:#FCA5A5; font-size:11px; font-weight:700;"><i class="fa-solid fa-ban"></i> ${s3EpCheck.error}</div>`;
         }
         showToast(s3EpCheck.error, 'error');
-        return;
+        return false;
       }
+      btn = effBtn;
 
       const origHtml = btn.innerHTML;
       btn.disabled = true;
@@ -8517,14 +8924,17 @@
             `;
           }
           showToast(`Episode ${epIdx + 1}: Verified ${data.verifiedCount}/${data.totalBoxes} Server 3 link(s)!`, 'success');
+          return true;
         } else {
           if (statusEl) {
             statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-circle-xmark"></i> ${data.error || 'Server 3 verification failed'}</span>`;
           }
           showToast(data.error || 'Server 3 extraction failed', 'error');
+          return false;
         }
       } catch (err) {
         if (statusEl) statusEl.innerHTML = `<span style="color:#EF4444;">Error: ${err.message}</span>`;
+        return false;
       } finally {
         btn.disabled = false;
         btn.innerHTML = origHtml;
@@ -8727,85 +9137,258 @@
       showToast('Server 3 (Filemoon / Byse) links cleared', 'info');
     };
 
+    window.renderEpisodeAnimeSaltStatusHtml = function(ep, epIdx, epMasterUrl, engineLabel) {
+      if (!ep) return '';
+      const dqs = Array.isArray(ep.downloadQualities) ? ep.downloadQualities : [];
+      const langs = (Array.isArray(ep.verifiedDownloadLanguages) && ep.verifiedDownloadLanguages.length > 0)
+        ? ep.verifiedDownloadLanguages
+        : (Array.isArray(ep.downloadAudioTracks) && ep.downloadAudioTracks.length > 0
+          ? ep.downloadAudioTracks
+          : (Array.isArray(ep.audioTracks) && ep.audioTracks.length > 0 ? ep.audioTracks : ['Original Audio']));
+      if (dqs.length === 0 && langs.length === 0) return '';
+      const sourceUrl = epMasterUrl || ep.videoUrl || '';
+      const dlRowsHtml = dqs.map((q, idx) => {
+        const sizeMb = Math.max(1, Math.round(Number(q.sizeMb || 0)));
+        const sizeDisplay = sizeMb >= 1000 ? `${(sizeMb / 1024).toFixed(2)} GB` : `${sizeMb} MB`;
+        return `
+          <div style="display:grid; grid-template-columns: 78px 135px 1fr; gap:6px; align-items:center; background:rgba(0,0,0,0.3); padding:5px 8px; border-radius:6px; margin-bottom:4px; border:1px solid rgba(255,255,255,0.06);">
+            <span style="font-weight:800; color:#38BDF8; font-size:11px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+            <div style="display:flex; align-items:center; gap:4px;">
+              <input type="number" class="input-control ep-dl-size-input" data-quality="${q.id}" data-ep="${epIdx}" data-idx="${idx}" value="${sizeMb}" style="height:24px; width:64px; padding:2px 6px; font-size:10px; text-align:right;" oninput="updateEpisodeDownloadSize(${epIdx}, ${idx}, this.value)">
+              <span style="font-size:10px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+            </div>
+            <input type="text" class="input-control" value="${q.url || sourceUrl}" readonly style="height:24px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || sourceUrl}">
+          </div>
+        `;
+      }).join('');
+      return `
+        <div style="background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4); border-radius:8px; padding:10px 12px; margin-top:8px;">
+          <div style="color:#34D399; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+            <span><i class="fa-solid fa-circle-check"></i> AnimeSalt Master Playlist Verified Successfully!</span>
+            ${engineLabel ? `<span style="font-size:9px; background:rgba(16,185,129,0.18); color:#34D399; padding:1px 6px; border-radius:99px;">${engineLabel}</span>` : ''}
+          </div>
+          <div style="font-size:11px; color:#D1D5DB; margin-top:4px; line-height:1.5; margin-bottom:6px;">
+            <b>Audio Tracks (${langs.length}):</b> ${langs.join(', ')}<br/>
+            <b>Resolved Stream:</b> <span style="font-family:monospace; color:#A78BFA;">${sourceUrl}</span>
+          </div>
+          ${dlRowsHtml ? `<div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:6px;">${dlRowsHtml}</div>` : ''}
+        </div>
+      `;
+    };
+
+    window.renderEpisodeSmartHlsStatusHtml = function(ep, epIdx) {
+      if (!ep || !Array.isArray(ep.downloadQualities) || ep.downloadQualities.length === 0) return '';
+      const qLabels = (Array.isArray(ep.qualities) && ep.qualities.length > 0 ? ep.qualities : ep.downloadQualities.map(q => q.id)).join(', ');
+      const langs = (Array.isArray(ep.verifiedDownloadLanguages) && ep.verifiedDownloadLanguages.length > 0)
+        ? ep.verifiedDownloadLanguages
+        : (Array.isArray(ep.audioTracks) && ep.audioTracks.length > 0 ? ep.audioTracks : ['Original / Stream Audio']);
+      const rows = ep.downloadQualities.map((q, idx) => {
+        const sizeMb = Math.max(1, Math.round(Number(q.sizeMb || 0)));
+        const sizeDisplay = sizeMb >= 1000 ? `${(sizeMb / 1024).toFixed(2)} GB` : `${sizeMb} MB`;
+        return `
+          <div style="display:grid; grid-template-columns: 80px 125px 1fr; gap:6px; align-items:center; background:rgba(0,0,0,0.3); padding:6px 10px; border-radius:6px; margin-bottom:4px; border:1px solid rgba(255,255,255,0.06);">
+            <span style="font-weight:800; color:#38BDF8; font-size:11px;"><i class="fa-solid fa-file-video"></i> ${q.id}</span>
+            <div style="display:flex; align-items:center; gap:3px;">
+              <input type="number" class="input-control ep-dl-size-input" data-quality="${q.id}" data-ep="${epIdx}" data-idx="${idx}" value="${sizeMb}" style="height:26px; width:65px; padding:2px 6px; font-size:10px; text-align:right;" oninput="updateEpisodeDownloadSize(${epIdx}, ${idx}, this.value)">
+              <span style="font-size:10px; color:#34D399; font-weight:800; white-space:nowrap;">(${sizeDisplay})</span>
+            </div>
+            <input type="text" class="input-control" value="${q.url || ep.videoUrl || ''}" readonly style="height:26px; font-size:10px; font-family:monospace; background:rgba(0,0,0,0.25); color:#999;" title="${q.url || ep.videoUrl || ''}">
+          </div>
+        `;
+      }).join('');
+      return `
+        <div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:8px; padding:8px 10px; margin-top:6px;">
+          <div style="color:#10B981; font-weight:800; font-size:11px; margin-bottom:4px;">
+            <i class="fa-solid fa-circle-check"></i> Verified • Ready for Playback & Download
+          </div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; font-size:10px; color:#ddd; align-items:center; margin-bottom:6px;">
+            <span><i class="fa-solid fa-sliders" style="color:#A78BFA;"></i> ${qLabels}</span>
+            <span>•</span>
+            <span><i class="fa-solid fa-headphones" style="color:#38BDF8;"></i> ${langs.join(', ')}</span>
+          </div>
+          ${rows}
+        </div>
+      `;
+    };
+
+    window.escapeHtmlSafe = function(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    };
+
+    window.renderAdminVerifyErrorHtml = function(title, reason, retryOnclickExpr) {
+      const safeTitle = window.escapeHtmlSafe(title || 'Verification Failed');
+      const safeReason = window.escapeHtmlSafe(reason || 'Stream unreachable or upstream timed out');
+      return `
+        <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.42); border-radius:8px; padding:10px 12px; margin-top:6px; display:flex; align-items:flex-start; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:190px;">
+            <div style="color:#FCA5A5; font-weight:800; font-size:11px; display:flex; align-items:center; gap:6px;">
+              <i class="fa-solid fa-triangle-exclamation" style="color:#EF4444;"></i> ${safeTitle}
+            </div>
+            <div style="font-size:11px; color:#FECACA; margin-top:3px; line-height:1.45; word-break:break-word;">
+              <b>Reason:</b> ${safeReason}
+            </div>
+          </div>
+          ${retryOnclickExpr ? `
+            <button type="button" onclick="${retryOnclickExpr}" style="white-space:nowrap; height:28px; padding:0 12px; font-size:11px; font-weight:800; border-radius:6px; background:rgba(239,68,68,0.22); border:1px solid rgba(248,113,113,0.6); color:#fff; cursor:pointer; display:inline-flex; align-items:center; gap:5px;">
+              <i class="fa-solid fa-rotate-right"></i> Retry
+            </button>
+          ` : ''}
+        </div>
+      `;
+    };
+
     window.verifyEpisodeAnimeSalt = async function(btn, epIdx) {
-      const card = btn.closest('.episode-card');
-      if (!card) return;
+      const card = btn ? btn.closest('.episode-card') : document.querySelectorAll('#season-episodes-list .episode-card')[epIdx];
+      if (!card) return false;
+      const effBtn = btn || card.querySelector('.btn-ep-verify-animesalt') || { disabled: false, innerHTML: '' };
       const inp = card.querySelector('.ep-animesalt-input');
       const statusEl = card.querySelector('.ep-animesalt-status');
-      const rawUrl = inp?.value.trim();
-      if (!rawUrl) {
-        showToast('Please enter an AnimeSalt / Ravok master stream URL first!');
-        return;
+      const rawInput = inp?.value.trim();
+      if (!rawInput) {
+        showToast('Please enter an AnimeSalt / Ravok master stream URL or path first!');
+        if (statusEl) {
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = window.renderAdminVerifyErrorHtml('Missing Stream URL', 'Please enter a valid episode link or path before verifying.', `verifyEpisodeAnimeSalt(this.closest('.episode-card')?.querySelector('.btn-ep-verify-animesalt'), ${epIdx})`);
+        }
+        return false;
       }
+      const rawUrl = window.resolveAnimeSaltUrl(rawInput);
 
-      btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+      effBtn.disabled = true;
+      effBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.innerHTML = '<span style="color:#A78BFA;"><i class="fa-solid fa-spinner fa-spin"></i> Reading AnimeSalt master playlist & discovering audio tracks...</span>';
+        statusEl.innerHTML = '<span style="color:#A78BFA;"><i class="fa-solid fa-spinner fa-spin"></i> Reading master playlist, qualities &amp; audio tracks...</span>';
       }
+
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      const ep = activeSeason?.episodes?.[epIdx];
+      const cardDurSec = typeof window.parseDurationStringToSeconds === 'function'
+        ? window.parseDurationStringToSeconds(card.querySelector('.ep-input-dur')?.value || ep?.duration || 0, false)
+        : Number(ep?.duration || 0);
 
       try {
         let result = null;
-        const nativeBridge = window.MaxPlayNative || window.AndroidNative;
-        if (nativeBridge && nativeBridge.extractStreamNative) {
-          try {
-            const rawRes = nativeBridge.extractStreamNative(rawUrl, '{}');
-            const parsed = typeof rawRes === 'string' ? JSON.parse(rawRes) : rawRes;
-            if (parsed && parsed.ok) result = parsed;
-          } catch (e) {
-            console.warn('Native probe error:', e);
+        let lastErr = '';
+
+        // Run non-blocking async probe (Kotlin async bridge in APK -> /api/extract-stream -> direct HLS) with automatic retry on transient failures
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt > 0) {
+            if (statusEl) {
+              statusEl.innerHTML = `<span style="color:#FBBF24;"><i class="fa-solid fa-rotate-right fa-spin"></i> Retrying verification (attempt 2/2)...</span>`;
+            }
+            await new Promise(r => setTimeout(r, 900));
           }
-        }
-        if (!result) {
-          const resp = await fetch('/api/extract-stream?url=' + encodeURIComponent(rawUrl), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: rawUrl, fast: false, forceRefresh: true })
-          });
-          if (resp.ok) result = await resp.json();
+          try {
+            result = await window.probeSingleQualityBoxSmart(rawUrl, '', cardDurSec);
+            if (result && result.ok) break;
+            lastErr = (result && result.error) || 'Stream extraction returned empty result';
+          } catch (probeErr) {
+            lastErr = (probeErr && probeErr.message) || 'Network or extractor error';
+          }
         }
 
         if (result && result.ok) {
-          const activeSeason = window.seasonsData[window.currentSeasonIdx];
-          const ep = activeSeason.episodes[epIdx];
-          const masterUrl = result.m3u8Url || rawUrl;
-          const qualities = result.qualities && result.qualities.length > 0 ? result.qualities : ['1080p', '720p', '480p', '360p', '240p'];
+          if (!ep) return false;
+          delete ep._lastVerifyError;
+          const permanentUrl = (result && result.correctedUrl) ? result.correctedUrl : rawUrl;
+          if (result && result.correctedUrl && inp && inp.value.trim() !== result.correctedUrl) {
+            inp.value = result.correctedUrl;
+          }
+          const rawQuals = result.qualities && result.qualities.length > 0 ? result.qualities : ['1080p', '720p', '480p', '360p'];
+          const qualities = Array.from(new Set([
+            ...rawQuals,
+            ...((Array.isArray(result.downloadQualities) ? result.downloadQualities.map(d => d && d.id).filter(Boolean) : []))
+          ])).sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0));
           const audioTracks = result.audioTracks && result.audioTracks.length > 0
             ? result.audioTracks
-            : ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
+            : ['Original Audio'];
 
           const qMap = {};
-          qualities.forEach(q => { qMap[q] = masterUrl; });
+          qualities.forEach(q => { qMap[q] = permanentUrl; });
+
+          const durSec = Number(result.duration) > 0 ? Number(result.duration) : (cardDurSec > 0 ? cardDurSec : 1440);
+          const bwMap = { '1440p': 6000000, '1080p': 3600000, '720p': 1800000, '480p': 750000, '360p': 320000, '240p': 160000 };
+          const incomingDqMap = new Map();
+          if (Array.isArray(result.downloadQualities)) {
+            result.downloadQualities.forEach(d => {
+              if (d && d.id) incomingDqMap.set(String(d.id).toLowerCase(), d);
+            });
+          }
+          const finalDq = qualities.map(q => {
+            const matched = incomingDqMap.get(String(q).toLowerCase());
+            const bw = (matched && Number(matched.bandwidth) > 0) ? Number(matched.bandwidth) : (bwMap[q] || 1500000);
+            const estMb = Math.max(10, Math.round((bw * durSec) / (8 * 1024 * 1024)));
+            const sizeMb = (matched && Number(matched.sizeMb) > 0) ? Math.round(Number(matched.sizeMb)) : estMb;
+            return {
+              id: q,
+              label: (matched && matched.label) ? matched.label : (q + (q === '1080p' ? ' Full HD' : q === '720p' ? ' HD' : q === '480p' ? ' Standard' : ' Data Saver')),
+              sizeMb,
+              bandwidth: bw,
+              url: permanentUrl
+            };
+          });
 
           ep.isAnimeSalt = true;
           ep.isSmartHls = true;
-          ep.videoUrl = masterUrl;
+          ep.videoUrl = permanentUrl;
+          ep.qualities = qualities;
           ep.qualityLinks = qMap;
           ep.audioTracks = audioTracks;
-          ep.downloadQualities = result.downloadQualities || qualities.map(q => ({ id: q, label: q + ' HD', sizeMb: 950, url: masterUrl }));
-          if (result.duration) ep.verifiedDuration = result.duration;
+          ep.verifiedDownloadLanguages = audioTracks;
+          ep.downloadAudioTracks = audioTracks;
+          ep.downloadQualities = finalDq;
+          if (result.duration && Number(result.duration) > 0) {
+            ep.duration = Number(result.duration);
+            const mm = Math.floor(ep.duration / 60);
+            const ss = (ep.duration % 60).toString().padStart(2, '0');
+            ep.verifiedDuration = `${mm}:${ss}`;
+            const durInp = card.querySelector('.ep-input-dur');
+            if (durInp) durInp.value = `${mm}:${ss}`;
+            const durTxt = card.querySelector('.ep-total-duration-text');
+            if (durTxt) {
+              durTxt.innerHTML = `<span style="color:#10B981; font-weight:900; display:inline-flex; align-items:center; gap:6px;"><i class="fa-solid fa-circle-check"></i> ${mm}:${ss}</span> <span style="font-size:12px; color:#aaa; font-weight:normal;">(${ep.duration}s)</span>`;
+            }
+          }
 
-          statusEl.innerHTML = `
-            <div style="background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4); border-radius:8px; padding:10px 12px; margin-top:8px;">
-              <div style="color:#34D399; font-weight:800; font-size:12px; display:flex; align-items:center; gap:6px;">
-                <i class="fa-solid fa-circle-check"></i> AnimeSalt Master Playlist Verified Successfully!
-              </div>
-              <div style="font-size:11px; color:#D1D5DB; margin-top:4px;">
-                <b>Qualities:</b> ${qualities.join(', ')}<br/>
-                <b>Audio Tracks (${audioTracks.length}):</b> ${audioTracks.join(', ')}
-              </div>
-            </div>
-          `;
-          showToast('Episode ' + (epIdx + 1) + ': AnimeSalt Master verified with ' + audioTracks.length + ' audio tracks!');
+          if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = window.renderEpisodeAnimeSaltStatusHtml(ep, epIdx, permanentUrl, result.engine || '');
+          }
+          showToast('Episode ' + (epIdx + 1) + ': Verified (' + finalDq.length + ' qualities, ' + audioTracks.length + ' languages)!');
+          return true;
         } else {
-          statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Verification failed: ${(result && result.error) || 'Stream unreachable'}</span>`;
+          const reason = lastErr || (result && result.error) || 'Stream unreachable or blocked upstream';
+          if (ep) ep._lastVerifyError = reason;
+          if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = window.renderAdminVerifyErrorHtml(
+              `Episode ${epIdx + 1} Verification Failed`,
+              reason,
+              `verifyEpisodeAnimeSalt(this.closest('.episode-card')?.querySelector('.btn-ep-verify-animesalt'), ${epIdx})`
+            );
+          }
+          return false;
         }
       } catch (err) {
-        statusEl.innerHTML = `<span style="color:#EF4444;"><i class="fa-solid fa-triangle-exclamation"></i> Error: ${err.message || 'Stream error'}</span>`;
+        const reason = (err && err.message) || 'Unexpected verification error';
+        if (ep) ep._lastVerifyError = reason;
+        if (statusEl) {
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = window.renderAdminVerifyErrorHtml(
+            `Episode ${epIdx + 1} Error`,
+            reason,
+            `verifyEpisodeAnimeSalt(this.closest('.episode-card')?.querySelector('.btn-ep-verify-animesalt'), ${epIdx})`
+          );
+        }
+        return false;
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-bolt"></i> Verify AnimeSalt S1';
+        effBtn.disabled = false;
+        effBtn.innerHTML = '<i class="fa-solid fa-bolt"></i> Verify AnimeSalt S1';
       }
     };
 
@@ -8824,6 +9407,288 @@
         activeSeason.episodes[epIdx].audioTracks = [];
       }
       showToast(`Episode ${epIdx + 1} AnimeSalt stream cleared`, 'info');
+    };
+
+    window.applyBulkEpisodeLinksToSeason = function() {
+      if (typeof syncEpisodesFromDOM === 'function') syncEpisodesFromDOM();
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (!activeSeason) {
+        showToast('No active season found!');
+        return;
+      }
+      const bulkInput = document.getElementById('bulk-season-links-input');
+      const text = bulkInput ? bulkInput.value : '';
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      if (lines.length === 0) {
+        showToast('Please paste at least one episode link or path into the bulk box!');
+        return;
+      }
+
+      if (!activeSeason.episodes) activeSeason.episodes = [];
+      const posterUrl = document.getElementById('up-poster')?.value || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800';
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const fullUrl = (typeof window.resolveAnimeSaltUrl === 'function') ? window.resolveAnimeSaltUrl(line) : line;
+        const epNum = i + 1;
+
+        if (activeSeason.episodes[i]) {
+          const ep = activeSeason.episodes[i];
+          ep.videoUrl = fullUrl;
+          ep.isAnimeSalt = true;
+          ep.isSmartHls = true;
+          if (!ep.qualityLinks) ep.qualityLinks = {};
+          ep.qualityLinks['1080p'] = fullUrl;
+        } else {
+          // Create new episode card
+          activeSeason.episodes.push({
+            id: 'ep-' + Date.now() + '-' + epNum,
+            episodeNumber: epNum,
+            title: 'Episode ' + epNum,
+            duration: 1440,
+            thumbnailUrl: posterUrl,
+            videoSources: {},
+            videoLinks: [],
+            isAnimeSalt: true,
+            isSmartHls: true,
+            videoUrl: fullUrl,
+            qualityLinks: { '1080p': fullUrl }
+          });
+        }
+      }
+
+      renderEpisodesList();
+      showToast(`Applied ${lines.length} episode links to ${activeSeason.seasonTitle || ('Season ' + (window.currentSeasonIdx + 1))}!`);
+    };
+
+    window.renderBulkVerifyErrorSummary = function(failedItems) {
+      const progressContainer = document.getElementById('bulk-verify-progress-container');
+      if (!progressContainer) return;
+      let panel = document.getElementById('bulk-verify-error-panel');
+      if (!failedItems || failedItems.length === 0) {
+        if (panel) panel.remove();
+        return;
+      }
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'bulk-verify-error-panel';
+        progressContainer.appendChild(panel);
+      }
+      const listHtml = failedItems.map(item => `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(0,0,0,0.3); padding:6px 10px; border-radius:6px; border:1px solid rgba(239,68,68,0.22); margin-top:4px; font-size:11px;">
+          <div style="flex:1; color:#FECACA; word-break:break-word;">
+            <b>Ep ${item.epNum}:</b> ${window.escapeHtmlSafe(item.reason)}
+          </div>
+          <button type="button" onclick="window.verifySingleEpisodeCardInBatch(${item.epIdx})" style="white-space:nowrap; height:24px; padding:0 8px; font-size:10px; font-weight:700; border-radius:5px; background:rgba(239,68,68,0.2); border:1px solid rgba(248,113,113,0.5); color:#fff; cursor:pointer;">
+            <i class="fa-solid fa-rotate-right"></i> Retry
+          </button>
+        </div>
+      `).join('');
+      panel.innerHTML = `
+        <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.4); border-radius:10px; padding:12px; margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+            <span style="color:#FCA5A5; font-weight:800; font-size:12px;">
+              <i class="fa-solid fa-triangle-exclamation" style="color:#EF4444;"></i> ${failedItems.length} Episode(s) Failed or Timed Out
+            </span>
+            <button type="button" onclick="window.retryFailedEpisodesInSeasonBatch()" style="height:30px; padding:0 14px; font-size:11px; font-weight:800; border-radius:7px; background:linear-gradient(135deg, #EF4444, #DC2626); border:none; color:#fff; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
+              <i class="fa-solid fa-rotate-right"></i> Retry All Failed (${failedItems.length})
+            </button>
+          </div>
+          ${listHtml}
+        </div>
+      `;
+    };
+
+    window.verifySingleEpisodeCardInBatch = async function(epIdx, statusLabelEl) {
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      const ep = activeSeason?.episodes?.[epIdx];
+      const card = document.querySelectorAll('#season-episodes-list .episode-card')[epIdx];
+      if (!card || !ep) return { attempted: false, ok: false, reason: 'Episode box not rendered' };
+
+      const prevOutline = card.style.outline;
+      card.style.outline = '2px solid rgba(16,185,129,0.75)';
+      try {
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (_) {}
+
+      let attempted = false;
+      let success = false;
+      let reason = '';
+
+      try {
+        const animeBtn = card.querySelector('.btn-ep-verify-animesalt') || card.querySelector('button[onclick*="verifyEpisodeAnimeSalt"]');
+        const epInp = card.querySelector('.ep-animesalt-input');
+        const s1Btn = card.querySelector('.btn-ep-verify-s1') || card.querySelector('button[onclick*="testAndExtractEpisodeStream"]');
+        const s2Btn = card.querySelector('.btn-ep-verify-s2') || card.querySelector('button[onclick*="testAndExtractEpisodeSecondaryStream"]');
+        const s3Btn = card.querySelector('.btn-ep-verify-s3') || card.querySelector('button[onclick*="testAndExtractEpisodeTertiaryStream"]');
+
+        if (window.isAnimeSaltMode || (animeBtn && epInp)) {
+          const hasUrl = Boolean(epInp && epInp.value.trim());
+          if (hasUrl && animeBtn && typeof window.verifyEpisodeAnimeSalt === 'function') {
+            attempted = true;
+            if (statusLabelEl) statusLabelEl.innerText = `Episode ${epIdx + 1}: Verifying AnimeSalt Master stream...`;
+            success = Boolean(await window.verifyEpisodeAnimeSalt(animeBtn, epIdx));
+            if (!success) reason = ep._lastVerifyError || 'AnimeSalt extractor failed or timed out';
+          }
+        } else {
+          const hasS1 = Array.from(card.querySelectorAll('.ep-s1-q-input')).some(inp => {
+            const row = inp.closest('.server-q-row');
+            return (!row || row.style.display !== 'none') && Boolean(inp.value && inp.value.trim());
+          }) || Boolean(card.querySelector('.ep-hls-stream-input')?.value?.trim());
+
+          const hasS2 = Array.from(card.querySelectorAll('.ep-s2-q-input')).some(inp => {
+            const row = inp.closest('.server-q-row');
+            return (!row || row.style.display !== 'none') && Boolean(inp.value && inp.value.trim());
+          }) || Boolean(card.querySelector('.ep-secondary-hls-stream-input')?.value?.trim());
+
+          const hasS3 = Array.from(card.querySelectorAll('.ep-s3-q-input')).some(inp => {
+            const row = inp.closest('.server-q-row');
+            return (!row || row.style.display !== 'none') && Boolean(inp.value && inp.value.trim());
+          }) || Boolean(card.querySelector('.ep-tertiary-hls-stream-input')?.value?.trim());
+
+          let allBtnsOk = true;
+          if (hasS1 && s1Btn && typeof window.testAndExtractEpisodeStream === 'function') {
+            attempted = true;
+            if (statusLabelEl) statusLabelEl.innerText = `Episode ${epIdx + 1}: Verifying S1...`;
+            const ok1 = await window.testAndExtractEpisodeStream(epIdx, s1Btn);
+            if (!ok1) {
+              allBtnsOk = false;
+              reason = ep._lastVerifyError || 'Server 1 verification failed';
+            }
+          }
+          if (hasS2 && s2Btn && typeof window.testAndExtractEpisodeSecondaryStream === 'function') {
+            attempted = true;
+            if (statusLabelEl) statusLabelEl.innerText = `Episode ${epIdx + 1}: Verifying S2...`;
+            const ok2 = await window.testAndExtractEpisodeSecondaryStream(epIdx, s2Btn);
+            if (!ok2) {
+              allBtnsOk = false;
+              reason = reason ? `${reason}; S2 failed` : 'Server 2 verification failed';
+            }
+          }
+          if (hasS3 && s3Btn && typeof window.testAndExtractEpisodeTertiaryStream === 'function') {
+            attempted = true;
+            if (statusLabelEl) statusLabelEl.innerText = `Episode ${epIdx + 1}: Verifying S3...`;
+            const ok3 = await window.testAndExtractEpisodeTertiaryStream(epIdx, s3Btn);
+            if (!ok3) {
+              allBtnsOk = false;
+              reason = reason ? `${reason}; S3 failed` : 'Server 3 verification failed';
+            }
+          }
+          success = attempted && allBtnsOk;
+        }
+      } catch (err) {
+        attempted = true;
+        success = false;
+        reason = (err && err.message) || 'Verification exception';
+      } finally {
+        card.style.outline = prevOutline;
+      }
+
+      return { attempted, ok: success, reason };
+    };
+
+    window.verifyAllEpisodesInSeasonBatch = async function(targetIndices = null) {
+      if (typeof syncEpisodesFromDOM === 'function') syncEpisodesFromDOM();
+      const activeSeason = window.seasonsData[window.currentSeasonIdx];
+      if (!activeSeason || !activeSeason.episodes || activeSeason.episodes.length === 0) {
+        showToast('No episodes found in active season! Apply or add episode links first.');
+        return;
+      }
+
+      const indicesToRun = Array.isArray(targetIndices) && targetIndices.length > 0
+        ? targetIndices.filter(idx => idx >= 0 && idx < activeSeason.episodes.length)
+        : activeSeason.episodes.map((_, idx) => idx);
+
+      const total = indicesToRun.length;
+      if (total === 0) {
+        showToast('No episodes queued for verification.');
+        return;
+      }
+
+      const progressContainer = document.getElementById('bulk-verify-progress-container');
+      const progressFill = document.getElementById('bulk-verify-progress-fill');
+      const progressText = document.getElementById('bulk-verify-progress-text');
+      const statusLabel = document.getElementById('bulk-verify-status-label');
+      const percentLabel = document.getElementById('bulk-verify-percent-label');
+      const btn = document.getElementById('btn-bulk-verify-all-eps');
+
+      if (progressContainer) progressContainer.style.display = 'block';
+      window.renderBulkVerifyErrorSummary([]);
+      if (progressText) {
+        progressText.style.display = 'inline';
+        progressText.innerText = 'Verifying...';
+      }
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying All...';
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+      let skippedCount = 0;
+      const failedItems = [];
+
+      for (let pos = 0; pos < total; pos++) {
+        const epIdx = indicesToRun[pos];
+        const ep = activeSeason.episodes[epIdx];
+        const pct = Math.round((pos / total) * 100);
+        if (progressFill) progressFill.style.width = pct + '%';
+        if (percentLabel) percentLabel.innerText = pct + '%';
+        if (progressText) progressText.innerText = `[${pos + 1}/${total}]`;
+
+        const res = await window.verifySingleEpisodeCardInBatch(epIdx, statusLabel);
+        if (!res.attempted) {
+          skippedCount++;
+        } else if (res.ok) {
+          successCount++;
+        } else {
+          failCount++;
+          failedItems.push({
+            epIdx,
+            epNum: (ep && ep.episodeNumber) || (epIdx + 1),
+            reason: res.reason || 'Upstream timeout or extraction failed'
+          });
+        }
+
+        // Gentle 250ms inter-episode pause prevents Season 3/4/5+ burst rate-limits (HTTP 429) on AnimeSalt/CDNs
+        if (pos + 1 < total) {
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+
+      window._lastFailedBatchEpisodes = failedItems;
+      if (progressFill) progressFill.style.width = '100%';
+      if (percentLabel) percentLabel.innerText = '100%';
+      if (statusLabel) {
+        statusLabel.innerText = failCount > 0
+          ? `Finished with ${failCount} failure(s): ${successCount} verified${skippedCount > 0 ? `, ${skippedCount} empty skipped` : ''}. Use Retry below.`
+          : `Done! Verified all ${successCount} episode(s) cleanly${skippedCount > 0 ? ` (${skippedCount} empty skipped)` : ''}.`;
+      }
+      if (progressText) {
+        progressText.innerText = `Verified ${successCount}/${total}`;
+      }
+      window.renderBulkVerifyErrorSummary(failedItems);
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-bolt"></i> Verify All Episodes';
+      }
+
+      showToast(`Batch Verification Finished! Verified: ${successCount}, Failed: ${failCount}`);
+    };
+
+    window.retryFailedEpisodesInSeasonBatch = async function() {
+      const failed = Array.isArray(window._lastFailedBatchEpisodes) ? window._lastFailedBatchEpisodes : [];
+      if (failed.length === 0) {
+        showToast('No failed episodes to retry!');
+        return;
+      }
+      await window.verifyAllEpisodesInSeasonBatch(failed.map(f => f.epIdx));
+    };
+
+    window.clearBulkEpisodeInput = function() {
+      const el = document.getElementById('bulk-season-links-input');
+      if (el) el.value = '';
+      showToast('Bulk links cleared');
     };
 
     window.toggleAdminStreamPreview = function(containerId, explicitStreamUrl) {
@@ -9432,6 +10297,26 @@
         pillsBar.innerHTML = pillsHtml;
       }
 
+      // 4. Update Fast Bulk Episode Links Importer for active season
+      const bulkSeasonBadge = document.getElementById('bulk-importer-season-badge');
+      if (bulkSeasonBadge) {
+        bulkSeasonBadge.innerText = activeSeason.seasonTitle || ('Season ' + (activeSeason.seasonNumber || (window.currentSeasonIdx + 1)));
+      }
+      const bulkDomainBadge = document.getElementById('bulk-importer-base-domain-badge');
+      if (bulkDomainBadge && typeof window.getAnimeSaltBaseDomain === 'function') {
+        bulkDomainBadge.innerText = window.getAnimeSaltBaseDomain();
+      }
+      const bulkInput = document.getElementById('bulk-season-links-input');
+      if (bulkInput && document.activeElement !== bulkInput) {
+        const epUrls = (activeSeason.episodes || [])
+          .map(ep => ep.videoUrl || (ep.qualityLinks && (ep.qualityLinks['1080p'] || Object.values(ep.qualityLinks)[0])) || '')
+          .filter(Boolean);
+        bulkInput.value = epUrls.length > 0 ? epUrls.join('\n') : '';
+      }
+
+      const upSeasonsInp = document.getElementById('up-seasons');
+      if (upSeasonsInp) upSeasonsInp.value = String(window.seasonsData.length);
+      if (typeof window.renderBulkVerifyErrorSummary === 'function') window.renderBulkVerifyErrorSummary([]);
       renderEpisodesList();
     };
 
@@ -9660,29 +10545,35 @@
 
         if (window.isAnimeSaltMode) {
           const animeSaltInp = card.querySelector('.ep-animesalt-input');
-          const masterUrl = animeSaltInp ? window.sanitizeAdminStreamUrl(animeSaltInp.value) : (ep.videoUrl || '');
-          if (animeSaltInp && animeSaltInp.value !== masterUrl) animeSaltInp.value = masterUrl;
+          const rawVal = animeSaltInp ? window.sanitizeAdminStreamUrl(animeSaltInp.value) : (ep.videoUrl || '');
+          const masterUrl = (rawVal && typeof window.resolveAnimeSaltUrl === 'function')
+            ? window.resolveAnimeSaltUrl(rawVal)
+            : rawVal;
+          if (animeSaltInp && animeSaltInp.value !== rawVal) animeSaltInp.value = rawVal;
 
           if (masterUrl) {
             ep.isAnimeSalt = true;
             ep.isSmartHls = true;
             ep.videoUrl = masterUrl;
-            if (!ep.qualityLinks || Object.keys(ep.qualityLinks).length === 0) {
-              ep.qualityLinks = {
-                '1080p': masterUrl,
-                '720p': masterUrl,
-                '480p': masterUrl,
-                '360p': masterUrl,
-                '240p': masterUrl
-              };
+            const dqQuals = Array.isArray(ep.downloadQualities) ? ep.downloadQualities.map(q => q && q.id).filter(Boolean) : [];
+            const prevQuals = (ep.qualities && ep.qualities.length > 0)
+              ? ep.qualities
+              : (dqQuals.length > 0 ? dqQuals : (ep.qualityLinks ? Object.keys(ep.qualityLinks) : []));
+            const nextQMap = {};
+            if (prevQuals.length > 0) {
+              prevQuals.forEach(q => { nextQMap[q] = masterUrl; });
+            } else {
+              nextQMap['1080p'] = masterUrl;
             }
-            if (!ep.audioTracks || ep.audioTracks.length === 0) {
-              ep.audioTracks = ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
+            ep.qualityLinks = nextQMap;
+            // Strictly keep verified languages isolated from videoSources so streaming selectors stay clean
+            if (Array.isArray(ep.verifiedDownloadLanguages) && ep.verifiedDownloadLanguages.length > 0) {
+              ep.downloadAudioTracks = ep.verifiedDownloadLanguages;
+              ep.audioTracks = ep.verifiedDownloadLanguages;
+            } else if (Array.isArray(ep.audioTracks) && ep.audioTracks.length > 0) {
+              ep.verifiedDownloadLanguages = ep.audioTracks;
+              ep.downloadAudioTracks = ep.audioTracks;
             }
-            ep.videoSources = {};
-            ep.audioTracks.forEach(tr => {
-              ep.videoSources[tr] = { ...ep.qualityLinks };
-            });
             if (hlsInp) hlsInp.value = masterUrl;
           }
         } else if (window.isSmartHlsMode) {
@@ -9766,17 +10657,27 @@
             delete ep.secondaryServerQualityLinks;
           }
 
-          // Prune downloadQualities & qualities to strictly match configured s1Links / s2Links (tertiary*) / s3Links (secondary*) boxes
-          if (Object.keys(s1Links).length > 0) {
+          // Only prune downloadQualities when MULTIPLE distinct quality URLs were entered by admin.
+          // When 1 master link (or identical URL across boxes) was verified, keep ALL discovered qualities & real MBs!
+          const distinctS1Urls = new Set(Object.values(s1Links).filter(Boolean)).size;
+          if (distinctS1Urls > 1) {
             ep.qualities = Object.keys(s1Links);
             if (Array.isArray(ep.downloadQualities)) {
               ep.downloadQualities = ep.downloadQualities.filter(q => q && s1Links[q.id]);
             }
+          } else if (Object.keys(s1Links).length > 0) {
+            if (!Array.isArray(ep.qualities) || ep.qualities.length === 0) {
+              ep.qualities = (Array.isArray(ep.downloadQualities) && ep.downloadQualities.length > 0)
+                ? ep.downloadQualities.map(q => q && q.id).filter(Boolean)
+                : Object.keys(s1Links);
+            }
           }
-          if (Object.keys(s2Links).length > 0 && Array.isArray(ep.tertiaryDownloadQualities)) {
+          const distinctS2Urls = new Set(Object.values(s2Links).filter(Boolean)).size;
+          if (distinctS2Urls > 1 && Array.isArray(ep.tertiaryDownloadQualities)) {
             ep.tertiaryDownloadQualities = ep.tertiaryDownloadQualities.filter(q => q && s2Links[q.id]);
           }
-          if (Object.keys(s3Links).length > 0 && Array.isArray(ep.secondaryDownloadQualities)) {
+          const distinctS3Urls = new Set(Object.values(s3Links).filter(Boolean)).size;
+          if (distinctS3Urls > 1 && Array.isArray(ep.secondaryDownloadQualities)) {
             ep.secondaryDownloadQualities = ep.secondaryDownloadQualities.filter(q => q && s3Links[q.id]);
           }
 
@@ -10130,7 +11031,7 @@
                       <span style="font-size:9px; background:rgba(168,85,247,0.3); color:#fff; border:1px solid rgba(168,85,247,0.6); padding:2px 8px; border-radius:4px; font-weight:800;">AUTO MULTI-AUDIO</span>
                     </label>
                     <div style="display:flex; gap:8px;">
-                      <button type="button" class="btn-primary" onclick="verifyEpisodeAnimeSalt(this, ${epIdx})" style="white-space:nowrap; padding:0 14px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px;">
+                      <button type="button" class="btn-primary btn-ep-verify-animesalt" onclick="verifyEpisodeAnimeSalt(this, ${epIdx})" style="white-space:nowrap; padding:0 14px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px;">
                         <i class="fa-solid fa-bolt"></i> Verify AnimeSalt S1
                       </button>
                       <button type="button" class="btn-secondary" onclick="clearEpisodeAnimeSalt(this, ${epIdx})" title="Clear AnimeSalt" style="white-space:nowrap; padding:0 10px; height:32px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:5px; color:#EF4444; border-color:rgba(239,68,68,0.35);">
@@ -10139,18 +11040,10 @@
                     </div>
                   </div>
                   <input type="text" class="input-control ep-animesalt-input" value="${epMasterUrl}" placeholder="Paste AnimeSalt / Ravok Master Stream (https://ravok.buzz/embed/... or master.m3u8)..." onchange="syncEpisodesFromDOM()" style="font-family:monospace; font-size:12px; height:36px; border-color:rgba(168,85,247,0.4);">
-                  <div class="ep-animesalt-status" style="${ep.isAnimeSalt ? 'display:block;' : 'display:none;'} margin-top:8px;">
-                    ${ep.isAnimeSalt ? `
-                      <div style="background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4); border-radius:8px; padding:10px 12px;">
-                        <div style="color:#34D399; font-weight:800; font-size:12px; display:flex; align-items:center; gap:6px;">
-                          <i class="fa-solid fa-circle-check"></i> AnimeSalt Master Playlist Verified
-                        </div>
-                        <div style="font-size:11px; color:#D1D5DB; margin-top:4px;">
-                          <b>Qualities:</b> ${Object.keys(ep.qualityLinks || {}).join(', ') || '1080p, 720p, 480p, 360p, 240p'}<br/>
-                          <b>Audio Tracks:</b> ${(ep.audioTracks || ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]']).join(', ')}
-                        </div>
-                      </div>
-                    ` : ''}
+                  <div class="ep-animesalt-status" style="${(ep.isAnimeSalt && ((ep.downloadQualities && ep.downloadQualities.length > 0) || (ep.verifiedDownloadLanguages && ep.verifiedDownloadLanguages.length > 0))) ? 'display:block;' : 'display:none;'} margin-top:8px;">
+                    ${(ep.isAnimeSalt && ((ep.downloadQualities && ep.downloadQualities.length > 0) || (ep.verifiedDownloadLanguages && ep.verifiedDownloadLanguages.length > 0)) && typeof window.renderEpisodeAnimeSaltStatusHtml === 'function')
+                      ? window.renderEpisodeAnimeSaltStatusHtml(ep, epIdx, epMasterUrl, '')
+                      : ''}
                   </div>
                 </div>
               `;
@@ -10216,7 +11109,7 @@
                     <span style="font-size:9px; background:rgba(168,85,247,0.3); color:#D8B4FE; border:1px solid rgba(168,85,247,0.6); padding:2px 6px; border-radius:4px; font-weight:800;">PRIMARY</span>
                   </label>
                   <div style="display:flex; gap:6px;">
-                    <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 10px; height:28px; font-size:10px; font-weight:700;" onclick="syncEpisodesFromDOM(); testAndExtractEpisodeStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S1</button>
+                    <button type="button" class="btn-secondary btn-ep-verify-s1" style="white-space:nowrap; padding:0 10px; height:28px; font-size:10px; font-weight:700;" onclick="syncEpisodesFromDOM(); testAndExtractEpisodeStream(${epIdx}, this)"><i class="fa-solid fa-bolt"></i> Verify S1</button>
                     <button type="button" class="btn-secondary" style="white-space:nowrap; padding:0 8px; height:28px; font-size:10px; font-weight:700; color:#EF4444; border-color:rgba(239,68,68,0.35);" onclick="clearEpisodeServer1(${epIdx}, this)" title="Clear Server 1"><i class="fa-solid fa-trash-can"></i></button>
                   </div>
                 </div>
@@ -10225,7 +11118,11 @@
                   ${s1RowsHtml}
                 </div>
                 <div class="ep-s1-restore-bar" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;"></div>
-                <div class="ep-hls-extract-status" style="margin-top:6px; font-size:11px;"></div>
+                <div class="ep-hls-extract-status" style="margin-top:6px; font-size:11px;">
+                  ${(Array.isArray(ep.downloadQualities) && ep.downloadQualities.length > 0 && typeof window.renderEpisodeSmartHlsStatusHtml === 'function')
+                    ? window.renderEpisodeSmartHlsStatusHtml(ep, epIdx)
+                    : ''}
+                </div>
 
                 <div class="form-group" style="margin-top:12px; padding:10px; background:rgba(168,85,247,0.06); border:1px solid rgba(168,85,247,0.25); border-radius:10px;">
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -10362,6 +11259,9 @@
         videoLinks: []
       });
 
+      const upSeasonsInp = document.getElementById('up-seasons');
+      if (upSeasonsInp) upSeasonsInp.value = String(window.seasonsData.length);
+      if (typeof window.renderBulkVerifyErrorSummary === 'function') window.renderBulkVerifyErrorSummary([]);
       renderEpisodesList();
     };
 
@@ -10407,6 +11307,11 @@
           `;
         }
 
+        const isUnlistedReview = Boolean(document.getElementById('up-unlisted')?.checked);
+        const visibilityHtml = isUnlistedReview
+          ? '<span style="color:#FBBF24; font-weight:800;"><i class="fa-solid fa-eye-slash"></i> Unlisted (Hidden in Client APK)</span>'
+          : '<span style="color:#34D399; font-weight:800;"><i class="fa-solid fa-eye"></i> Public (Visible in Client APK)</span>';
+
         const container = document.getElementById('review-summary-details');
         if (container) {
           container.innerHTML = `
@@ -10418,6 +11323,10 @@
               <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:10px;">
                 <span style="color:var(--text-tertiary); font-weight:700;">Format Type</span>
                 <span style="color:var(--accent-cyan); font-weight:800; font-size:12px; background:rgba(6,182,212,0.1); padding:4px 10px; border-radius:6px; text-transform:uppercase;">${type}</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:10px;">
+                <span style="color:var(--text-tertiary); font-weight:700;">Client App Visibility</span>
+                <span>${visibilityHtml}</span>
               </div>
               <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="color:var(--text-tertiary); font-weight:700;">Media Streams</span>
@@ -10432,6 +11341,10 @@
         syncEpisodesFromDOM();
         const title = document.getElementById('up-title').value || 'Untitled';
         const type = document.getElementById('up-type').value || 'anime';
+        const isUnlistedReview = Boolean(document.getElementById('up-unlisted')?.checked);
+        const visibilityHtml = isUnlistedReview
+          ? '<span style="color:#FBBF24; font-weight:800;"><i class="fa-solid fa-eye-slash"></i> Unlisted (Hidden in Client APK)</span>'
+          : '<span style="color:#34D399; font-weight:800;"><i class="fa-solid fa-eye"></i> Public (Visible in Client APK)</span>';
 
         let totalEps = 0;
         window.seasonsData.forEach(s => totalEps += (s.episodes || []).length);
@@ -10447,6 +11360,10 @@
               <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:10px;">
                 <span style="color:var(--text-tertiary); font-weight:700;">Format Type</span>
                 <span style="color:var(--accent-green); font-weight:800; font-size:12px; background:rgba(16,185,129,0.1); padding:4px 10px; border-radius:6px; text-transform:uppercase;">${type}</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:10px;">
+                <span style="color:var(--text-tertiary); font-weight:700;">Client App Visibility</span>
+                <span>${visibilityHtml}</span>
               </div>
               <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="color:var(--text-tertiary); font-weight:700;">Library Structure</span>
@@ -10604,18 +11521,27 @@
             // Strictly filter movie downloadQualities to match configured quality boxes
             // Box 1 = Server 1 (Primary), Box 2 = Server 2 (Streamtape -> tertiary*), Box 3 = Server 3 (Filemoon/Byse -> secondary*)
             if (Object.keys(s1QualityMap).length > 0) {
-              window.extractedMovieQualities = Object.keys(s1QualityMap);
+              const distinctS1Urls = new Set(Object.values(s1QualityMap).filter(Boolean)).size;
+              if (distinctS1Urls > 1 || !Array.isArray(window.extractedMovieQualities) || window.extractedMovieQualities.length === 0) {
+                window.extractedMovieQualities = Object.keys(s1QualityMap);
+              }
               window.extractedMovieQualityLinks = s1QualityMap;
-              if (Array.isArray(window.extractedMovieDownloadQualities)) {
+              if (distinctS1Urls > 1 && Array.isArray(window.extractedMovieDownloadQualities)) {
                 window.extractedMovieDownloadQualities = window.extractedMovieDownloadQualities.filter(q => q && s1QualityMap[q.id]);
               }
             }
             if (Object.keys(s2QualityMap).length > 0 && Array.isArray(window.extractedMovieTertiaryDownloadQualities)) {
-              window.extractedMovieTertiaryDownloadQualities = window.extractedMovieTertiaryDownloadQualities.filter(q => q && s2QualityMap[q.id]);
+              const distinctS2Urls = new Set(Object.values(s2QualityMap).filter(Boolean)).size;
+              if (distinctS2Urls > 1) {
+                window.extractedMovieTertiaryDownloadQualities = window.extractedMovieTertiaryDownloadQualities.filter(q => q && s2QualityMap[q.id]);
+              }
             }
             const s3QualityMap = typeof window.collectMovieServerQualityLinks === 'function' ? window.collectMovieServerQualityLinks(3) : {};
             if (Object.keys(s3QualityMap).length > 0 && Array.isArray(window.extractedMovieSecondaryDownloadQualities)) {
-              window.extractedMovieSecondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities.filter(q => q && s3QualityMap[q.id]);
+              const distinctS3Urls = new Set(Object.values(s3QualityMap).filter(Boolean)).size;
+              if (distinctS3Urls > 1) {
+                window.extractedMovieSecondaryDownloadQualities = window.extractedMovieSecondaryDownloadQualities.filter(q => q && s3QualityMap[q.id]);
+              }
             }
 
             const hlsUrl = document.getElementById('movie-hls-url')?.value.trim() || s1QualityMap['1080p'] || s1QualityMap['720p'] || s1QualityMap['480p'] || s1QualityMap['360p'] || '';
@@ -10639,6 +11565,16 @@
                 firstVideoUrl = '';
                 mainQualityLinks = {};
                 mainVideoSources = {};
+              }
+              if (Array.isArray(window.extractedMovieDownloadQualities) && window.extractedMovieDownloadQualities.length > 0) {
+                partObj.downloadQualities = window.extractedMovieDownloadQualities;
+              }
+              const mLangs = (window.extractedMovieVerifiedDownloadLanguages && window.extractedMovieVerifiedDownloadLanguages.length > 0)
+                ? window.extractedMovieVerifiedDownloadLanguages
+                : window.extractedMovieAudioTracks;
+              if (Array.isArray(mLangs) && mLangs.length > 0) {
+                partObj.verifiedDownloadLanguages = mLangs;
+                partObj.downloadAudioTracks = mLangs;
               }
               if (streamtapeBox2Url) {
                 // Box 2 (Streamtape) -> canonical Firestore tertiary* schema
@@ -10861,19 +11797,46 @@
           ? window.activeLanguages.filter(l => l && l.toLowerCase() !== 'default')
           : [];
 
+        const movieVerifiedDurStr = isMovieUpload ? (document.getElementById('movie-verified-duration')?.value.trim() || '') : '';
+        const movieNumericDur = isMovieUpload
+          ? ((window.movieTotalDuration && Number(window.movieTotalDuration) > 0)
+            ? Number(window.movieTotalDuration)
+            : (movieVerifiedDurStr && typeof window.parseDurationStringToSeconds === 'function' ? window.parseDurationStringToSeconds(movieVerifiedDurStr, true) : 0))
+          : 0;
+
+        const isUnlistedPublish = Boolean(document.getElementById('up-unlisted')?.checked);
+
+        const compactSeasons = !isMovieUpload && Array.isArray(activeSeasons)
+          ? activeSeasons.map(s => ({
+              ...s,
+              episodes: (s.episodes || []).map(ep => {
+                const clone = { ...ep };
+                delete clone._lastVerifyError;
+                // Avoid bloating 4+ seasons in Firestore by stripping duplicated per-language videoSources maps when videoUrl/qualityLinks already store the stream
+                if ((clone.isAnimeSalt || clone.isSmartHls) && clone.videoUrl && clone.videoSources && typeof clone.videoSources === 'object') {
+                  delete clone.videoSources;
+                }
+                return clone;
+              })
+            }))
+          : activeSeasons;
+
         const rawDoc = {
           id: contentId,
           title,
           type,
           uploadMode: isMovieUpload ? 'movie' : 'series',
-          verifiedDuration: isMovieUpload ? (document.getElementById('movie-verified-duration')?.value.trim() || undefined) : undefined,
+          isUnlisted: isUnlistedPublish,
+          visibility: isUnlistedPublish ? 'unlisted' : 'public',
+          verifiedDuration: movieVerifiedDurStr || undefined,
+          duration: movieNumericDur > 0 ? movieNumericDur : undefined,
           isSmartHls: !!window.isSmartHlsMode || !!window.isAnimeSaltMode,
           isAnimeSalt: !!window.isAnimeSaltMode,
           rating,
           year,
           country,
-          seasons: activeSeasons.length || seasons,
-          episodes: activeEpisodesList.length,
+          seasons: isMovieUpload ? 0 : (compactSeasons.length || seasons),
+          episodes: isMovieUpload ? 0 : activeEpisodesList.length,
           genres: genreStr.split(',').map(g => g.trim()).filter(Boolean),
           description: desc,
           posterUrl,
@@ -10888,7 +11851,7 @@
           videoLinks: (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl || p.tertiaryVideoUrl || p.tertiaryServerUrl))).length > 0
             ? (movieParts || []).filter(p => p && (typeof p === 'string' ? p.trim().length > 0 : Boolean((p.videoSources && Object.keys(p.videoSources).length > 0) || (p.qualityLinks && Object.keys(p.qualityLinks).length > 0) || p.videoUrl || p.secondaryVideoUrl || p.secondaryServerUrl || p.secondaryUrl || p.tertiaryVideoUrl || p.tertiaryServerUrl)))
             : (firstVideoUrl ? [firstVideoUrl] : ((document.getElementById('movie-secondary-hls-url')?.value.trim()) ? [{ tertiaryVideoUrl: window.sanitizeAdminStreamUrl(document.getElementById('movie-secondary-hls-url')?.value) }] : ((document.getElementById('movie-tertiary-hls-url')?.value.trim()) ? [{ secondaryVideoUrl: window.sanitizeAdminStreamUrl(document.getElementById('movie-tertiary-hls-url')?.value) }] : []))),
-          seasonsData: activeSeasons,
+          seasonsData: compactSeasons,
           episodesList: lightweightEpisodes,
           trending: selectedRows.length > 0,
           createdAt: new Date().toISOString()
@@ -10900,21 +11863,31 @@
 
         if (isMovieUpload) {
           if (window.isAnimeSaltMode) {
-            const animeSaltMovieUrl = window.sanitizeAdminStreamUrl(document.getElementById('movie-animesalt-url')?.value || '');
+            const rawAnimeSaltMovieInput = window.sanitizeAdminStreamUrl(document.getElementById('movie-animesalt-url')?.value || '');
+            const animeSaltMovieUrl = (rawAnimeSaltMovieInput && typeof window.resolveAnimeSaltUrl === 'function')
+              ? window.resolveAnimeSaltUrl(rawAnimeSaltMovieInput)
+              : rawAnimeSaltMovieInput;
             if (animeSaltMovieUrl) {
               rawDoc.videoUrl = animeSaltMovieUrl;
               rawDoc.isAnimeSalt = true;
               rawDoc.isSmartHls = true;
-              rawDoc.qualityLinks = window.extractedMovieQualityLinks && Object.keys(window.extractedMovieQualityLinks).length > 0
-                ? window.extractedMovieQualityLinks
-                : { '1080p': animeSaltMovieUrl, '720p': animeSaltMovieUrl, '480p': animeSaltMovieUrl, '360p': animeSaltMovieUrl, '240p': animeSaltMovieUrl };
-              rawDoc.audioTracks = window.extractedMovieAudioTracks && window.extractedMovieAudioTracks.length > 0
-                ? window.extractedMovieAudioTracks
-                : ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
-              rawDoc.videoSources = {};
-              rawDoc.audioTracks.forEach(tr => {
-                rawDoc.videoSources[tr] = { ...rawDoc.qualityLinks };
-              });
+              if (window.extractedMovieQualityLinks && Object.keys(window.extractedMovieQualityLinks).length > 0) {
+                const qMapPermanent = {};
+                Object.keys(window.extractedMovieQualityLinks).forEach(q => {
+                  qMapPermanent[q] = animeSaltMovieUrl;
+                });
+                rawDoc.qualityLinks = qMapPermanent;
+              } else {
+                rawDoc.qualityLinks = { '1080p': animeSaltMovieUrl };
+              }
+              const verifiedMovieLangs = (window.extractedMovieVerifiedDownloadLanguages && window.extractedMovieVerifiedDownloadLanguages.length > 0)
+                ? window.extractedMovieVerifiedDownloadLanguages
+                : (window.extractedMovieAudioTracks && window.extractedMovieAudioTracks.length > 0 ? window.extractedMovieAudioTracks : []);
+              if (verifiedMovieLangs.length > 0) {
+                rawDoc.verifiedDownloadLanguages = verifiedMovieLangs;
+                rawDoc.downloadAudioTracks = verifiedMovieLangs;
+                rawDoc.audioTracks = verifiedMovieLangs;
+              }
               rawDoc.videoLinks = [rawDoc.videoUrl];
             }
           }
@@ -10961,10 +11934,13 @@
           if (window.extractedMovieDownloadQualities && window.extractedMovieDownloadQualities.length > 0) {
             rawDoc.downloadQualities = window.extractedMovieDownloadQualities;
           }
-          if (window.extractedMovieAudioTracks && window.extractedMovieAudioTracks.length > 0) {
-            rawDoc.audioTracks = window.extractedMovieAudioTracks;
-            rawDoc.availableLanguages = window.extractedMovieAudioTracks;
-            rawDoc.languages = window.extractedMovieAudioTracks;
+          const movieVerifiedLangs = (window.extractedMovieVerifiedDownloadLanguages && window.extractedMovieVerifiedDownloadLanguages.length > 0)
+            ? window.extractedMovieVerifiedDownloadLanguages
+            : (window.extractedMovieAudioTracks && window.extractedMovieAudioTracks.length > 0 ? window.extractedMovieAudioTracks : []);
+          if (movieVerifiedLangs.length > 0) {
+            rawDoc.verifiedDownloadLanguages = movieVerifiedLangs;
+            rawDoc.downloadAudioTracks = movieVerifiedLangs;
+            rawDoc.audioTracks = movieVerifiedLangs;
           }
           if (window.extractedMovieSecondaryAudioTracks && window.extractedMovieSecondaryAudioTracks.length > 0) {
             rawDoc.secondaryAudioTracks = window.extractedMovieSecondaryAudioTracks;
@@ -11008,8 +11984,15 @@
           if (ep0?.tertiaryAudioTracks && ep0.tertiaryAudioTracks.length > 0) {
             rawDoc.tertiaryAudioTracks = ep0.tertiaryAudioTracks;
           }
-          if (ep0?.audioTracks && ep0.audioTracks.length > 0) {
-            rawDoc.audioTracks = ep0.audioTracks;
+          const ep0VerifiedLangs = (ep0?.verifiedDownloadLanguages && ep0.verifiedDownloadLanguages.length > 0)
+            ? ep0.verifiedDownloadLanguages
+            : ((ep0?.downloadAudioTracks && ep0.downloadAudioTracks.length > 0)
+              ? ep0.downloadAudioTracks
+              : (ep0?.audioTracks && ep0.audioTracks.length > 0 ? ep0.audioTracks : []));
+          if (ep0VerifiedLangs.length > 0) {
+            rawDoc.verifiedDownloadLanguages = ep0VerifiedLangs;
+            rawDoc.downloadAudioTracks = ep0VerifiedLangs;
+            rawDoc.audioTracks = ep0VerifiedLangs;
           }
           if (ep0?.qualityLinks && Object.keys(ep0.qualityLinks).length > 0) {
             rawDoc.qualityLinks = ep0.qualityLinks;
@@ -11030,13 +12013,13 @@
           console.warn(`[MaxPlay Publish] Document size ${(docBytes / 1024).toFixed(1)} KB exceeds 650 KB threshold. Partitioning seasonsData...`);
           await setDoc(doc(db, 'content_seasons', contentId), {
             contentId: contentId,
-            seasonsData: activeSeasons,
+            seasonsData: compactSeasons,
             updatedAt: new Date().toISOString()
           }, { merge: true });
 
           contentDoc.hasExternalSeasons = true;
           // Keep a lightweight preview in main doc
-          contentDoc.seasonsData = activeSeasons.map(s => ({
+          contentDoc.seasonsData = compactSeasons.map(s => ({
             seasonNumber: s.seasonNumber,
             seasonTitle: s.seasonTitle,
             episodes: (s.episodes || []).slice(0, 3).map(ep => ({
@@ -11073,7 +12056,9 @@
         }
 
         await setDoc(doc(db, 'content', contentId), contentDoc, { merge: true });
-        showToast('Successfully published content live to Firestore!');
+        const existingPubErr = document.getElementById('publish-error-banner');
+        if (existingPubErr) existingPubErr.remove();
+        showToast(isUnlistedPublish ? 'Published as UNLISTED (saved in Admin, hidden from Client APK)!' : 'Successfully published content live to Firestore!');
         if (typeof window.resetUploadForm === 'function') {
           window.resetUploadForm();
         }
@@ -11083,7 +12068,19 @@
         switchTab('content');
       } catch (e) {
         console.error('Error publishing media:', e);
-        showToast('Error saving to Firestore: ' + (e ? e.message : 'Unknown error'));
+        const errMsg = (e && e.message) ? e.message : 'Unknown Firestore error';
+        const step3 = document.getElementById('upload-step-3');
+        if (step3 && typeof window.renderAdminVerifyErrorHtml === 'function') {
+          let errBox = document.getElementById('publish-error-banner');
+          if (!errBox) {
+            errBox = document.createElement('div');
+            errBox.id = 'publish-error-banner';
+            errBox.style.marginBottom = '14px';
+            step3.insertBefore(errBox, step3.firstChild);
+          }
+          errBox.innerHTML = window.renderAdminVerifyErrorHtml('Publish to Firestore Failed', errMsg, 'publishMedia()');
+        }
+        showToast('Error saving to Firestore: ' + errMsg, 'error');
       } finally {
         if (btn) {
           btn.disabled = false;
@@ -11585,7 +12582,18 @@
           ];
         }
         renderCategories();
-      } catch(e) { console.error('Categories load err:', e); }
+      } catch(e) {
+        console.error('Categories load err:', e);
+        if (!window.categoriesData || window.categoriesData.length === 0) {
+          window.categoriesData = [
+            { id: 'cat-all', name: 'All', image: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=300', order: 1 },
+            { id: 'cat-anime', name: 'Anime', image: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=300', order: 2 },
+            { id: 'cat-movies', name: 'Movies', image: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=300', order: 3 },
+            { id: 'cat-series', name: 'Web Series', image: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=300', order: 4 }
+          ];
+        }
+        renderCategories();
+      }
     };
 
     window.syncCategoriesFromDOM = function() {
@@ -11693,7 +12701,18 @@
         }
         renderHomeRows();
         renderHomeRowsCheckboxesInUpload();
-      } catch(e) { console.error('Home rows load err:', e); }
+      } catch(e) {
+        console.error('Home rows load err:', e);
+        if (!window.homeRowsData || window.homeRowsData.length === 0) {
+          window.homeRowsData = [
+            { id: 'row-trending', title: 'Trending Now', order: 1 },
+            { id: 'row-cinema', title: 'Cinema', order: 2 },
+            { id: 'row-foryou', title: 'For You', order: 3 }
+          ];
+        }
+        renderHomeRows();
+        renderHomeRowsCheckboxesInUpload();
+      }
     };
 
     window.renderHomeRows = function() {
@@ -12414,7 +13433,26 @@
         }
       } catch(e) {
         console.error('Error loading users:', e);
-        if (tbody) {
+        if (!window.usersData || window.usersData.length === 0) {
+          window.usersData = [
+            {
+              id: 'admin-root',
+              uid: 'admin-root',
+              displayName: 'Root Administrator',
+              email: 'admin@maxplay.app',
+              photoURL: '',
+              role: 'admin',
+              status: 'active',
+              gender: 'Other',
+              age: 25,
+              bio: 'System Administrator',
+              isPremium: true,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
+          ];
+          window.renderUsersTable();
+        } else if (tbody) {
           tbody.innerHTML = `
             <tr>
               <td colspan="5" style="text-align:center; padding:30px; color:var(--text-tertiary);">
@@ -14148,9 +15186,27 @@
       }
       try {
         showToast('Validating TMDB API key with TMDB servers...', 'info');
-        const res = await fetch(`https://api.themoviedb.org/3/authentication?api_key=${key}`);
-        const data = await res.json();
-        if (res.ok && data.success) {
+        let isValid = false;
+
+        // 1. Try unblocked local proxy
+        try {
+          const pRes = await fetch(`/api/tmdb-proxy?endpoint=authentication&api_key=${encodeURIComponent(key)}`);
+          if (pRes.ok) {
+            const pData = await pRes.json();
+            if (pData.success) isValid = true;
+          }
+        } catch (e) {}
+
+        // 2. Direct fallback
+        if (!isValid) {
+          try {
+            const res = await fetch(`https://api.themoviedb.org/3/authentication?api_key=${key}`);
+            const data = await res.json();
+            if (res.ok && data.success) isValid = true;
+          } catch (e) {}
+        }
+
+        if (isValid) {
           localStorage.setItem('maxplay_tmdb_api_key', key);
           await setDoc(doc(db, 'settings', 'general'), {
             tmdbApiKey: key,
@@ -14160,8 +15216,19 @@
           showToast('✅ TMDB API Key verified and saved successfully!');
         } else {
           // If auth endpoint fails, try search endpoint check
-          const searchRes = await fetch(`https://api.themoviedb.org/3/search/multi?api_key=${key}&query=Inception&page=1`);
-          if (searchRes.ok) {
+          let searchOk = false;
+          try {
+            const sRes = await fetch(`/api/tmdb-proxy?endpoint=search/multi&api_key=${encodeURIComponent(key)}&query=Inception&page=1`);
+            if (sRes.ok) searchOk = true;
+          } catch (e) {}
+          if (!searchOk) {
+            try {
+              const searchRes = await fetch(`https://api.themoviedb.org/3/search/multi?api_key=${key}&query=Inception&page=1`);
+              if (searchRes.ok) searchOk = true;
+            } catch (e) {}
+          }
+
+          if (searchOk) {
             localStorage.setItem('maxplay_tmdb_api_key', key);
             await setDoc(doc(db, 'settings', 'general'), {
               tmdbApiKey: key,
@@ -22715,6 +23782,10 @@ docs.forEach(docItem => {
         if (localStorage.getItem('maxplay_admin_desktop_mode') === 'true') {
           window.applyAdminDesktopMode(true, false);
         }
+        const domInp = document.getElementById('animesalt-base-domain-input');
+        if (domInp && typeof window.getAnimeSaltBaseDomain === 'function') {
+          domInp.value = window.getAnimeSaltBaseDomain();
+        }
       } catch (_) {}
     });
 
@@ -23030,9 +24101,32 @@ docs.forEach(docItem => {
 
       try {
         const endpoint = mediaType === 'movie' ? 'search/movie' : (mediaType === 'tv' ? 'search/tv' : 'search/multi');
-        const url = `https://api.themoviedb.org/3/${endpoint}?api_key=${encodeURIComponent(apiKey)}&query=${encodeURIComponent(queryStr)}&include_adult=false&language=en-US&page=1`;
-        const res = await fetch(url);
-        const data = await res.json();
+        let data = null;
+
+        // 1. Primary: Unblocked Local Server TMDB Proxy (bypasses Indian ISP DNS drops & CORS)
+        try {
+          const proxyUrl = `/api/tmdb-proxy?endpoint=${encodeURIComponent(endpoint)}&query=${encodeURIComponent(queryStr)}&api_key=${encodeURIComponent(apiKey)}&include_adult=false&language=en-US&page=1`;
+          const proxyRes = await fetch(proxyUrl);
+          if (proxyRes.ok) {
+            data = await proxyRes.json();
+          }
+        } catch (pErr) {
+          console.warn('Local TMDB proxy attempt warning:', pErr);
+        }
+
+        // 2. Direct fallback (for cloud / standalone environments)
+        if (!data || !Array.isArray(data.results)) {
+          const directUrl = `https://api.themoviedb.org/3/${endpoint}?api_key=${encodeURIComponent(apiKey)}&query=${encodeURIComponent(queryStr)}&include_adult=false&language=en-US&page=1`;
+          const directRes = await fetch(directUrl);
+          if (directRes.ok) {
+            data = await directRes.json();
+          }
+        }
+
+        if (!data || !Array.isArray(data.results)) {
+          throw new Error('Unable to reach TMDB API');
+        }
+
         const items = (data.results || []).filter(item => item.media_type !== 'person').slice(0, 8);
 
         if (items.length === 0) {
@@ -23090,8 +24184,28 @@ docs.forEach(docItem => {
 
       try {
         const detailEndpoint = mType === 'tv' ? `tv/${item.id}` : `movie/${item.id}`;
-        const detailRes = await fetch(`https://api.themoviedb.org/3/${detailEndpoint}?api_key=${encodeURIComponent(apiKey)}&language=en-US`);
-        const detail = detailRes.ok ? await detailRes.json() : item;
+        let detail = null;
+
+        // 1. Primary: Unblocked Local Server TMDB Proxy
+        try {
+          const proxyUrl = `/api/tmdb-proxy?endpoint=${encodeURIComponent(detailEndpoint)}&api_key=${encodeURIComponent(apiKey)}&language=en-US`;
+          const pRes = await fetch(proxyUrl);
+          if (pRes.ok) {
+            detail = await pRes.json();
+          }
+        } catch (e) {}
+
+        // 2. Direct fallback
+        if (!detail || (!detail.id && !detail.title && !detail.name)) {
+          try {
+            const detailRes = await fetch(`https://api.themoviedb.org/3/${detailEndpoint}?api_key=${encodeURIComponent(apiKey)}&language=en-US`);
+            if (detailRes.ok) {
+              detail = await detailRes.json();
+            }
+          } catch (e) {}
+        }
+
+        if (!detail) detail = item;
 
         const title = detail.title || detail.name || item.title || item.name || '';
         const dateStr = detail.release_date || detail.first_air_date || item.release_date || item.first_air_date || '';

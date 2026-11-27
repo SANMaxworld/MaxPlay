@@ -349,9 +349,21 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                   });
                 })()
               ) : type === 'language' ? (
-                (languages.length > 0 ? languages : [activeLanguage || 'Hindi']).map((lang, index) => {
-                  const meta = getLanguageMeta(lang);
-                  const isSelected = activeLanguage.toLowerCase() === lang.toLowerCase();
+                (() => {
+                  const rawList = languages.length > 0 ? languages : [activeLanguage || 'Hindi'];
+                  const cleanBase = (s: string) => s.replace(/\[.*?\]|\(.*?\)/g, '').trim().toLowerCase();
+                  const seen = new Set<string>();
+                  const uniqueLanguages = rawList.filter(l => {
+                    const b = cleanBase(l);
+                    if (!b || seen.has(b)) return false;
+                    seen.add(b);
+                    return true;
+                  });
+                  return uniqueLanguages.map((lang, index) => {
+                    const meta = getLanguageMeta(lang);
+                    const cleanCur = (activeLanguage || '').replace(/\[.*?\]|\(.*?\)/g, '').trim().toLowerCase();
+                    const cleanTarget = lang.replace(/\[.*?\]|\(.*?\)/g, '').trim().toLowerCase();
+                    const isSelected = cleanCur === cleanTarget || activeLanguage.toLowerCase() === lang.toLowerCase();
 
                   return (
                     <div
@@ -410,6 +422,7 @@ export const SoloLevelingSelectorModal: React.FC<SoloLevelingSelectorModalProps>
                     </div>
                   );
                 })
+              })()
               ) : type === 'quality' ? (
                 (() => {
                   const currentQualities = qualities.filter(q => !q.match(/\[(S1|S2|S3)\]/i));

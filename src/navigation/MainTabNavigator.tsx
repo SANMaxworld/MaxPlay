@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { Home, Download, Music, User, Compass } from 'lucide-react';
 import { TabType } from '../types';
+export type { TabType };
 import { NativeBridgeService } from '../services/nativeBridgeService';
 
 interface MainTabNavigatorProps {

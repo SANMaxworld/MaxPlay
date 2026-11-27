@@ -35,7 +35,7 @@ export const ANIMESALT_BRAND_NEW_CARD: ContentItem = {
   country: 'Japan',
   genres: ['Anime', 'Action', 'Dark Fantasy', 'Supernatural'],
   mature: false,
-  duration: 5400,
+  duration: 9295,
   seasons: 1,
   episodes: 1,
   uploader: { name: '⚡ AnimeSalt Engine', verified: true },
@@ -53,6 +53,13 @@ export const ANIMESALT_BRAND_NEW_CARD: ContentItem = {
     '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
     '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
   },
+  downloadQualities: [
+    { id: '1080p', label: '1080p Full HD', sizeMb: 4539, bandwidth: 4096000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+    { id: '720p', label: '720p HD', sizeMb: 2269, bandwidth: 2048000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+    { id: '480p', label: '480p Standard', sizeMb: 831, bandwidth: 750000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+    { id: '360p', label: '360p Low', sizeMb: 306, bandwidth: 276000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+    { id: '240p', label: '240p Mobile', sizeMb: 166, bandwidth: 150000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' }
+  ],
   availableLanguages: ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'],
   languages: ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'],
   audioTracks: ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'],
@@ -102,7 +109,7 @@ export const ANIMESALT_BRAND_NEW_CARD: ContentItem = {
           id: 'ep-infinity-castle-1',
           episodeNumber: 1,
           title: 'The Demon Slayer Corps Assemble: Infinity Castle',
-          duration: 5400,
+          duration: 9295,
           thumbnailUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=400&auto=format&fit=crop&q=80',
           videoUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
           secondaryServerUrl: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
@@ -115,7 +122,14 @@ export const ANIMESALT_BRAND_NEW_CARD: ContentItem = {
             '480p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
             '360p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/',
             '240p': 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/'
-          }
+          },
+          downloadQualities: [
+            { id: '1080p', label: '1080p Full HD', sizeMb: 4539, bandwidth: 4096000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+            { id: '720p', label: '720p HD', sizeMb: 2269, bandwidth: 2048000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+            { id: '480p', label: '480p Standard', sizeMb: 831, bandwidth: 750000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+            { id: '360p', label: '360p Low', sizeMb: 306, bandwidth: 276000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' },
+            { id: '240p', label: '240p Mobile', sizeMb: 166, bandwidth: 150000, url: 'https://animesalt.cx/movies/demon-slayer-kimetsu-no-yaiba-infinity-castle/' }
+          ]
         }
       ]
     }
@@ -399,6 +413,13 @@ export const seedInitialContentIfEmpty = async () => {
   console.log('Automatic seeding disabled. Using real Firestore data only.');
 };
 
+export const isContentUnlisted = (item: any): boolean => {
+  if (!item || typeof item !== 'object') return false;
+  if (item.isUnlisted === true) return true;
+  const vis = String(item.visibility || item.status || '').trim().toLowerCase();
+  return vis === 'unlisted';
+};
+
 // Listen to all content in real-time
 export const subscribeToContent = (callback: (items: ContentItem[]) => void) => {
   const q = query(collection(db, CONTENT_COLLECTION));
@@ -409,7 +430,12 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
     }
     const list: ContentItem[] = snapshot.docs.map(docSnap => {
       const data = docSnap.data();
+      const computedEpisodesList = (data.episodesList && data.episodesList.length > 0)
+        ? data.episodesList
+        : (data.seasonsData && data.seasonsData.length > 0 ? data.seasonsData.flatMap((s: any) => s.episodes || []) : null);
+      const isMovieDoc = data.type === 'movie' || data.uploadMode === 'movie';
       return {
+        ...(data as any),
         id: docSnap.id,
         title: data.title || '',
         type: data.type || 'anime',
@@ -421,14 +447,14 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
         country: data.country || 'Japan',
         genres: data.genres || ['Action'],
         mature: data.mature || false,
-        duration: data.duration || 1400,
-        seasons: data.seasons || 1,
-        episodes: data.episodes || 12,
+        duration: typeof data.duration === 'number' && data.duration > 0 ? data.duration : 1400,
+        seasons: typeof data.seasons === 'number' ? data.seasons : (Array.isArray(data.seasonsData) && data.seasonsData.length > 0 ? data.seasonsData.length : (isMovieDoc ? 0 : 1)),
+        episodes: typeof data.episodes === 'number'
+          ? data.episodes
+          : (Array.isArray(computedEpisodesList) && computedEpisodesList.length > 0 ? computedEpisodesList.length : (isMovieDoc ? 0 : 12)),
         hasExternalSeasons: data.hasExternalSeasons || false,
         seasonsData: data.seasonsData || null,
-        episodesList: (data.episodesList && data.episodesList.length > 0)
-          ? data.episodesList
-          : (data.seasonsData && data.seasonsData.length > 0 ? data.seasonsData.flatMap((s: any) => s.episodes || []) : null),
+        episodesList: computedEpisodesList,
         videoUrl: data.videoUrl || null,
         secondaryVideoUrl: data.secondaryVideoUrl || data.secondaryServerUrl || data.secondaryUrl || undefined,
         secondaryServerUrl: data.secondaryServerUrl || data.secondaryVideoUrl || data.secondaryUrl || undefined,
@@ -443,6 +469,8 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
         availableLanguages: data.availableLanguages || (Array.isArray(data.languages) ? data.languages : undefined),
         audioLanguages: data.audioLanguages || undefined,
         audioTracks: data.audioTracks || undefined,
+        verifiedDownloadLanguages: data.verifiedDownloadLanguages || data.downloadAudioTracks || undefined,
+        downloadAudioTracks: data.downloadAudioTracks || data.verifiedDownloadLanguages || undefined,
         videoSources: data.videoSources || undefined,
         qualityLinks: data.qualityLinks || undefined,
         secondaryQualityLinks: data.secondaryQualityLinks || data.secondaryServerQualityLinks || undefined,
@@ -471,10 +499,11 @@ export const subscribeToContent = (callback: (items: ContentItem[]) => void) => 
       } as ContentItem;
 
     });
-    if (!list.some(c => c.id === ANIMESALT_BRAND_NEW_CARD.id)) {
-      list.unshift(ANIMESALT_BRAND_NEW_CARD);
+    const publicList = list.filter(c => !isContentUnlisted(c));
+    if (!publicList.some(c => c.id === ANIMESALT_BRAND_NEW_CARD.id)) {
+      publicList.unshift(ANIMESALT_BRAND_NEW_CARD);
     }
-    callback(list);
+    callback(publicList);
   }, (err) => {
     console.warn('Firestore subscription warning:', err);
   });
@@ -503,6 +532,9 @@ export const fetchContentById = async (id: string): Promise<ContentItem | null> 
     const docSnap = await getDoc(doc(db, CONTENT_COLLECTION, id));
     if (docSnap.exists()) {
       const data = docSnap.data();
+      if (isContentUnlisted(data)) {
+        return null;
+      }
       let seasonsData = data.seasonsData || null;
       if (data.hasExternalSeasons) {
         const extSeasons = await fetchExternalSeasons(id);

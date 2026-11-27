@@ -84,6 +84,62 @@ class InbuiltStreamScraper(
 
         // In-memory AnimeSalt playback URL cache (20 min TTL)
         private val animesaltPlaybackCache = ConcurrentHashMap<String, Pair<String, Long>>()
+        private val animesaltSeriesSeasonCache = ConcurrentHashMap<String, Map<Int, Pair<Int, Int>>>()
+
+        private fun getAnimeSaltSeriesSeasonMapInKotlin(seriesSlug: String): Map<Int, Pair<Int, Int>>? {
+            animesaltSeriesSeasonCache[seriesSlug]?.let { return it }
+            return try {
+                val req = Request.Builder()
+                    .url("https://animesalt.cx/series/$seriesSlug/")
+                    .header("User-Agent", DEFAULT_USER_AGENT)
+                    .header("Referer", "https://animesalt.cx/")
+                    .build()
+                okHttpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val html = resp.body?.string() ?: ""
+                        val regex = Pattern.compile("Season\\s+(\\d+)[^<]*?(\\d+)\\s*-\\s*(\\d+)", Pattern.CASE_INSENSITIVE)
+                        val matcher = regex.matcher(html)
+                        val map = mutableMapOf<Int, Pair<Int, Int>>()
+                        while (matcher.find()) {
+                            val s = matcher.group(1).toIntOrNull() ?: continue
+                            val start = matcher.group(2).toIntOrNull() ?: continue
+                            val end = matcher.group(3).toIntOrNull() ?: continue
+                            map[s] = Pair(start, end)
+                        }
+                        if (map.isNotEmpty()) {
+                            animesaltSeriesSeasonCache[seriesSlug] = map
+                            map
+                        } else null
+                    } else null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun decryptMegaplayEncInKotlin(b64url: String): String {
+            return try {
+                var b64 = b64url.replace('-', '+').replace('_', '/')
+                while (b64.length % 4 != 0) b64 += "="
+                val ciphertext = Base64.decode(b64, Base64.DEFAULT)
+                val keyBytes = ByteArray(32)
+                val ivBytes = ByteArray(16)
+                val rawKey = "i?LMTAx0Q6,:}50U".toByteArray(Charsets.UTF_8)
+                val rawIv = "W0;27ToaUpl_P%'c".toByteArray(Charsets.UTF_8)
+                System.arraycopy(rawKey, 0, keyBytes, 0, minOf(32, rawKey.size))
+                System.arraycopy(rawIv, 0, ivBytes, 0, minOf(16, rawIv.size))
+                val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+                val keySpec = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+                val ivSpec = javax.crypto.spec.IvParameterSpec(ivBytes)
+                cipher.init(javax.crypto.Cipher.DECRYPT_MODE, keySpec, ivSpec)
+                val decryptedBytes = cipher.doFinal(ciphertext)
+                val jsonStr = String(decryptedBytes, Charsets.UTF_8)
+                val jsonObj = JSONObject(jsonStr)
+                jsonObj.optString("file", "")
+            } catch (_: Exception) {
+                ""
+            }
+        }
 
         // Persisted VOE active mirror host (skips voe.sx JS redirect Hop 0 -> saves 350-650ms per VOE play!)
         @Volatile
@@ -169,6 +225,15 @@ class InbuiltStreamScraper(
             byseAttestCache.clear()
             bysePlaybackCache.clear()
             voePlaybackCache.clear()
+            animesaltPlaybackCache.clear()
+        }
+
+        fun clearAllPlaybackCachesForNetworkSwitch() {
+            animesaltPlaybackCache.clear()
+            byseAttestCache.clear()
+            bysePlaybackCache.clear()
+            voePlaybackCache.clear()
+            sprintCdnWinnerCache.clear()
         }
 
         /**
@@ -464,7 +529,7 @@ class InbuiltStreamScraper(
             val path = (uri.path ?: "").lowercase()
 
             // Layer 1A: Explicit AnimeSalt & Ravok CDN domain match
-            if (host.contains("animesalt.cx") || host.contains("ravok.buzz") || host.contains("as-cdn")) {
+            if (host.contains("animesalt") || host.contains("ravok.buzz") || host.contains("as-cdn")) {
                 return ProviderType.ANIMESALT
             }
 
@@ -517,7 +582,7 @@ class InbuiltStreamScraper(
                     lowerHtml.contains("/bkg/") ||
                     lowerHtml.contains("jwplayer")
 
-            if (lowerHtml.contains("animesalt.cx") || lowerHtml.contains("ravok.buzz") || lowerHtml.contains("as-cdn")) {
+            if (lowerHtml.contains("animesalt") || lowerHtml.contains("ravok.buzz") || lowerHtml.contains("as-cdn")) {
                 return ProviderType.ANIMESALT
             }
 
@@ -657,20 +722,104 @@ class InbuiltStreamScraper(
             } catch (_: Exception) {}
         }
 
-        // 2. Fast HTTP probe for direct master.m3u8 or ravok.buzz embed in HTML
+        // 2. Fast HTTP probe for direct master.m3u8 or ravok.buzz embed in HTML + player.php languages
         var embedUrlToSniff = normalizedUrl
+        val discoveredHtmlLanguages = mutableListOf<String>()
+        var lastErrorDetail = ""
+        var html = ""
         try {
-            val req = Request.Builder()
-                .url(normalizedUrl)
-                .header("User-Agent", DEFAULT_USER_AGENT)
-                .header("Referer", "https://animesalt.cx/")
-                .header("Origin", "https://animesalt.cx")
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .build()
+            var effectivePageUrl = normalizedUrl
+            val epMatcher = Pattern.compile("/episode/([a-zA-Z0-9_-]+?)-(\\d+)x(\\d+)/?", Pattern.CASE_INSENSITIVE).matcher(normalizedUrl)
+            if (epMatcher.find()) {
+                val slug = epMatcher.group(1)
+                val sNum = epMatcher.group(2).toIntOrNull() ?: 1
+                val eNum = epMatcher.group(3).toIntOrNull() ?: 1
+                val seriesMap = getAnimeSaltSeriesSeasonMapInKotlin(slug)
+                if (seriesMap != null && seriesMap.containsKey(sNum)) {
+                    val pair = seriesMap[sNum]!!
+                    if (eNum < pair.first) {
+                        val cumEp = pair.first + (eNum - 1)
+                        effectivePageUrl = "https://animesalt.cx/episode/$slug-${sNum}x$cumEp/"
+                    }
+                }
+            }
 
-            val resp = okHttpClient.newCall(req).execute()
-            val html = resp.body?.string() ?: ""
-            resp.close()
+            val pageUri = try { android.net.Uri.parse(effectivePageUrl) } catch (_: Exception) { null }
+            val pageScheme = pageUri?.scheme ?: "https"
+            val pageHost = pageUri?.host ?: "animesalt.cx"
+            for (attempt in 0..2) {
+                var stopRetrying = false
+                try {
+                    val req = Request.Builder()
+                        .url(effectivePageUrl)
+                        .header("User-Agent", DEFAULT_USER_AGENT)
+                        .header("Referer", "$pageScheme://$pageHost/")
+                        .header("Origin", "$pageScheme://$pageHost")
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                        .build()
+
+                    okHttpClient.newCall(req).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            html = resp.body?.string() ?: ""
+                            if (html.isNotBlank()) {
+                                lastErrorDetail = ""
+                            }
+                        } else {
+                            lastErrorDetail = "AnimeSalt page HTTP ${resp.code}"
+                            if (resp.code == 404 && effectivePageUrl == normalizedUrl && epMatcher.reset().find()) {
+                                val slug = epMatcher.group(1)
+                                val sNum = epMatcher.group(2).toIntOrNull() ?: 1
+                                val eNum = epMatcher.group(3).toIntOrNull() ?: 1
+                                val seriesMap = getAnimeSaltSeriesSeasonMapInKotlin(slug)
+                                if (seriesMap != null && seriesMap.containsKey(sNum)) {
+                                    val pair = seriesMap[sNum]!!
+                                    if (eNum < pair.first) {
+                                        val cumEp = pair.first + (eNum - 1)
+                                        effectivePageUrl = "https://animesalt.cx/episode/$slug-${sNum}x$cumEp/"
+                                        // continue loop with corrected URL
+                                    }
+                                }
+                            } else if (resp.code != 429 && resp.code < 500) {
+                                stopRetrying = true
+                            }
+                        }
+                    }
+                    if (html.isNotBlank() || stopRetrying) break
+                } catch (e: Exception) {
+                    lastErrorDetail = "AnimeSalt page error: ${e.message ?: "Timeout"}"
+                }
+                if (attempt < 2) {
+                    try { Thread.sleep(450L * (attempt + 1)) } catch (_: Exception) {}
+                }
+            }
+
+            // Parse player.php?data=... base64 JSON blocks for multi-language labels
+            try {
+                val dataPattern = Pattern.compile("player\\.php\\?data=([^\"'&\\s<>]+)", Pattern.CASE_INSENSITIVE)
+                val dm = dataPattern.matcher(html)
+                while (dm.find()) {
+                    val encodedData = dm.group(1) ?: continue
+                    try {
+                        val decodedUrl = URLDecoder.decode(encodedData, "UTF-8")
+                        val rawBytes = Base64.decode(decodedUrl, Base64.DEFAULT)
+                        val rawStr = String(rawBytes, Charsets.UTF_8).trim()
+                        val lastBracket = rawStr.lastIndexOf(']')
+                        val cleanJson = if (lastBracket != -1) rawStr.substring(0, lastBracket + 1) else rawStr
+                        val arr = org.json.JSONArray(cleanJson)
+                        for (idx in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(idx) ?: continue
+                            val lang = obj.optString("language", obj.optString("label", obj.optString("name", ""))).trim()
+                            if (lang.isNotEmpty() && discoveredHtmlLanguages.none { it.equals(lang, ignoreCase = true) }) {
+                                discoveredHtmlLanguages.add(lang)
+                            }
+                            val candLink = obj.optString("link", obj.optString("url", "")).trim()
+                            if (candLink.contains("ravok.buzz", ignoreCase = true) && embedUrlToSniff == normalizedUrl) {
+                                embedUrlToSniff = candLink
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
 
             // Check if master.m3u8 is present directly in HTML
             val m3u8Regex = Pattern.compile("https?://[^\"'\\s<>]+master\\.m3u8[^\"'\\s<>]*", Pattern.CASE_INSENSITIVE)
@@ -678,7 +827,13 @@ class InbuiltStreamScraper(
             if (matcher.find()) {
                 val m3u8 = matcher.group()
                 val ref = "https://ravok.buzz/"
-                val res = buildSuccessResponse(m3u8, ref, "animesalt_http_fast_extract", ProviderType.ANIMESALT)
+                val res = buildSuccessResponse(m3u8, ref, "animesalt_http_fast_extract", ProviderType.ANIMESALT).apply {
+                    if (discoveredHtmlLanguages.isNotEmpty()) {
+                        val langArr = org.json.JSONArray(discoveredHtmlLanguages)
+                        put("htmlAudioTracks", langArr)
+                        put("audioTracks", langArr)
+                    }
+                }
                 animesaltPlaybackCache[normalizedUrl] = Pair(res.toString(), System.currentTimeMillis() + 20 * 60 * 1000L)
                 return res
             }
@@ -691,30 +846,118 @@ class InbuiltStreamScraper(
             }
         } catch (_: Exception) {}
 
-        // 2B. Direct high-speed API probe for Ravok.buzz videoId (returns signed master.m3u8 in < 300ms!)
+        // 2B. Direct high-speed API probe for Ravok.buzz videoId with retry resilience
         try {
             val videoIdMatcher = Pattern.compile("(?:video|embed)/([a-f0-9]+)", Pattern.CASE_INSENSITIVE).matcher(embedUrlToSniff)
             if (videoIdMatcher.find()) {
                 val videoId = videoIdMatcher.group(1)
-                val formReq = Request.Builder()
-                    .url("https://ravok.buzz/player/index.php?data=$videoId&do=getVideo")
-                    .post(okhttp3.RequestBody.create(null, ByteArray(0)))
-                    .header("Referer", "https://ravok.buzz/video/$videoId")
-                    .header("X-Requested-With", "XMLHttpRequest")
-                    .header("User-Agent", DEFAULT_USER_AGENT)
-                    .build()
-                val formResp = okHttpClient.newCall(formReq).execute()
-                val formBody = formResp.body?.string() ?: ""
-                formResp.close()
-                if (formBody.isNotBlank()) {
-                    val json = JSONObject(formBody)
-                    val masterUrl = json.optString("videoSource", json.optString("securedLink", ""))
-                    if (masterUrl.isNotBlank()) {
-                        val ref = "https://ravok.buzz/"
-                        CorsFreeWebViewClient.registerStreamReferer(masterUrl, ref)
-                        val res = buildSuccessResponse(masterUrl, ref, "animesalt_ravok_fast_post", ProviderType.ANIMESALT)
-                        animesaltPlaybackCache[normalizedUrl] = Pair(res.toString(), System.currentTimeMillis() + 20 * 60 * 1000L)
-                        return res
+                for (attempt in 0..2) {
+                    try {
+                        val formReq = Request.Builder()
+                            .url("https://ravok.buzz/player/index.php?data=$videoId&do=getVideo")
+                            .post(okhttp3.RequestBody.create(null, ByteArray(0)))
+                            .header("Referer", "https://ravok.buzz/video/$videoId")
+                            .header("X-Requested-With", "XMLHttpRequest")
+                            .header("User-Agent", DEFAULT_USER_AGENT)
+                            .build()
+                        okHttpClient.newCall(formReq).execute().use { formResp ->
+                            val formBody = formResp.body?.string() ?: ""
+                            if (formResp.isSuccessful && formBody.isNotBlank()) {
+                                val json = JSONObject(formBody)
+                                val masterUrl = json.optString("videoSource", json.optString("securedLink", ""))
+                                if (masterUrl.isNotBlank()) {
+                                    val ref = "https://ravok.buzz/"
+                                    CorsFreeWebViewClient.registerStreamReferer(masterUrl, ref)
+                                    val res = buildSuccessResponse(masterUrl, ref, "animesalt_ravok_fast_post", ProviderType.ANIMESALT).apply {
+                                        if (discoveredHtmlLanguages.isNotEmpty()) {
+                                            val langArr = org.json.JSONArray(discoveredHtmlLanguages)
+                                            put("htmlAudioTracks", langArr)
+                                            put("audioTracks", langArr)
+                                        }
+                                    }
+                                    animesaltPlaybackCache[normalizedUrl] = Pair(res.toString(), System.currentTimeMillis() + 20 * 60 * 1000L)
+                                    return res
+                                }
+                            } else if (!formResp.isSuccessful) {
+                                lastErrorDetail = "Ravok API HTTP ${formResp.code}"
+                            }
+                        }
+                    } catch (e: Exception) {
+                        lastErrorDetail = "Ravok API error: ${e.message ?: "Timeout"}"
+                    }
+                    if (attempt < 2) {
+                        try { Thread.sleep(450L * (attempt + 1)) } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 2C. Direct high-speed API probe for Megaplay.buzz embed (Seasons 17-22)
+        try {
+            val megaplayRegex = Pattern.compile("https?://(?:www\\.)?megaplay\\.buzz/stream/[^\"'\\s<>]+", Pattern.CASE_INSENSITIVE)
+            val megaplayMatcher = megaplayRegex.matcher(html)
+            if (megaplayMatcher.find()) {
+                val megaplayUrl = megaplayMatcher.group().replace("&amp;", "&")
+                embedUrlToSniff = megaplayUrl
+                for (attempt in 0..2) {
+                    try {
+                        val mReq = Request.Builder()
+                            .url(megaplayUrl)
+                            .header("Referer", "https://animesalt.cx/")
+                            .header("User-Agent", DEFAULT_USER_AGENT)
+                            .build()
+                        okHttpClient.newCall(mReq).execute().use { mResp ->
+                            val mBody = mResp.body?.string() ?: ""
+                            val idMatcher = Pattern.compile("id=[\"']megaplay-player[\"'][^>]*data-id=[\"'](\\d+)[\"']", Pattern.CASE_INSENSITIVE).matcher(mBody)
+                            if (idMatcher.find()) {
+                                val dataId = idMatcher.group(1)
+                                val srcReq = Request.Builder()
+                                    .url("https://megaplay.buzz/stream/getSources?id=$dataId&platform=OTHER&st=other")
+                                    .header("Referer", megaplayUrl)
+                                    .header("X-Requested-With", "XMLHttpRequest")
+                                    .header("User-Agent", DEFAULT_USER_AGENT)
+                                    .build()
+                                okHttpClient.newCall(srcReq).execute().use { srcResp ->
+                                    val srcBody = srcResp.body?.string() ?: ""
+                                    if (srcResp.isSuccessful && srcBody.isNotBlank()) {
+                                        val srcJson = JSONObject(srcBody)
+                                        var finalMaster = ""
+                                        val enc = srcJson.optString("enc", "")
+                                        if (enc.isNotBlank()) {
+                                            finalMaster = decryptMegaplayEncInKotlin(enc)
+                                        }
+                                        if (finalMaster.isBlank()) {
+                                            finalMaster = srcJson.optJSONArray("sources")?.optJSONObject(0)?.optString("file", "") ?: ""
+                                        }
+                                        if (finalMaster.isNotBlank()) {
+                                            val ref = "https://megaplay.buzz/"
+                                            CorsFreeWebViewClient.registerStreamReferer(finalMaster, ref)
+                                            val res = buildSuccessResponse(finalMaster, ref, "animesalt_megaplay_fast_extract", ProviderType.ANIMESALT).apply {
+                                                if (discoveredHtmlLanguages.isNotEmpty()) {
+                                                    val langArr = org.json.JSONArray(discoveredHtmlLanguages)
+                                                    put("htmlAudioTracks", langArr)
+                                                    put("audioTracks", langArr)
+                                                } else {
+                                                    val langArr = org.json.JSONArray().apply {
+                                                        put("Japanese")
+                                                        if (html.contains("/dub", ignoreCase = true)) put("English")
+                                                    }
+                                                    put("htmlAudioTracks", langArr)
+                                                    put("audioTracks", langArr)
+                                                }
+                                            }
+                                            animesaltPlaybackCache[normalizedUrl] = Pair(res.toString(), System.currentTimeMillis() + 20 * 60 * 1000L)
+                                            return res
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        lastErrorDetail = "Megaplay API error: ${e.message ?: "Timeout"}"
+                    }
+                    if (attempt < 2) {
+                        try { Thread.sleep(450L * (attempt + 1)) } catch (_: Exception) {}
                     }
                 }
             }
@@ -742,7 +985,7 @@ class InbuiltStreamScraper(
         return JSONObject().apply {
             put("ok", false)
             put("provider", ProviderType.ANIMESALT.name)
-            put("error", "Headless AnimeSalt stream extraction failed or timed out")
+            put("error", if (lastErrorDetail.isNotBlank()) lastErrorDetail else "Headless AnimeSalt stream extraction failed or timed out")
         }
     }
 
@@ -1698,13 +1941,7 @@ class InbuiltStreamScraper(
         } else org.json.JSONArray().apply {
             put("1080p"); put("720p"); put("480p")
         }
-        val defaultAudios = if (isAnimeSalt) org.json.JSONArray().apply {
-            put("Japanese [ORIGINAL]")
-            put("English [DUBBED]")
-            put("Hindi [DUBBED]")
-            put("Telugu [DUBBED]")
-            put("Tamil [DUBBED]")
-        } else org.json.JSONArray()
+        val defaultAudios = org.json.JSONArray()
 
         val qLinks = JSONObject().apply {
             put("1080p", m3u8Url)
@@ -1716,13 +1953,27 @@ class InbuiltStreamScraper(
             }
         }
 
+        val durSec = if (isAnimeSalt) 9295L else 5400L
+        val bandwidths = listOf(
+            Triple("1080p", "1080p Full HD", 4096000L),
+            Triple("720p", "720p HD", 2048000L),
+            Triple("480p", "480p Standard", 750000L),
+            Triple("360p", "360p Low", 276000L),
+            Triple("240p", "240p Mobile", 150000L)
+        )
         val dlQualities = org.json.JSONArray().apply {
-            put(JSONObject().apply { put("id", "1080p"); put("label", "1080p HD"); put("sizeMb", 950); put("url", m3u8Url) })
-            put(JSONObject().apply { put("id", "720p"); put("label", "720p HD"); put("sizeMb", 650); put("url", m3u8Url) })
-            put(JSONObject().apply { put("id", "480p"); put("label", "480p SD"); put("sizeMb", 400); put("url", m3u8Url) })
-            if (isAnimeSalt) {
-                put(JSONObject().apply { put("id", "360p"); put("label", "360p SD"); put("sizeMb", 250); put("url", m3u8Url) })
-                put(JSONObject().apply { put("id", "240p"); put("label", "240p LD"); put("sizeMb", 150); put("url", m3u8Url) })
+            for (item in bandwidths) {
+                val qId = item.first
+                if (!isAnimeSalt && (qId == "360p" || qId == "240p")) continue
+                val bw = item.third
+                val sizeMb = Math.round(bw.toDouble() * durSec / (8.0 * 1024.0 * 1024.0)).toInt()
+                put(JSONObject().apply {
+                    put("id", qId)
+                    put("label", item.second)
+                    put("sizeMb", sizeMb)
+                    put("bandwidth", bw)
+                    put("url", m3u8Url)
+                })
             }
         }
 
@@ -1736,7 +1987,7 @@ class InbuiltStreamScraper(
             put("audioTracks", defaultAudios)
             put("qualityLinks", qLinks)
             put("downloadQualities", dlQualities)
-            put("duration", 9295)
+            put("duration", durSec)
             put("headers", JSONObject().apply {
                 put("Referer", effectiveReferer)
                 put("Origin", origin)
@@ -2441,9 +2692,13 @@ class InbuiltStreamScraper(
 
                             // 0. AnimeSalt / Ravok Master Manifest Interception
                             if ((lower.contains("master.m3u8") || lower.contains("/cdn/hls/") || lower.contains("/hls/")) &&
-                                (lower.contains("ravok.buzz") || lower.contains("as-cdn") || lower.contains("animesalt.cx"))
+                                (lower.contains("ravok.buzz") || lower.contains("as-cdn") || lower.contains("animesalt"))
                             ) {
-                                val reqReferer = "https://animesalt.cx/"
+                                val reqReferer = if (lower.contains("ravok.buzz") || lower.contains("as-cdn")) {
+                                    "https://ravok.buzz/"
+                                } else {
+                                    "https://animesalt.cx/"
+                                }
                                 mainHandler.removeCallbacks(timeoutRunnable)
                                 mainHandler.post {
                                     CorsFreeWebViewClient.registerStreamReferer(reqUrl, reqReferer)
@@ -2454,7 +2709,9 @@ class InbuiltStreamScraper(
 
                             // 1. Direct .m3u8 network request interception across main & child iframes
                             if (lower.contains(".m3u8") && !lower.contains("jwpltx") && !lower.contains("ping.gif")) {
-                                val reqReferer = if (lower.contains("ravok.buzz") || lower.contains("as-cdn") || lower.contains("animesalt")) {
+                                val reqReferer = if (lower.contains("ravok.buzz") || lower.contains("as-cdn")) {
+                                    "https://ravok.buzz/"
+                                } else if (lower.contains("animesalt")) {
                                     "https://animesalt.cx/"
                                 } else {
                                     request.requestHeaders?.get("Referer") ?: currentSniffPageUrl

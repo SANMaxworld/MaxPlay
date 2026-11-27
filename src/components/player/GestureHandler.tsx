@@ -102,6 +102,8 @@ export const GestureHandler: React.FC<GestureHandlerProps> = React.memo(({
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
+    const tEl = e.target as HTMLElement | null;
+    if (tEl && tEl.closest('button, a, input, select, textarea, [role="button"], [data-no-gesture="true"]')) return;
     lastTouchTimeRef.current = Date.now();
     if (e.touches.length > 0) {
       const touch = e.touches[0];
@@ -260,6 +262,8 @@ export const GestureHandler: React.FC<GestureHandlerProps> = React.memo(({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    const tEl = e.target as HTMLElement | null;
+    if (tEl && tEl.closest('button, a, input, select, textarea, [role="button"], [data-no-gesture="true"]')) return;
     if (Date.now() - lastTouchTimeRef.current < 800) return;
     mouseStartPosRef.current = { x: e.clientX, y: e.clientY };
     clearLongPress();

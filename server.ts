@@ -12,6 +12,22 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// Crash guards to ensure persistent server uptime
+process.on("uncaughtException", (err) => {
+  console.error("[Server Crash Guard] Uncaught Exception:", err);
+});
+process.on("unhandledRejection", (reason, promise) => {
+  console.warn("[Server Crash Guard] Unhandled Rejection at:", promise, "reason:", reason);
+});
+process.on("exit", (code) => {
+  console.log("[Server Process Exit Handler] Exit code:", code);
+});
+try {
+  if (process.stdin && typeof process.stdin.resume === "function") {
+    process.stdin.resume();
+  }
+} catch (_) {}
+
 // ============================================================================
 // 🎬 TMDB API KEY CONFIGURATION (Server-Side Only - Secure)
 // ============================================================================
@@ -343,11 +359,18 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     return 0;
   }
 
+  let globalAnimeSaltBaseDomain = "https://animesalt.cx";
+
   // Security: Global SSRF & Private/Metadata Network Guard for all proxy / probe / extract endpoints
   const isBlockedSsrfUrl = (raw: unknown): boolean => {
     if (typeof raw !== "string" || !raw.trim()) return false;
+    let urlStr = raw.trim();
+    if (urlStr.startsWith("/")) {
+      const base = (globalAnimeSaltBaseDomain || "https://animesalt.cx").replace(/\/+$/, "");
+      urlStr = `${base}${urlStr}`;
+    }
     try {
-      const parsed = new URL(raw.trim());
+      const parsed = new URL(urlStr);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return true;
       const h = (parsed.hostname || "").toLowerCase();
       if (!h || h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0.0.0.0") return true;
@@ -1022,8 +1045,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         const u = new URL(m3u8Url);
         const h = u.hostname.toLowerCase();
         isSprintEdge = h.includes('sprintcdn') || h.includes('owphbf') || h.includes('r66nv9ed');
-        if (h.includes('ravok') || h.includes('as-cdn') || h.includes('animesalt')) {
+        if (h.includes('ravok') || h.includes('as-cdn')) {
+          referer = 'https://ravok.buzz/';
+        } else if (h.includes('animesalt')) {
           referer = 'https://animesalt.cx/';
+        } else if (h.includes('megaplay') || h.includes('nexabloom') || h.includes('distantdaydreams') || h.includes('emeralddrift')) {
+          referer = 'https://megaplay.buzz/';
         } else if (!customReferer && !isSprintEdge && !h.includes('filemoon') && !h.includes('byse') && !h.includes('n1mwq')) {
           referer = `${u.origin}/`;
         }
@@ -1033,7 +1060,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         originHeader = new URL(referer).origin;
       } catch {}
 
-      const resp = await resilientFetchSprintCdn(m3u8Url, {
+      let resp = await resilientFetchSprintCdn(m3u8Url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           'Referer': referer,
@@ -1041,6 +1068,18 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           'Accept': '*/*'
         }
       });
+      // Fallback referer retry for AnimeSalt/Ravok CDNs
+      if (!resp.ok && (m3u8Url.includes('ravok') || m3u8Url.includes('as-cdn') || m3u8Url.includes('animesalt'))) {
+        const altRef = referer.includes('ravok') ? 'https://animesalt.cx/' : 'https://ravok.buzz/';
+        resp = await resilientFetchSprintCdn(m3u8Url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': altRef,
+            'Accept': '*/*'
+          }
+        });
+        if (resp.ok) referer = altRef;
+      }
       if (!resp.ok) {
         return {
           qualities: [defaultSingleQ],
@@ -1182,7 +1221,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               'Referer': referer,
               'Accept': '*/*'
             },
-            signal: AbortSignal.timeout(4000)
+            signal: AbortSignal.timeout(7500)
           });
           if (pResp.ok) {
             const subText = await pResp.text();
@@ -1216,6 +1255,43 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         ? Math.max(2, Math.round((128000 * finalDuration) / (8 * 1024 * 1024)))
         : 0;
 
+      const defaultBitrateByQuality: Record<string, number> = {
+        '1440p': 6000000,
+        '1080p': 3600000,
+        '720p': 1800000,
+        '480p': 750000,
+        '360p': 320000,
+        '240p': 160000
+      };
+
+      // Probe remaining variants in parallel when sub-playlist probe is active so all qualities get accurate real MBs quickly
+      const variantProbeResults = new Map<string, { sizeMb: number; bandwidthBps: number }>();
+      if (!skipSubPlaylistProbe && qualities.length > 1) {
+        await Promise.all(
+          qualities.slice(1).map(async (q) => {
+            const subU = qualityLinks[q];
+            if (!subU || subU === m3u8Url) return;
+            try {
+              const subR = await resilientFetchSprintCdn(subU, {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                  'Referer': referer,
+                  'Accept': '*/*'
+                },
+                signal: AbortSignal.timeout(7000)
+              });
+              if (subR.ok) {
+                const subTxt = await subR.text();
+                if (subTxt.includes('#EXTINF:')) {
+                  const m = await measurePlaylistRealDurationAndMb(subU, subTxt, referer, bandwidthsByQuality[q] || 0);
+                  variantProbeResults.set(q, { sizeMb: m.sizeMb, bandwidthBps: m.bandwidthBps });
+                }
+              }
+            } catch {}
+          })
+        );
+      }
+
       for (let idx = 0; idx < qualities.length; idx++) {
         const q = qualities[idx];
         const resolvedSubUrl = qualityLinks[q] || m3u8Url;
@@ -1227,37 +1303,26 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
         let sizeMb = 0;
         let actualBps = bandwidthsByQuality[q] || 0;
+        const probed = variantProbeResults.get(q);
 
         if (idx === 0 && measuredFirstVariantMb > 0) {
           sizeMb = measuredFirstVariantMb + separateAudioMb;
           if (!actualBps) actualBps = measuredFirstVariantBw;
+        } else if (probed && probed.sizeMb > 0) {
+          sizeMb = probed.sizeMb + separateAudioMb;
+          if (probed.bandwidthBps > 0) actualBps = probed.bandwidthBps;
         } else if (actualBps > 50000 && finalDuration > 0) {
           const estBytes = (actualBps * finalDuration) / 8;
           sizeMb = Math.max(1, Math.round(estBytes / (1024 * 1024))) + separateAudioMb;
-        } else if (!skipSubPlaylistProbe && resolvedSubUrl && resolvedSubUrl !== m3u8Url) {
-          try {
-            const subR = await resilientFetchSprintCdn(resolvedSubUrl, {
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Referer': referer,
-                'Accept': '*/*'
-              },
-              signal: AbortSignal.timeout(3500)
-            });
-            if (subR.ok) {
-              const subTxt = await subR.text();
-              if (subTxt.includes('#EXTINF:')) {
-                const m = await measurePlaylistRealDurationAndMb(resolvedSubUrl, subTxt, referer, actualBps);
-                if (m.sizeMb > 0) sizeMb = m.sizeMb + separateAudioMb;
-                if (m.bandwidthBps > 0) actualBps = m.bandwidthBps;
-              }
-            }
-          } catch {}
+        } else if (finalDuration > 0) {
+          const fallbackBps = defaultBitrateByQuality[q.toLowerCase()] || 1500000;
+          if (!actualBps) actualBps = fallbackBps;
+          sizeMb = Math.max(1, Math.round((fallbackBps * finalDuration) / (8 * 1024 * 1024))) + separateAudioMb;
         }
 
         downloadQualities.push({
           id: q,
-          label: `${q} ${q.includes('1080') ? 'Full HD' : q.includes('720') ? 'HD' : 'Standard'}`,
+          label: `${q} ${q.includes('1080') ? 'Full HD' : q.includes('720') ? 'HD' : q.includes('480') ? 'Standard' : 'Data Saver'}`,
           sizeMb,
           url: assignedUrl,
           resolvedM3u8Url: resolvedSubUrl,
@@ -2474,12 +2539,188 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     );
   }
 
-  async function extractAnimeSaltStream(sourceUrl: string): Promise<{
+  async function fetchUpstreamWithRetry(
+    url: string,
+    init: RequestInit = {},
+    opts: { timeoutMs?: number; maxRetries?: number; label?: string } = {}
+  ): Promise<Response> {
+    const timeoutMs = opts.timeoutMs ?? 15000;
+    const maxRetries = opts.maxRetries ?? 2;
+    const label = opts.label || "Upstream";
+    let lastErr: Error | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const resp = await fetch(url, {
+          ...init,
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+        const transientHttp = resp.status === 408 || resp.status === 429 || resp.status >= 500;
+        if (!transientHttp || attempt === maxRetries) {
+          return resp;
+        }
+        lastErr = new Error(`${label} returned HTTP ${resp.status}`);
+      } catch (err: any) {
+        const msg = err?.name === "TimeoutError" || err?.name === "AbortError"
+          ? `${label} timed out after ${Math.round(timeoutMs / 1000)}s`
+          : `${label} network error: ${err?.message || "Connection failed"}`;
+        lastErr = new Error(msg);
+        if (attempt === maxRetries) {
+          throw lastErr;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 650 * (attempt + 1)));
+    }
+    throw lastErr || new Error(`${label} request failed`);
+  }
+
+  // =========================================================================
+  // ⚡ ANIMESALT / MEGAPLAY / RAVOK EXTRACTION ENGINE
+  // =========================================================================
+  const MEGAPLAY_ENC_KEY = "i?LMTAx0Q6,:}50U";
+  const MEGAPLAY_ENC_IV = "W0;27ToaUpl_P%'c";
+
+  function megaplayPadKeyBytes(str: string, len: number): Buffer {
+    const enc = Buffer.from(str, "utf-8");
+    const buf = Buffer.alloc(len, 0);
+    enc.copy(buf, 0, 0, Math.min(len, enc.length));
+    return buf;
+  }
+
+  function decryptMegaplayEnc(b64url: string): any {
+    let b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4) b64 += "=";
+    const ciphertext = Buffer.from(b64, "base64");
+    const key = megaplayPadKeyBytes(MEGAPLAY_ENC_KEY, 32);
+    const iv = megaplayPadKeyBytes(MEGAPLAY_ENC_IV, 16);
+    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+    let decrypted = decipher.update(ciphertext);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return JSON.parse(decrypted.toString("utf-8"));
+  }
+
+  async function extractMegaplayEmbedStream(embedUrl: string): Promise<{ masterUrl: string; tracks?: any[] }> {
+    const embedRes = await fetchUpstreamWithRetry(
+      embedUrl,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Referer": "https://animesalt.cx/"
+        }
+      },
+      { timeoutMs: 15000, maxRetries: 2, label: "Megaplay embed page" }
+    );
+    if (!embedRes.ok) {
+      throw new Error(`Megaplay embed page failed (HTTP ${embedRes.status})`);
+    }
+    const embedHtml = await embedRes.text();
+    const idMatch = embedHtml.match(/id=["']megaplay-player["'][^>]*data-id=["'](\d+)["']/i);
+    if (!idMatch) {
+      throw new Error("Could not find data-id on Megaplay player element");
+    }
+    const dataId = idMatch[1];
+    const srcRes = await fetchUpstreamWithRetry(
+      `https://megaplay.buzz/stream/getSources?id=${dataId}&platform=OTHER&st=other`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Referer": embedUrl,
+          "X-Requested-With": "XMLHttpRequest"
+        }
+      },
+      { timeoutMs: 15000, maxRetries: 2, label: "Megaplay getSources API" }
+    );
+    if (!srcRes.ok) {
+      throw new Error(`Megaplay getSources failed (HTTP ${srcRes.status})`);
+    }
+    const data: any = await srcRes.json();
+    if (data.enc) {
+      const dec = decryptMegaplayEnc(data.enc);
+      if (!dec || !dec.file) {
+        throw new Error("Invalid decrypted Megaplay payload");
+      }
+      return {
+        masterUrl: dec.file,
+        tracks: data.tracks || []
+      };
+    } else if (data.sources && data.sources[0]?.file) {
+      return {
+        masterUrl: data.sources[0].file,
+        tracks: data.tracks || []
+      };
+    }
+    throw new Error("No video source found in Megaplay getSources response");
+  }
+
+  const animesaltSeriesSeasonMapCache = new Map<string, { map: Record<number, { start: number; end: number }>; expiresAt: number }>();
+
+  async function getAnimeSaltSeriesSeasonMap(seriesSlug: string): Promise<Record<number, { start: number; end: number }> | null> {
+    const now = Date.now();
+    const cached = animesaltSeriesSeasonMapCache.get(seriesSlug);
+    if (cached && cached.expiresAt > now) {
+      return cached.map;
+    }
+    try {
+      const seriesUrl = `https://animesalt.cx/series/${seriesSlug}/`;
+      const res = await fetchUpstreamWithRetry(
+        seriesUrl,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://animesalt.cx/"
+          }
+        },
+        { timeoutMs: 15000, maxRetries: 2, label: "AnimeSalt series map" }
+      );
+      if (!res.ok) return null;
+      const html = await res.text();
+      const regex = /Season\s+(\d+)[^<]*?(\d+)\s*-\s*(\d+)/gi;
+      let match;
+      const map: Record<number, { start: number; end: number }> = {};
+      while ((match = regex.exec(html)) !== null) {
+        const s = parseInt(match[1], 10);
+        const start = parseInt(match[2], 10);
+        const end = parseInt(match[3], 10);
+        map[s] = { start, end };
+      }
+      animesaltSeriesSeasonMapCache.set(seriesSlug, { map, expiresAt: now + 3600000 });
+      return map;
+    } catch (e: any) {
+      console.warn(`[AnimeSalt] Failed to get series season map for ${seriesSlug}:`, e?.message);
+      return null;
+    }
+  }
+
+  async function resolveAnimeSaltCumulativeEpisodeUrl(rawUrl: string): Promise<{ resolvedUrl: string; wasCorrected: boolean }> {
+    const epMatch = rawUrl.match(/\/episode\/([a-zA-Z0-9_-]+?)-(\d+)x(\d+)\/?/);
+    if (!epMatch) return { resolvedUrl: rawUrl, wasCorrected: false };
+    const slug = epMatch[1];
+    const sNum = parseInt(epMatch[2], 10);
+    const eNum = parseInt(epMatch[3], 10);
+
+    const map = await getAnimeSaltSeriesSeasonMap(slug);
+    if (map && map[sNum] && eNum < map[sNum].start) {
+      const cumEp = map[sNum].start + (eNum - 1);
+      const corrected = `https://animesalt.cx/episode/${slug}-${sNum}x${cumEp}/`;
+      return { resolvedUrl: corrected, wasCorrected: true };
+    }
+    return { resolvedUrl: rawUrl, wasCorrected: false };
+  }
+
+  async function extractAnimeSaltStream(
+    sourceUrl: string,
+    skipSubPlaylistProbe: boolean = false,
+    requestedDuration: number = 0
+  ): Promise<{
     ok: boolean;
     m3u8Url?: string;
     rawM3u8Url?: string;
     qualities?: string[];
     audioTracks?: string[];
+    downloadQualities?: any[];
+    duration?: number;
+    bandwidthMap?: Record<string, number>;
+    correctedUrl?: string;
     headers?: Record<string, string>;
     error?: string;
   }> {
@@ -2489,46 +2730,132 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       let audioTracks: string[] = [];
       let qualities: string[] = [];
       let ravokVideoId: string | null = null;
+      let manifestReferer = "https://ravok.buzz/";
+      let rawEffectiveUrl = trimmed;
+      let correctedUrl: string | undefined = undefined;
+
+      // Handle cumulative episode auto-resolution if relative season numbering is used
+      if (trimmed.includes("animesalt.") && trimmed.includes("/episode/")) {
+        const resolution = await resolveAnimeSaltCumulativeEpisodeUrl(trimmed);
+        if (resolution.wasCorrected) {
+          rawEffectiveUrl = resolution.resolvedUrl;
+          correctedUrl = resolution.resolvedUrl;
+          console.log(`[AnimeSalt] Auto-corrected relative episode URL: ${trimmed} -> ${rawEffectiveUrl}`);
+        }
+      }
 
       // Case 1: Already a master m3u8
       if (trimmed.includes(".m3u8")) {
         masterUrl = trimmed;
-      } 
+        if (trimmed.includes("megaplay") || trimmed.includes("nexabloom")) {
+          manifestReferer = "https://megaplay.buzz/";
+        }
+      }
       // Case 2: ravok.buzz URL directly
       else if (trimmed.includes("ravok.buzz")) {
         const match = trimmed.match(/(?:video|embed)\/([a-f0-9]+)/i);
         if (match) ravokVideoId = match[1];
       }
-      // Case 3: AnimeSalt page URL
+      // Case 3: megaplay.buzz URL directly
+      else if (trimmed.includes("megaplay.buzz")) {
+        manifestReferer = "https://megaplay.buzz/";
+        const megaRes = await extractMegaplayEmbedStream(trimmed);
+        if (megaRes.masterUrl) {
+          masterUrl = megaRes.masterUrl;
+        }
+      }
+      // Case 4: AnimeSalt page URL
       else if (trimmed.includes("animesalt.")) {
-        const pageRes = await fetch(trimmed, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": "https://animesalt.cx/"
+        let pageRef = "https://animesalt.cx/";
+        try { pageRef = new URL(rawEffectiveUrl).origin + "/"; } catch {}
+        let pageRes = await fetchUpstreamWithRetry(
+          rawEffectiveUrl,
+          {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              "Referer": pageRef
+            }
           },
-          signal: AbortSignal.timeout(10000)
-        });
-        if (!pageRes.ok) throw new Error(`AnimeSalt page fetch failed: ${pageRes.status}`);
-        const html = await pageRes.text();
+          { timeoutMs: 15000, maxRetries: 2, label: "AnimeSalt page" }
+        );
 
-        // Look for ravok embed
-        const ravokMatch = html.match(/https?:\/\/ravok\.buzz\/(?:video|embed)\/([a-f0-9]+)/i);
-        if (ravokMatch) {
-          ravokVideoId = ravokMatch[1];
+        // If returned 404 and we haven't already corrected the cumulative URL, try resolving series cumulative mapping
+        if (pageRes.status === 404 && !correctedUrl) {
+          const resolution = await resolveAnimeSaltCumulativeEpisodeUrl(rawEffectiveUrl);
+          if (resolution.wasCorrected) {
+            rawEffectiveUrl = resolution.resolvedUrl;
+            correctedUrl = resolution.resolvedUrl;
+            console.log(`[AnimeSalt] 404 recovery: Auto-corrected relative episode URL: ${trimmed} -> ${rawEffectiveUrl}`);
+            pageRes = await fetchUpstreamWithRetry(
+              rawEffectiveUrl,
+              {
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                  "Referer": pageRef
+                }
+              },
+              { timeoutMs: 15000, maxRetries: 2, label: "AnimeSalt corrected page" }
+            );
+          }
         }
 
-        // Look for player.php data
-        const dataMatch = html.match(/player\.php\?data=([^"'&]+)/i);
-        if (dataMatch) {
+        if (!pageRes.ok) {
+          throw new Error(`AnimeSalt page failed (HTTP ${pageRes.status}${pageRes.status === 404 ? " - Episode/Movie URL not found" : pageRes.status === 429 ? " - Rate limited upstream" : ""})`);
+        }
+        const html = await pageRes.text();
+
+        // 1. Look for ravok embed
+        const ravokMatch = html.match(/https?:\/\/(?:www\.)?ravok\.buzz\/(?:video|embed)\/([a-f0-9]+)/i);
+        if (ravokMatch) {
+          ravokVideoId = ravokMatch[1];
+          manifestReferer = "https://ravok.buzz/";
+        }
+
+        // 2. Look for megaplay embed (Seasons 17-22 on AnimeSalt)
+        const megaplayMatches = Array.from(html.matchAll(/https?:\/\/(?:www\.)?megaplay\.buzz\/stream\/[^\s"'<>]+/gi)).map(m => m[0]);
+        if (megaplayMatches.length > 0) {
+          manifestReferer = "https://megaplay.buzz/";
+          const subEmbed = megaplayMatches.find(m => m.includes("/sub")) || megaplayMatches[0];
+          const dubEmbed = megaplayMatches.find(m => m.includes("/dub"));
+          if (dubEmbed) {
+            if (!audioTracks.includes("Japanese")) audioTracks.push("Japanese");
+            if (!audioTracks.includes("English")) audioTracks.push("English");
+          } else {
+            if (!audioTracks.includes("Japanese")) audioTracks.push("Japanese");
+          }
           try {
-            const rawDecoded = decodeURIComponent(dataMatch[1]);
+            const megaResult = await extractMegaplayEmbedStream(subEmbed);
+            if (megaResult.masterUrl) {
+              masterUrl = megaResult.masterUrl;
+            }
+          } catch (mErr: any) {
+            console.warn("[AnimeSalt] Megaplay extraction warning:", mErr?.message);
+          }
+        }
+
+        // 3. Look for ALL player.php?data= blocks in HTML to discover all multi-language options
+        const dataMatches = Array.from(html.matchAll(/player\.php\?data=([^"'&\s<>]+)/gi));
+        for (const dm of dataMatches) {
+          if (!dm || !dm[1]) continue;
+          try {
+            const rawDecoded = decodeURIComponent(dm[1]);
             const jsonStr = Buffer.from(rawDecoded, "base64").toString("utf-8").trim();
-            const cleanJson = jsonStr.substring(0, jsonStr.lastIndexOf("]") + 1);
+            const lastBracket = jsonStr.lastIndexOf("]");
+            const cleanJson = lastBracket !== -1 ? jsonStr.substring(0, lastBracket + 1) : jsonStr;
             const parsed = JSON.parse(cleanJson);
             if (Array.isArray(parsed)) {
               parsed.forEach((p: any) => {
-                if (p.language && !audioTracks.includes(p.language)) {
-                  audioTracks.push(p.language);
+                const rawL = p?.language || p?.label || p?.name;
+                if (rawL && typeof rawL === "string" && !audioTracks.includes(rawL.trim())) {
+                  audioTracks.push(rawL.trim());
+                }
+                const candUrl = String(p?.link || p?.url || p?.src || "").trim();
+                if (!ravokVideoId && candUrl.includes("ravok.buzz")) {
+                  const rm = candUrl.match(/(?:video|embed)\/([a-f0-9]+)/i);
+                  if (rm) ravokVideoId = rm[1];
+                }
+                if (!masterUrl && candUrl.includes(".m3u8")) {
+                  masterUrl = candUrl;
                 }
               });
             }
@@ -2538,87 +2865,137 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         }
       }
 
-      // If we have ravokVideoId, call getVideo
-      if (ravokVideoId) {
-        const gvRes = await fetch(`https://ravok.buzz/player/index.php?data=${ravokVideoId}&do=getVideo`, {
-          method: "POST",
-          headers: {
-            "Referer": `https://ravok.buzz/video/${ravokVideoId}`,
-            "X-Requested-With": "XMLHttpRequest",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      // If we have ravokVideoId and no masterUrl yet, call getVideo with retry resilience
+      if (ravokVideoId && !masterUrl) {
+        manifestReferer = "https://ravok.buzz/";
+        const gvRes = await fetchUpstreamWithRetry(
+          `https://ravok.buzz/player/index.php?data=${ravokVideoId}&do=getVideo`,
+          {
+            method: "POST",
+            headers: {
+              "Referer": `https://ravok.buzz/video/${ravokVideoId}`,
+              "X-Requested-With": "XMLHttpRequest",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            }
           },
-          signal: AbortSignal.timeout(10000)
-        });
+          { timeoutMs: 15000, maxRetries: 2, label: "Ravok video API" }
+        );
         if (gvRes.ok) {
           const gvData: any = await gvRes.json();
           masterUrl = gvData.videoSource || gvData.securedLink || null;
+        } else {
+          throw new Error(`Ravok video API failed (HTTP ${gvRes.status})`);
         }
       }
 
       if (!masterUrl) {
-        return { ok: false, error: "Could not resolve master stream from AnimeSalt" };
+        return { ok: false, error: "Could not locate Ravok embed, Megaplay stream, or master .m3u8 on this AnimeSalt page" };
       }
 
-      // Inspect master.m3u8 for qualities and audio tracks
-      try {
-        const manifestRes = await fetch(masterUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://ravok.buzz/"
-          },
-          signal: AbortSignal.timeout(8000)
-        });
+      const normalizeAsLang = (raw: string): string => {
+        const clean = raw.replace(/\[.*?\]|\(.*?\)/g, "").trim();
+        if (!clean) return "";
+        const lower = clean.toLowerCase();
+        if (lower.includes("japan") || lower === "ja" || lower === "jpn") return "Japanese";
+        if (lower.includes("english") || lower === "en" || lower === "eng") return "English";
+        if (lower.includes("hindi") || lower === "hi" || lower === "hin") return "Hindi";
+        if (lower.includes("telugu") || lower === "te" || lower === "tel") return "Telugu";
+        if (lower.includes("tamil") || lower === "ta" || lower === "tam") return "Tamil";
+        if (lower.includes("malayalam") || lower === "ml" || lower === "mal") return "Malayalam";
+        if (lower.includes("kannada") || lower === "kn" || lower === "kan") return "Kannada";
+        if (lower.includes("bengali") || lower === "bn" || lower === "ben") return "Bengali";
+        if (lower.includes("marathi") || lower === "mr" || lower === "mar") return "Marathi";
+        if (lower.includes("korean") || lower === "ko" || lower === "kor") return "Korean";
+        if (lower.includes("chinese") || lower === "zh") return "Chinese";
+        if (lower.includes("spanish") || lower === "es") return "Spanish";
+        if (lower.includes("french") || lower === "fr") return "French";
+        return clean;
+      };
 
-        if (manifestRes.ok) {
-          const manifestText = await manifestRes.text();
-          const lines = manifestText.split("\n");
-          for (const line of lines) {
-            if (line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
-              const nameMatch = line.match(/NAME="([^"]+)"/);
-              if (nameMatch && !audioTracks.includes(nameMatch[1])) {
-                audioTracks.push(nameMatch[1]);
-              }
-            }
-            if (line.startsWith("#EXT-X-STREAM-INF")) {
-              const qMatch = line.match(/NAME="([^"]+)"/);
-              if (qMatch && !qualities.includes(qMatch[1])) {
-                qualities.push(qMatch[1]);
-              } else {
-                const resMatch = line.match(/RESOLUTION=\d+x(\d+)/);
-                if (resMatch) {
-                  const h = parseInt(resMatch[1]);
-                  const q = h >= 1000 ? "1080p" : h >= 700 ? "720p" : h >= 450 ? "480p" : h >= 300 ? "360p" : "240p";
-                  if (!qualities.includes(q)) qualities.push(q);
-                }
-              }
-            }
-          }
+      // Probe real HLS master + media playlists for real qualities, real #EXT-X-MEDIA audio tracks, real #EXTINF duration & real sampled MBs!
+      const hlsMeta = await parseHlsManifestMetadata(
+        masterUrl,
+        requestedDuration,
+        manifestReferer,
+        skipSubPlaylistProbe,
+        "",
+        rawEffectiveUrl
+      );
+
+      if (Array.isArray(hlsMeta.qualities) && hlsMeta.qualities.length > 0) {
+        qualities = [...hlsMeta.qualities];
+      }
+      const mergedAudioTracks: string[] = [];
+      const addNormTrack = (rawL: string) => {
+        const norm = normalizeAsLang(rawL);
+        if (
+          norm &&
+          norm.toLowerCase() !== "default" &&
+          norm.toLowerCase() !== "default audio" &&
+          norm.toLowerCase() !== "original audio" &&
+          !mergedAudioTracks.some((x) => x.toLowerCase() === norm.toLowerCase())
+        ) {
+          mergedAudioTracks.push(norm);
         }
-      } catch (manifestErr: any) {
-        console.warn("[AnimeSalt] Manifest probe warning:", manifestErr?.message);
+      };
+
+      if (Array.isArray(hlsMeta.audioTracks)) {
+        hlsMeta.audioTracks.forEach(addNormTrack);
       }
+      audioTracks.forEach(addNormTrack);
+
+      const fallbackDur = requestedDuration > 0
+        ? requestedDuration
+        : (trimmed.toLowerCase().includes("/episode/") ? 1440 : 5400);
+      const finalDur = hlsMeta.duration && hlsMeta.duration > 0 ? hlsMeta.duration : fallbackDur;
 
       if (qualities.length === 0) qualities = ["1080p", "720p", "480p", "360p", "240p"];
-      if (audioTracks.length === 0) audioTracks = ["Japanese", "English", "Telugu", "Tamil", "Hindi"];
+      const bandwidthMap: Record<string, number> = {};
+      const bandwidthDefaults: Record<string, number> = {
+        "1440p": 6000000,
+        "1080p": 3600000,
+        "720p": 1800000,
+        "480p": 750000,
+        "360p": 320000,
+        "240p": 160000
+      };
 
-      const formattedAudio = audioTracks.map((l) => {
-        const lower = l.toLowerCase();
-        if (lower.includes("japan")) return "Japanese [ORIGINAL]";
-        if (lower.includes("english")) return "English [DUBBED]";
-        if (lower.includes("hindi")) return "Hindi [DUBBED]";
-        if (lower.includes("telugu")) return "Telugu [DUBBED]";
-        if (lower.includes("tamil")) return "Tamil [DUBBED]";
-        return `${l} [DUBBED]`;
-      });
+      let finalDownloadQualities = Array.isArray(hlsMeta.downloadQualities) ? [...hlsMeta.downloadQualities] : [];
+      if (finalDownloadQualities.length === 0) {
+        finalDownloadQualities = qualities.map((q) => {
+          const bw = bandwidthDefaults[q.toLowerCase()] || 1500000;
+          bandwidthMap[q] = bw;
+          return {
+            id: q,
+            label: `${q} ${q.includes("1080") ? "Full HD" : q.includes("720") ? "HD" : q.includes("480") ? "Standard" : "Data Saver"}`,
+            sizeMb: Math.max(1, Math.round((bw * finalDur) / (8 * 1024 * 1024))),
+            bandwidth: bw,
+            url: rawEffectiveUrl
+          };
+        });
+      } else {
+        finalDownloadQualities = finalDownloadQualities.map((dq: any) => {
+          const bw = Number(dq.bandwidth) || bandwidthDefaults[String(dq.id).toLowerCase()] || 1500000;
+          bandwidthMap[dq.id] = bw;
+          const mb = dq.sizeMb && dq.sizeMb > 0 ? dq.sizeMb : Math.max(1, Math.round((bw * finalDur) / (8 * 1024 * 1024)));
+          return { ...dq, sizeMb: mb, bandwidth: bw, url: rawEffectiveUrl };
+        });
+      }
+
+      const finalAudios = mergedAudioTracks.length > 0 ? mergedAudioTracks : ["Original Audio"];
 
       return {
         ok: true,
         m3u8Url: masterUrl,
         rawM3u8Url: masterUrl,
         qualities,
-        audioTracks: formattedAudio,
+        audioTracks: finalAudios,
+        downloadQualities: finalDownloadQualities,
+        duration: finalDur,
+        bandwidthMap,
+        correctedUrl,
         headers: {
-          "Referer": "https://ravok.buzz/",
+          "Referer": manifestReferer,
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
       };
@@ -2640,7 +3017,12 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         return;
       }
 
-      const trimmedUrl = sourceUrl.trim();
+      let trimmedUrl = sourceUrl.trim();
+      if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
+        const base = (globalAnimeSaltBaseDomain || "https://animesalt.cx").replace(/\/+$/, "");
+        trimmedUrl = base + (trimmedUrl.startsWith("/") ? "" : "/") + trimmedUrl;
+      }
+
       const cacheKey = forcedQuality ? `${trimmedUrl}::${forcedQuality}` : trimmedUrl;
       const now = Date.now();
 
@@ -2677,7 +3059,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       // ⚡ DEDICATED ANIMESALT HLS ENGINE FAST PATH (Ravok.buzz Multi-Audio)
       // ====================================================================
       if (isAnimeSaltUrl(trimmedUrl)) {
-        const asResult = await extractAnimeSaltStream(trimmedUrl);
+        const asResult = await extractAnimeSaltStream(trimmedUrl, skipSubPlaylistProbe, requestedDuration);
         if (asResult.ok && asResult.m3u8Url) {
           const ttlMs = 170 * 60 * 1000;
           const expiresAt = now + ttlMs;
@@ -2689,19 +3071,36 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
           const refParam = customRef ? `&referer=${encodeURIComponent(customRef)}` : "";
           const proxiedMaster = `${serverOrigin}/proxy/m3u8?url=${encodeURIComponent(asResult.m3u8Url)}${refParam}`;
 
+          const effectivePermanentUrl = asResult.correctedUrl || trimmedUrl;
           const permanentQualityLinks: Record<string, string> = {};
           const qualList = (asResult.qualities && asResult.qualities.length > 0)
             ? asResult.qualities
             : ["1080p", "720p", "480p", "360p", "240p"];
           for (const q of qualList) {
-            permanentQualityLinks[q] = trimmedUrl;
+            permanentQualityLinks[q] = effectivePermanentUrl;
           }
-          const downloadQualities = qualList.map(q => ({
-            id: q,
-            label: `${q} ${q.includes("1080") ? "Full HD" : q.includes("720") ? "HD" : "Standard"}`,
-            sizeMb: q === "1080p" ? 1450 : q === "720p" ? 950 : q === "480p" ? 550 : q === "360p" ? 350 : 200,
-            url: trimmedUrl
-          }));
+          const finalDuration = requestedDuration > 0 ? requestedDuration : (asResult.duration || (trimmedUrl.includes('/episode/') ? 1440 : 5400));
+          const bandwidthDefaults: Record<string, number> = {
+            "1440p": 6000000,
+            "1080p": 3600000,
+            "720p": 1800000,
+            "480p": 750000,
+            "360p": 320000,
+            "240p": 160000
+          };
+          const downloadQualities = Array.isArray(asResult.downloadQualities) && asResult.downloadQualities.length > 0
+            ? asResult.downloadQualities
+            : qualList.map(q => {
+                const bw = (asResult as any).bandwidthMap?.[q] || bandwidthDefaults[q] || 1500000;
+                const sizeMb = Math.max(1, Math.round((bw * finalDuration) / (8 * 1024 * 1024)));
+                return {
+                  id: q,
+                  label: `${q} ${q.includes("1080") ? "Full HD" : q.includes("720") ? "HD" : "Standard"}`,
+                  sizeMb,
+                  bandwidth: bw,
+                  url: effectivePermanentUrl
+                };
+              });
 
           streamExtractionCache.set(cacheKey, {
             m3u8Url: proxiedMaster,
@@ -2714,7 +3113,7 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             qualityLinks: permanentQualityLinks,
             downloadQualities,
             audioTracks: asResult.audioTracks,
-            duration: requestedDuration || 1440
+            duration: finalDuration
           } as any);
 
           res.json({
@@ -2726,9 +3125,10 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             rawQualityLinks: permanentQualityLinks,
             downloadQualities,
             audioTracks: asResult.audioTracks,
-            duration: requestedDuration || 1440,
-            durationFormatted: Math.floor((requestedDuration || 1440) / 60) + ":" + ((requestedDuration || 1440) % 60).toString().padStart(2, "0"),
+            duration: finalDuration,
+            durationFormatted: Math.floor(finalDuration / 60) + ":" + (finalDuration % 60).toString().padStart(2, "0"),
             headers: asResult.headers,
+            correctedUrl: asResult.correctedUrl || undefined,
             provider: "ANIMESALT",
             cached: false,
             expiresAt,
@@ -2776,7 +3176,13 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
               mimeType: stResult.mimeType || "video/mp4"
             }
           ];
-          const finalDur = requestedDuration > 0 ? requestedDuration : 0;
+          let finalDur = requestedDuration > 0 ? requestedDuration : 0;
+          if (finalDur <= 0 && !skipSubPlaylistProbe && primaryTargetUrl) {
+            finalDur = await Promise.race([
+              probeVideoDuration(primaryTargetUrl).catch(() => 0),
+              new Promise<number>((r) => setTimeout(() => r(0), 4000))
+            ]);
+          }
 
           streamExtractionCache.set(cacheKey, {
             m3u8Url: proxiedUrl,
@@ -3266,6 +3672,19 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
   app.post(["/api/extract-stream", "/extract-stream"], handleExtractStream);
   app.get(["/api/extract-stream", "/extract-stream"], handleExtractStream);
 
+  app.get(["/api/animesalt-domain", "/animesalt-domain"], (_req: any, res: any) => {
+    res.json({ ok: true, baseDomain: globalAnimeSaltBaseDomain });
+  });
+  app.post(["/api/animesalt-domain", "/animesalt-domain"], (req: any, res: any) => {
+    const newDomain = req.body?.baseDomain || req.body?.domain;
+    if (newDomain && typeof newDomain === "string" && newDomain.trim()) {
+      let clean = newDomain.trim();
+      if (!clean.startsWith("http://") && !clean.startsWith("https://")) clean = "https://" + clean;
+      globalAnimeSaltBaseDomain = clean.replace(/\/+$/, "");
+    }
+    res.json({ ok: true, baseDomain: globalAnimeSaltBaseDomain });
+  });
+
   // Real offline media download stream endpoint (converts HLS to MP4 stream on the fly via ffmpeg -c copy)
   const handleDownloadMedia = async (req: any, res: any) => {
     try {
@@ -3487,6 +3906,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             referer = "https://voe.sx/";
           } else if (h.includes("ravok") || h.includes("as-cdn") || h.includes("animesalt")) {
             referer = "https://animesalt.cx/";
+          } else if (h.includes("megaplay") || h.includes("nexabloom") || h.includes("distantdaydreams") || h.includes("emeralddrift")) {
+            referer = "https://megaplay.buzz/";
           } else {
             referer = `${u.origin}/`;
           }
@@ -3514,13 +3935,6 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
       }
 
       const text = await upstream.text();
-      // For Server 3 (SprintCDN/Byse) media playlists, register ordered segment map & warm seg #0 progressively!
-      try {
-        const th = new URL(targetUrl).hostname.toLowerCase();
-        if ((th.includes("sprintcdn") || th.includes("owphbf") || th.includes("r66nv9ed")) && text.includes("#EXTINF:")) {
-          registerSprintMediaPlaylistSegments(targetUrl, text, referer, 1);
-        }
-      } catch {}
       let rawLines = text.split("\n");
 
       const lines = rawLines;
@@ -3625,6 +4039,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
             referer = "https://voe.sx/";
           } else if (h.includes("ravok") || h.includes("as-cdn") || h.includes("animesalt")) {
             referer = "https://animesalt.cx/";
+          } else if (h.includes("megaplay") || h.includes("nexabloom") || h.includes("distantdaydreams") || h.includes("emeralddrift")) {
+            referer = "https://megaplay.buzz/";
           } else {
             referer = `${u.origin}/`;
           }
@@ -4022,23 +4438,131 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
     res.sendStatus(204);
   });
 
+  // ============================================================================
+  // 🎬 TMDB Unblocked Edge Resolver (Bypasses Indian ISP DNS Blocking on api.themoviedb.org)
+  // ============================================================================
+  const TMDB_CLOUDFRONT_IPS = [
+    "3.175.86.50",
+    "3.175.86.37",
+    "3.175.86.67",
+    "3.175.86.103",
+    "13.226.78.118",
+    "13.226.78.74",
+    "13.226.78.36",
+    "13.226.78.96"
+  ];
+  let activeTmdbIps: string[] = [...TMDB_CLOUDFRONT_IPS];
+
+  try {
+    const cleanDns = new dns.Resolver();
+    cleanDns.setServers(["8.8.8.8", "1.1.1.1", "9.9.9.9"]);
+    cleanDns.resolve4("api.themoviedb.org", (err, addresses) => {
+      if (!err && Array.isArray(addresses) && addresses.length > 0) {
+        const valid = addresses.filter((ip) => !ip.startsWith("49.44."));
+        if (valid.length > 0) {
+          activeTmdbIps = Array.from(new Set([...valid, ...TMDB_CLOUDFRONT_IPS]));
+        }
+      }
+    });
+  } catch {}
+
+  function requestTmdb(reqPath: string): Promise<{ status: number; data: any }> {
+    return new Promise((resolve, reject) => {
+      const cleanPath = reqPath.startsWith("/") ? reqPath : `/${reqPath}`;
+      const ipsToTry = [...activeTmdbIps];
+
+      function tryNextIp(idx: number) {
+        if (idx >= ipsToTry.length) {
+          return reject(new Error("Unable to reach TMDB API: All edge IPs timed out."));
+        }
+        const ip = ipsToTry[idx];
+        const req = https.request(
+          {
+            host: ip,
+            port: 443,
+            path: cleanPath,
+            method: "GET",
+            headers: {
+              Host: "api.themoviedb.org",
+              Accept: "application/json",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            servername: "api.themoviedb.org",
+            timeout: 6000
+          },
+          (res) => {
+            let body = "";
+            res.on("data", (chunk) => (body += chunk));
+            res.on("end", () => {
+              try {
+                const parsed = JSON.parse(body);
+                resolve({ status: res.statusCode || 200, data: parsed });
+              } catch {
+                if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+                  resolve({ status: res.statusCode, data: body });
+                } else {
+                  tryNextIp(idx + 1);
+                }
+              }
+            });
+          }
+        );
+
+        req.on("error", () => tryNextIp(idx + 1));
+        req.on("timeout", () => {
+          req.destroy();
+          tryNextIp(idx + 1);
+        });
+        req.end();
+      }
+
+      tryNextIp(0);
+    });
+  }
+
+  // Universal TMDB Proxy Endpoint for Admin Panel (bypasses ISP DNS blocking & CORS)
+  app.all(["/api/tmdb-proxy", "/api/tmdb-proxy/*", "/api/tmdb/proxy"], async (req, res) => {
+    try {
+      let rawEndpoint = (req.query.endpoint as string) || (req.params as any)[0] || "search/multi";
+      rawEndpoint = rawEndpoint.replace(/^\/?3\/?/, ""); // strip leading /3/ if provided
+
+      const queryParams = new URLSearchParams();
+      for (const [k, v] of Object.entries(req.query)) {
+        if (k !== "endpoint" && v !== undefined && v !== null) {
+          queryParams.set(k, String(v));
+        }
+      }
+      if (!queryParams.has("api_key") && !queryParams.has("apiKey")) {
+        queryParams.set("api_key", TMDB_API_KEY);
+      }
+      if (!queryParams.has("language")) {
+        queryParams.set("language", "en-US");
+      }
+
+      const queryString = queryParams.toString();
+      const tmdbPath = `/3/${rawEndpoint}${queryString ? "?" + queryString : ""}`;
+      const result = await requestTmdb(tmdbPath);
+      res.status(result.status).json(result.data);
+    } catch (err: any) {
+      res.status(502).json({ error: err.message || "Failed to reach TMDB API" });
+    }
+  });
+
   // TMDB Key Verification & Search Endpoints
   app.post("/api/tmdb/verify", async (req, res) => {
     try {
-      const apiKey = req.body.apiKey || process.env.TMDB_API_KEY;
+      const apiKey = req.body.apiKey || req.query.apiKey || TMDB_API_KEY;
       if (!apiKey || apiKey === "paste_your_api_key_here") {
         res.status(400).json({ ok: false, error: "TMDB API Key is required" });
         return;
       }
 
-      const testUrl = `https://api.themoviedb.org/3/authentication?api_key=${apiKey}`;
-      const tmdbRes = await fetch(testUrl);
-      const data = await tmdbRes.json();
-
-      if (tmdbRes.ok && data.success) {
+      const testPath = `/3/authentication?api_key=${encodeURIComponent(apiKey)}`;
+      const result = await requestTmdb(testPath);
+      if (result.status === 200 && result.data && result.data.success) {
         res.json({ ok: true, message: "TMDB API Key verified successfully!" });
       } else {
-        res.status(400).json({ ok: false, error: data.status_message || "Invalid TMDB API Key" });
+        res.status(400).json({ ok: false, error: result.data?.status_message || "Invalid TMDB API Key" });
       }
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message || "Could not reach TMDB API" });
@@ -4047,8 +4571,8 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
 
   app.get("/api/tmdb/search", async (req, res) => {
     try {
-      const query = (req.query.q as string) || "";
-      const apiKey = (req.query.apiKey as string) || process.env.TMDB_API_KEY;
+      const query = (req.query.q as string) || (req.query.query as string) || "";
+      const apiKey = (req.query.apiKey as string) || (req.query.api_key as string) || TMDB_API_KEY;
       if (!query.trim()) {
         res.status(400).json({ error: "Search query required" });
         return;
@@ -4058,16 +4582,9 @@ Always respond strictly with a valid JSON object matching this schema (do NOT wr
         return;
       }
 
-      const tmdbUrl = `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=en-US&page=1`;
-      const tmdbRes = await fetch(tmdbUrl);
-      if (!tmdbRes.ok) {
-        const errData = await tmdbRes.json();
-        res.status(tmdbRes.status).json({ error: errData.status_message || "TMDB Search Failed" });
-        return;
-      }
-
-      const data = await tmdbRes.json();
-      res.json(data);
+      const tmdbPath = `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`;
+      const result = await requestTmdb(tmdbPath);
+      res.status(result.status).json(result.data);
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Failed to search TMDB" });
     }
@@ -5346,15 +5863,13 @@ Respond strictly in valid JSON format:
                     `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(q)}&language=en-US&page=1`
                   ];
 
-              for (const url of searchEndpoints) {
+              for (const searchUrl of searchEndpoints) {
                 try {
-                  const tmdbRes = await fetch(url);
-                  if (tmdbRes.ok) {
-                    const tmdbData = await tmdbRes.json();
-                    if (tmdbData.results && tmdbData.results.length > 0) {
-                      topResult = tmdbData.results[0];
-                      break;
-                    }
+                  const cleanPath = searchUrl.replace("https://api.themoviedb.org", "");
+                  const tmdbResult = await requestTmdb(cleanPath);
+                  if (tmdbResult && tmdbResult.data?.results && tmdbResult.data.results.length > 0) {
+                    topResult = tmdbResult.data.results[0];
+                    break;
                   }
                 } catch (_) {}
               }
@@ -6553,6 +7068,9 @@ DO NOT stop after Season 1! Both Season 1 and Season 2 (and all requested season
     adminApp.listen(Number(ADMIN_PORT), "0.0.0.0", () => {
       console.log(`⚡ MaxPlay Admin Panel running on http://0.0.0.0:${ADMIN_PORT} (or http://localhost:${ADMIN_PORT})`);
     });
+
+    // Daemon keep-alive heartbeat to prevent premature event loop termination in Windows background tasks
+    setInterval(() => {}, 1000 * 60 * 60);
   }
 
   export { app, adminApp };

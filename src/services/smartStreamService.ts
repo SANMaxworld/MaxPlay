@@ -35,6 +35,16 @@ interface ClientCachedStream {
 
 const CACHE_PREFIX = "maxplay_hls_stream_v2_";
 
+export function getAnimeSaltBaseDomain(): string {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem("maxplay_animesalt_base_domain");
+      if (saved && saved.trim()) return saved.trim().replace(/\/+$/, "");
+    }
+  } catch {}
+  return "https://animesalt.cx";
+}
+
 export class SmartStreamService {
   /**
    * Detects if a URL is an extractable source (e.g. VOE or external streaming host)
@@ -111,7 +121,7 @@ export class SmartStreamService {
       lower.includes("strtape.") ||
       lower.includes("shavetape.") ||
       lower.includes("streamta.pe") ||
-      lower.includes("animesalt.") ||
+      lower.includes("animesalt") ||
       lower.includes("ravok.buzz") ||
       lower.includes("as-cdn") ||
       /https?:\/\/[^\/]+\/(?:e|d|v|bkg)\/[a-z0-9_-]{6,}/i.test(lower)
@@ -218,6 +228,32 @@ export class SmartStreamService {
     if (!rawUrl || typeof rawUrl !== "string") return "";
     let trimmed = rawUrl.trim();
     if (!trimmed) return "";
+
+    // Resolve relative AnimeSalt paths (e.g. /episode/dan-da-dan-1x1/ or /movies/demon-slayer-...)
+    if (
+      !trimmed.startsWith("http://") &&
+      !trimmed.startsWith("https://") &&
+      !trimmed.startsWith("blob:") &&
+      !trimmed.startsWith("filesystem:") &&
+      !trimmed.startsWith("/api/") &&
+      !trimmed.startsWith("/proxy/")
+    ) {
+      if (
+        trimmed.startsWith("/episode/") ||
+        trimmed.startsWith("episode/") ||
+        trimmed.startsWith("/movies/") ||
+        trimmed.startsWith("movies/") ||
+        trimmed.startsWith("/anime/") ||
+        trimmed.startsWith("anime/")
+      ) {
+        let baseDomain = "https://animesalt.cx";
+        try {
+          const saved = localStorage.getItem("maxplay_animesalt_base_domain");
+          if (saved && saved.trim()) baseDomain = saved.trim().replace(/\/+$/, "");
+        } catch {}
+        trimmed = `${baseDomain}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+      }
+    }
 
     // Unwrap legacy external proxy URLs (e.g. nawazkhan001-mw-hub-master.hf.space or /proxy/ts?url=...)
     // Only unwrap /proxy/m3u8?url= inside the native Kotlin app where WebView intercepts HLS headers directly.
@@ -531,8 +567,9 @@ export class SmartStreamService {
     ) {
       return "https://ravok.buzz/";
     }
-    if (lower.includes("animesalt.")) {
-      return "https://animesalt.cx/";
+    if (lower.includes("animesalt")) {
+      const base = getAnimeSaltBaseDomain();
+      return `${base}/`;
     }
     if (
       lower.includes("sprintcdn") ||
@@ -1497,6 +1534,9 @@ export class SmartStreamService {
     // instead of getting abandoned prematurely into slow single-threaded JS fallback.
     if (isKotlinApp) {
       try {
+        if (options.forceRefresh === true) {
+          NativeBridgeService.clearStreamCachesOnNetworkSwitch();
+        }
         const nativeTimeoutMs = 10000;
         const nativeRes = await Promise.race([
           NativeBridgeService.extractStreamNative(trimmed),

@@ -335,12 +335,16 @@ class MaxPlayNativeBridge(
                         finishWithResult(enrichedDirect)
                         return@execute
                     }
+                    val stage1Meta = stage1.optJSONObject("byseMeta") ?: JSONObject().apply {
+                        val ht = stage1.optJSONArray("htmlAudioTracks") ?: stage1.optJSONArray("audioTracks")
+                        if (ht != null) put("audioTracks", ht)
+                    }
                     val enriched = probeHlsPlaylistDetailsSync(
                         cleanSource,
                         m3u8Url,
                         ref,
                         qualityHint,
-                        stage1.optJSONObject("byseMeta"),
+                        stage1Meta,
                         requestedDurationSec
                     )
                     if (enriched.optBoolean("ok")) {
@@ -393,12 +397,16 @@ class MaxPlayNativeBridge(
                                     finishWithResult(enrichedDirect)
                                     return@execute
                                 }
+                                val stage2Meta = stage2.optJSONObject("byseMeta") ?: JSONObject().apply {
+                                    val ht = stage2.optJSONArray("htmlAudioTracks") ?: stage2.optJSONArray("audioTracks")
+                                    if (ht != null) put("audioTracks", ht)
+                                }
                                 val enriched = probeHlsPlaylistDetailsSync(
                                     cleanSource,
                                     m3u8Url,
                                     ref,
                                     qualityHint,
-                                    stage2.optJSONObject("byseMeta"),
+                                    stage2Meta,
                                     requestedDurationSec
                                 )
                                 enriched.put("engine", "KOTLIN_SNIFFER")
@@ -483,31 +491,63 @@ class MaxPlayNativeBridge(
 
     private val probeHttpClient by lazy {
         InbuiltStreamScraper.okHttpClient.newBuilder()
-            .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
             .build()
     }
 
-    private fun fetchHlsTextSync(url: String, referer: String): String {
+    @JavascriptInterface
+    fun clearStreamCachesOnNetworkSwitch(): Boolean {
         return try {
-            val host = try { java.net.URL(url).host } catch (_: Exception) { "" }
-            val effRef = referer.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
-            val effOrigin = deriveOriginFromReferer(effRef)
-            val reqBuilder = Request.Builder()
-                .url(url)
-                .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
-                .header("Accept", "*/*")
-                .header("Referer", effRef)
-            if (effOrigin.isNotEmpty()) {
-                reqBuilder.header("Origin", effOrigin)
-            }
-            probeHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
-                if (!resp.isSuccessful) return ""
-                resp.body?.string() ?: ""
-            }
+            InbuiltStreamScraper.clearAllPlaybackCachesForNetworkSwitch()
+            true
         } catch (_: Exception) {
-            ""
+            false
         }
+    }
+
+    private fun fetchHlsTextSync(url: String, referer: String): String {
+        fun doFetch(refToUse: String): String {
+            for (attempt in 0..1) {
+                try {
+                    val host = try { java.net.URL(url).host } catch (_: Exception) { "" }
+                    val effRef = refToUse.ifBlank { CorsFreeWebViewClient.resolveRefererForHost(host) }
+                    val effOrigin = deriveOriginFromReferer(effRef)
+                    val reqBuilder = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", InbuiltStreamScraper.DEFAULT_USER_AGENT)
+                        .header("Accept", "*/*")
+                        .header("Referer", effRef)
+                    if (effOrigin.isNotEmpty()) {
+                        reqBuilder.header("Origin", effOrigin)
+                    }
+                    probeHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            val body = resp.body?.string() ?: ""
+                            if (body.isNotBlank()) return body
+                        }
+                        if (resp.code != 429 && resp.code < 500) {
+                            return ""
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Retry transient timeout/socket error once
+                }
+                if (attempt == 0) {
+                    try { Thread.sleep(350) } catch (_: Exception) {}
+                }
+            }
+            return ""
+        }
+        val first = doFetch(referer)
+        if (first.isNotBlank()) return first
+        val lower = url.lowercase()
+        if (lower.contains("ravok") || lower.contains("as-cdn") || lower.contains("animesalt")) {
+            val altRef = if (referer.contains("ravok")) "https://animesalt.cx/" else "https://ravok.buzz/"
+            val second = doFetch(altRef)
+            if (second.isNotBlank()) return second
+        }
+        return ""
     }
 
     private fun probeSingleSegmentByteSize(segUrl: String, referer: String): Long {
@@ -737,7 +777,7 @@ class MaxPlayNativeBridge(
 
         // 1. Extract #EXT-X-MEDIA:TYPE=AUDIO languages
         for (line in lines) {
-            if (line.startsWith("#EXT-X-MEDIA:") && line.contains("TYPE=AUDIO")) {
+            if (line.startsWith("#EXT-X-MEDIA:", ignoreCase = true) && line.contains("TYPE=AUDIO", ignoreCase = true)) {
                 val nameMatch = Regex("NAME=\"([^\"]+)\"|NAME=([^\\s,]+)", RegexOption.IGNORE_CASE).find(line)
                 val langMatch = Regex("LANGUAGE=\"([^\"]+)\"|LANGUAGE=([^\\s,]+)", RegexOption.IGNORE_CASE).find(line)
                 val uriMatch = Regex("URI=\"([^\"]+)\"|URI=([^\\s,]+)", RegexOption.IGNORE_CASE).find(line)
@@ -747,8 +787,13 @@ class MaxPlayNativeBridge(
                 if (rawUri.isNotEmpty() && audioPlaylistsFirstUrl.isEmpty()) {
                     audioPlaylistsFirstUrl = resolveRelativeHlsUrl(m3u8Url, rawUri)
                 }
-                val friendly = normalizeHlsLanguage(rawName, rawLang)
-                if (friendly.isNotEmpty() && !audioTracks.contains(friendly)) {
+                val cleanRawName = rawName.replace(Regex("\\[.*?\\]|\\(.*?\\)"), "").trim()
+                val friendly = normalizeHlsLanguage(cleanRawName, rawLang)
+                if (friendly.isNotEmpty() &&
+                    !friendly.equals("Default", ignoreCase = true) &&
+                    !friendly.equals("Default Audio", ignoreCase = true) &&
+                    audioTracks.none { it.equals(friendly, ignoreCase = true) }
+                ) {
                     audioTracks.add(friendly)
                 }
             }
@@ -824,37 +869,84 @@ class MaxPlayNativeBridge(
                 variants
             }
 
-            // Real HLS Probe: Measure each variant's real duration and real segment sizes
-            for (v in effectiveVariants) {
-                var vSizeMb = 0
-                var vDuration = 0
-                var vBandwidth = v.bandwidth
-
-                try {
-                    val vText = fetchHlsTextSync(v.url, referer)
-                    if (vText.isNotBlank() && vText.contains("#EXTINF:")) {
-                        val (measuredDur, measuredMb) = measureMediaPlaylistSizeAndDuration(v.url, vText, referer, v.bandwidth)
-                        if (measuredDur > 0) {
-                            vDuration = measuredDur
-                            if (detectedDuration == 0) detectedDuration = measuredDur
-                        }
-                        if (measuredMb > 0) {
-                            vSizeMb = measuredMb
-                            if (vDuration > 0) {
-                                vBandwidth = Math.round((measuredMb.toDouble() * 1024.0 * 1024.0 * 8.0) / vDuration.toDouble())
+            // Real HLS Probe: Probe all variants in PARALLEL to measure real duration + real MB quickly without 45s timeout!
+            val variantResults = java.util.concurrent.ConcurrentHashMap<Int, Triple<Int, Int, Long>>()
+            val vLatch = java.util.concurrent.CountDownLatch(effectiveVariants.size)
+            for (vIdx in effectiveVariants.indices) {
+                val v = effectiveVariants[vIdx]
+                InbuiltStreamScraper.backgroundExecutor.execute {
+                    try {
+                        var vSizeMb = 0
+                        var vDuration = 0
+                        var vBandwidth = v.bandwidth
+                        val vText = fetchHlsTextSync(v.url, referer)
+                        if (vText.isNotBlank() && vText.contains("#EXTINF:")) {
+                            val (measuredDur, measuredMb) = measureMediaPlaylistSizeAndDuration(v.url, vText, referer, v.bandwidth)
+                            if (measuredDur > 0) vDuration = measuredDur
+                            if (measuredMb > 0) {
+                                vSizeMb = measuredMb
+                                if (vDuration > 0) {
+                                    vBandwidth = Math.round((measuredMb.toDouble() * 1024.0 * 1024.0 * 8.0) / vDuration.toDouble())
+                                }
                             }
                         }
+                        variantResults[vIdx] = Triple(vDuration, vSizeMb, vBandwidth)
+                    } catch (_: Throwable) {
+                    } finally {
+                        vLatch.countDown()
+                    }
+                }
+            }
+            try { vLatch.await(15, java.util.concurrent.TimeUnit.SECONDS) } catch (_: InterruptedException) {}
+
+            // Measure audio playlist real MB if separate audio rendition exists
+            var measuredAudioDur = 0
+            for (vIdx in effectiveVariants.indices) {
+                val dur = variantResults[vIdx]?.first ?: 0
+                if (dur > 0) {
+                    detectedDuration = dur
+                    break
+                }
+            }
+            if (detectedDuration == 0 && requestedDurationSec > 0) {
+                detectedDuration = requestedDurationSec
+            }
+
+            if (audioPlaylistsFirstUrl.isNotEmpty()) {
+                try {
+                    val aText = fetchHlsTextSync(audioPlaylistsFirstUrl, referer)
+                    if (aText.isNotBlank() && aText.contains("#EXTINF:")) {
+                        val (aDur, aMb) = measureMediaPlaylistSizeAndDuration(audioPlaylistsFirstUrl, aText, referer, 128000L)
+                        if (aDur > 0 && detectedDuration == 0) detectedDuration = aDur
+                        if (aMb > 0) separateAudioMb = aMb
                     }
                 } catch (_: Throwable) {}
+                if (separateAudioMb == 0 && detectedDuration > 0) {
+                    separateAudioMb = Math.max(1, Math.round((128000.0 * detectedDuration.toDouble()) / (8.0 * 1024.0 * 1024.0)).toInt())
+                }
+            }
+
+            for (vIdx in effectiveVariants.indices) {
+                val v = effectiveVariants[vIdx]
+                val resTriple = variantResults[vIdx]
+                val vDuration = resTriple?.first ?: 0
+                var vSizeMb = resTriple?.second ?: 0
+                var vBandwidth = resTriple?.third ?: v.bandwidth
 
                 val effDur = if (vDuration > 0) vDuration else if (detectedDuration > 0) detectedDuration else requestedDurationSec
-                if (vSizeMb == 0 && effDur > 0 && vBandwidth > 50000L) {
-                    val bytes = (vBandwidth.toDouble() * effDur.toDouble()) / 8.0
+                if (vSizeMb == 0 && effDur > 0) {
+                    val defaultBw = when {
+                        v.quality.contains("1440") -> 6000000L
+                        v.quality.contains("1080") -> 3600000L
+                        v.quality.contains("720") -> 1800000L
+                        v.quality.contains("480") -> 750000L
+                        v.quality.contains("360") -> 320000L
+                        else -> 160000L
+                    }
+                    val useBw = if (vBandwidth > 50000L) vBandwidth else defaultBw
+                    vBandwidth = useBw
+                    val bytes = (useBw.toDouble() * effDur.toDouble()) / 8.0
                     vSizeMb = Math.max(1, Math.round(bytes / (1024.0 * 1024.0)).toInt())
-                }
-
-                if (audioPlaylistsFirstUrl.isNotEmpty() && effDur > 0 && separateAudioMb == 0) {
-                    separateAudioMb = Math.max(1, Math.round((128000.0 * effDur.toDouble()) / (8.0 * 1024.0 * 1024.0)).toInt())
                 }
 
                 val finalMb = if (vSizeMb > 0) (vSizeMb + separateAudioMb) else 0
@@ -869,7 +961,7 @@ class MaxPlayNativeBridge(
                 qualityLinksObj.put(v.quality, assignedUrl)
                 downloadQualitiesArr.put(JSONObject().apply {
                     put("id", v.quality)
-                    put("label", "${v.quality} ${if (v.quality.contains("1080")) "Full HD" else if (v.quality.contains("720")) "HD" else "Standard"}")
+                    put("label", "${v.quality} ${if (v.quality.contains("1080")) "Full HD" else if (v.quality.contains("720")) "HD" else if (v.quality.contains("480")) "Standard" else "Data Saver"}")
                     put("sizeMb", finalMb)
                     put("url", assignedUrl)
                     put("resolvedM3u8Url", v.url)

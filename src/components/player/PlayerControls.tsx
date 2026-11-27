@@ -227,9 +227,14 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
         <button
           type="button"
           onClick={(e) => {
+            e.preventDefault();
             e.stopPropagation();
             onRewind10();
           }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
           className={`relative flex ${
             isFullscreen ? 'h-13 w-13 sm:h-15 sm:w-15' : 'h-11 w-11 sm:h-12 sm:w-12'
           } items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer`}
@@ -242,9 +247,14 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
         <button
           type="button"
           onClick={(e) => {
+            e.preventDefault();
             e.stopPropagation();
             onPlayPause();
           }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
           className={`relative flex ${
             isFullscreen ? 'h-16 w-16 sm:h-18 sm:w-18' : 'h-14 w-14 sm:h-16 sm:w-16'
           } items-center justify-center bg-transparent text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.95)] transition-all duration-150 hover:scale-110 active:scale-90 cursor-pointer`}
@@ -265,9 +275,14 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
         <button
           type="button"
           onClick={(e) => {
+            e.preventDefault();
             e.stopPropagation();
             onForward10();
           }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
           className={`relative flex ${
             isFullscreen ? 'h-13 w-13 sm:h-15 sm:w-15' : 'h-11 w-11 sm:h-12 sm:w-12'
           } items-center justify-center bg-transparent text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] transition-all hover:scale-110 active:scale-90 cursor-pointer`}
@@ -396,7 +411,7 @@ export const PlayerControls: React.FC<PlayerControlsProps> = React.memo(({
                   >
                     <Headphones className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-[#38BDF8] shrink-0" />
                     <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-white leading-none truncate">
-                      {currentLanguage ? currentLanguage.toUpperCase() : 'AUDIO'}
+                      {currentLanguage ? currentLanguage.replace(/\[.*?\]|\(.*?\)/g, '').trim().toUpperCase() : 'AUDIO'}
                     </span>
                   </button>
                 )}

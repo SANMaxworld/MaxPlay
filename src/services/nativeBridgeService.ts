@@ -86,6 +86,7 @@ interface MaxPlayKotlinBridge {
   getOfflinePlaybackUrl?: (storageKey: string) => string;
   deleteOfflineItem?: (storageKey: string) => boolean;
   clearImageDiskCache?: () => boolean;
+  clearStreamCachesOnNetworkSwitch?: () => boolean;
   getImageDiskCacheBytes?: () => number;
   showNativeNotification?: (title: string, body: string, imageUrl?: string) => boolean;
   startVoiceRecognition?: () => boolean;
@@ -1235,6 +1236,18 @@ export class NativeBridgeService {
         audioTracks: [],
         duration: durationSec || 1440,
       };
+    }
+  }
+
+  /**
+   * Clears all native stream scraper session/IP-bound token caches after a network interface switch.
+   */
+  public static clearStreamCachesOnNetworkSwitch(): boolean {
+    if (!this.isRunningInKotlinApp()) return false;
+    try {
+      return window.MaxPlayNative?.clearStreamCachesOnNetworkSwitch?.() ?? false;
+    } catch {
+      return false;
     }
   }
 

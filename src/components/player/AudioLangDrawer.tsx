@@ -32,9 +32,22 @@ export const AudioLangDrawer: React.FC<AudioLangDrawerProps> = React.memo(({
     return { flag: '🌐', tag: 'AUDIO' };
   };
 
-  const effectiveLanguages = (availableLanguages && availableLanguages.length > 0)
-    ? availableLanguages
-    : ['Japanese [ORIGINAL]', 'English [DUBBED]', 'Hindi [DUBBED]', 'Telugu [DUBBED]', 'Tamil [DUBBED]'];
+  const effectiveLanguages = React.useMemo(() => {
+    const list = (availableLanguages && availableLanguages.length > 0)
+      ? availableLanguages
+      : ['Japanese [ORIGINAL]', 'English [DUBBED]'];
+    const cleanBase = (s: string) => s.replace(/\[.*?\]|\(.*?\)/g, '').trim().toLowerCase();
+    const seen = new Set<string>();
+    const res: string[] = [];
+    list.forEach(l => {
+      const b = cleanBase(l);
+      if (b && !seen.has(b)) {
+        seen.add(b);
+        res.push(l);
+      }
+    });
+    return res.length > 0 ? res : list;
+  }, [availableLanguages]);
 
   return (
     <div
@@ -85,7 +98,7 @@ export const AudioLangDrawer: React.FC<AudioLangDrawerProps> = React.memo(({
                 <div className="flex items-center gap-2.5">
                   <span className="text-base">{badge.flag}</span>
                   <div className="flex flex-col text-left">
-                    <span className="text-sm font-extrabold tracking-wide">{lang}</span>
+                    <span className="text-sm font-extrabold tracking-wide">{lang.replace(/\[.*?\]|\(.*?\)/g, '').trim()}</span>
                     <span className="text-[9px] text-[#A1A1AA] font-normal">{badge.tag}</span>
                   </div>
                 </div>
